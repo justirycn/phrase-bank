@@ -1,0 +1,16 @@
+services:
+  phrase-bank:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: phrase-bank:latest
+    container_name: phrase-bank
+    restart: unless-stopped
+    ports:
+      - "80:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
