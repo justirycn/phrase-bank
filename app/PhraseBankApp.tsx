@@ -76,7 +76,7 @@ function Home({ phrases, dueCount, categories, onReview, onAdd }: { phrases: Phr
       <p className="practice-copy">{dueCount ? "先想意思，再让英文自然浮现。" : "积累一点，明天继续让表达更自然。"}</p>
       {dueCount ? <>
         <div className="home-progress"><span>进度 0 / {dueCount}</span><i aria-hidden="true" /></div>
-        <button className="home-cta" aria-label="开始今日复习" onClick={onReview}>开始今日复习 <AppIcon name="forward" size={22} /></button>
+        <button className="home-cta" aria-label="开始今日复习" onClick={onReview}><AppIcon name="library" size={22} />开始今日复习 <AppIcon name="forward" size={22} /></button>
       </> : <button className="home-cta" aria-label="收藏新的表达" onClick={onAdd}>收藏新的表达 <AppIcon name="add" size={22} /></button>}
     </section>
     <section className="home-recent" aria-labelledby="recent-heading">
