@@ -71,15 +71,18 @@ describe("PhraseBankApp", () => {
 
     render(<PhraseBankApp repository={repo as never} />);
 
-    expect(await screen.findByRole("button", { name: "开始今日复习" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /开始今日复习/ })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "句库" }));
+    await user.click(screen.getByRole("button", { name: /句库/ }));
     expect(await screen.findByRole("heading", { name: "我的句库" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "添加" }));
     expect(await screen.findByRole("heading", { name: "收藏语言块" })).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "设置" }));
+    await user.click(screen.getByRole("button", { name: /设置/ }));
     expect(await screen.findByRole("heading", { name: "设置" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /复习/ }));
+    expect(await screen.findByRole("button", { name: "开始今日复习" })).toBeInTheDocument();
   });
 });

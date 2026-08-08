@@ -6,6 +6,15 @@ const publicPath = (...parts: string[]) => resolve(process.cwd(), "public", ...p
 
 function pngSize(path: string) {
   const png = readFileSync(path);
+  if (png.length < 24) {
+    throw new Error(`Invalid PNG at ${path}: file is too short`);
+  }
+  if (!png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    throw new Error(`Invalid PNG at ${path}: signature is missing`);
+  }
+  if (png.toString("ascii", 12, 16) !== "IHDR") {
+    throw new Error(`Invalid PNG at ${path}: IHDR chunk is missing`);
+  }
   return {
     width: png.readUInt32BE(16),
     height: png.readUInt32BE(20),
@@ -25,10 +34,12 @@ describe("installability", () => {
     ]));
   });
 
-  it("provides a correctly sized Apple touch icon", () => {
-    expect(pngSize(publicPath("icons", "apple-touch-icon.png"))).toEqual({
-      width: 180,
-      height: 180,
-    });
+  it.each([
+    ["icon-192.png", 192, 192],
+    ["icon-512.png", 512, 512],
+    ["icon-maskable-512.png", 512, 512],
+    ["apple-touch-icon.png", 180, 180],
+  ])("provides %s at %ix%i", (file, width, height) => {
+    expect(pngSize(publicPath("icons", file))).toEqual({ width, height });
   });
 });
