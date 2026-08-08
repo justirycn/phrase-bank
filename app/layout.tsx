@@ -21,23 +21,17 @@ export const metadata: Metadata = {
     ],
     apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
   },
+  other: {
+    "apple-mobile-web-app-capable": "yes",
+  },
 };
 
 export const viewport: Viewport = {
-  width: "device-width",
+  width: "device-width, viewport-fit=cover",
   initialScale: 1,
-  viewportFit: "cover",
   themeColor: "#0b4a3a",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return (
-    <html lang="zh-CN">
-      <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-        <meta name="apple-mobile-web-app-capable" content="yes" />
-      </head>
-      <body className={`${geist.variable} ${noto.variable}`}>{children}</body>
-    </html>
-  );
+  return <html lang="zh-CN"><body className={`${geist.variable} ${noto.variable}`}>{children}</body></html>;
 }
