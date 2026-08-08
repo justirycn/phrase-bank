@@ -55,10 +55,10 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
       {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} refresh={refresh} setNotice={setNotice} setError={setError} />}
     </main>
     {screen !== "review" && <nav className="bottom-nav" aria-label="主导航">
-      <button className={screen === "home" ? "active" : ""} onClick={() => go("home")}><span><AppIcon name="home" size={21} /></span>复习</button>
-      <button className={screen === "library" ? "active" : ""} onClick={() => go("library")}><span><AppIcon name="library" size={21} /></span>句库</button>
-      <button className="add-nav" aria-label="添加" onClick={() => go("add")}><span><AppIcon name="add" size={25} /></span>添加</button>
-      <button className={screen === "settings" ? "active" : ""} onClick={() => go("settings")}><span><AppIcon name="settings" size={21} /></span>设置</button>
+      <button className={screen === "home" ? "active" : ""} aria-current={screen === "home" ? "page" : undefined} onClick={() => go("home")}><span><AppIcon name="home" size={21} /></span>复习</button>
+      <button className={screen === "library" ? "active" : ""} aria-current={screen === "library" ? "page" : undefined} onClick={() => go("library")}><span><AppIcon name="library" size={21} /></span>句库</button>
+      <button className={screen === "add" ? "add-nav active" : "add-nav"} aria-label="添加" aria-current={screen === "add" ? "page" : undefined} onClick={() => go("add")}><span><AppIcon name="add" size={25} /></span>添加</button>
+      <button className={screen === "settings" ? "active" : ""} aria-current={screen === "settings" ? "page" : undefined} onClick={() => go("settings")}><span><AppIcon name="settings" size={21} /></span>设置</button>
     </nav>}
   </div>;
 }
@@ -81,7 +81,7 @@ function Home({ phrases, dueCount, categories, onReview, onAdd }: { phrases: Phr
     </section>
     <section className="home-recent" aria-labelledby="recent-heading">
       <div className="home-section-title"><h2 id="recent-heading">最近收藏</h2><button aria-label="添加最近收藏" onClick={onAdd}><AppIcon name="bookmark" size={22} /></button></div>
-      {phrases.length ? <div className="recent-list">{phrases.slice(0, 4).map((phrase) => <article className="phrase-row" key={phrase.id}><div><h3>{phrase.english}</h3><p>{phrase.chinese}</p><small>{names.get(phrase.categoryId)} · {formatDate(phrase.createdAt)}</small></div><AppIcon name="next" size={22} /></article>)}</div> : <Empty title="从第一句话开始" detail="收藏你真正想说、将来会反复使用的英语表达。" action={<button className="secondary" onClick={onAdd}>添加第一条</button>} />}
+      {phrases.length ? <div className="recent-list">{phrases.slice(0, 4).map((phrase) => <article className="phrase-row" key={phrase.id}><div><h3>{phrase.english}</h3><p>{phrase.chinese}</p><small>{names.get(phrase.categoryId)} · {formatDate(phrase.createdAt)}</small></div></article>)}</div> : <Empty title="从第一句话开始" detail="收藏你真正想说、将来会反复使用的英语表达。" action={<button className="secondary" onClick={onAdd}>添加第一条</button>} />}
     </section>
   </div>;
 }

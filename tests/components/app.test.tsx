@@ -72,15 +72,20 @@ describe("PhraseBankApp", () => {
     render(<PhraseBankApp repository={repo as never} />);
 
     expect(await screen.findByRole("button", { name: /开始今日复习/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "复习" })).toHaveAttribute("aria-current", "page");
+    expect(document.querySelector(".phrase-row > svg")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /句库/ }));
     expect(await screen.findByRole("heading", { name: "我的句库" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "句库" })).toHaveAttribute("aria-current", "page");
 
     await user.click(screen.getByRole("button", { name: "添加" }));
     expect(await screen.findByRole("heading", { name: "收藏语言块" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "添加" })).toHaveAttribute("aria-current", "page");
 
     await user.click(screen.getByRole("button", { name: /设置/ }));
     expect(await screen.findByRole("heading", { name: "设置" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /设置/ })).toHaveAttribute("aria-current", "page");
 
     await user.click(screen.getByRole("button", { name: /复习/ }));
     expect(await screen.findByRole("button", { name: "开始今日复习" })).toBeInTheDocument();
