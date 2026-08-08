@@ -2,6 +2,7 @@ import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import type { BackupEnvelope, Category, Phrase, ReviewLog, ReviewResult } from "../domain/types";
 import { scheduleReview } from "../domain/review";
 import { defaultCategories } from "./seed";
+import { STARTER_PHRASES } from "./starterPhrases";
 import type { PhraseRepository } from "./repository";
 
 interface PhraseBankDb extends DBSchema {
@@ -35,11 +36,32 @@ export class LocalPhraseRepository implements PhraseRepository {
 
   async initialize() {
     const db = await this.db();
-    const initialized = await db.get("metadata", "initialized");
-    if (initialized) return;
-    const tx = db.transaction(["categories", "metadata"], "readwrite");
-    await Promise.all(defaultCategories().map((item) => tx.objectStore("categories").put(item)));
-    await tx.objectStore("metadata").put({ key: "initialized", value: "1" });
+    const tx = db.transaction(["categories", "phrases", "metadata"], "readwrite");
+    const metadata = tx.objectStore("metadata");
+    const initialized = await metadata.get("initialized");
+    if (!initialized) {
+      for (const item of defaultCategories()) await tx.objectStore("categories").put(item);
+      await metadata.put({ key: "initialized", value: "1" });
+    }
+
+    const starterVersion = await metadata.get("starterPhrasesVersion");
+    if (starterVersion?.value !== "1") {
+      const timestamp = new Date().toISOString();
+      const phraseStore = tx.objectStore("phrases");
+      for (const starter of STARTER_PHRASES) {
+        if (await phraseStore.get(starter.id)) continue;
+        await phraseStore.put({
+          ...starter,
+          sourceNote: "",
+          reviewStep: 0,
+          masteryLevel: 0,
+          nextReviewAt: timestamp,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
+      }
+      await metadata.put({ key: "starterPhrasesVersion", value: "1" });
+    }
     await tx.done;
   }
 

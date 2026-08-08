@@ -13,8 +13,27 @@ describe("LocalPhraseRepository", () => {
 
   it("seeds the eight default categories once", async () => {
     expect(await repo.listCategories()).toHaveLength(8);
+    expect(await repo.listPhrases()).toHaveLength(40);
     await repo.initialize();
     expect(await repo.listCategories()).toHaveLength(8);
+    expect(await repo.listPhrases()).toHaveLength(40);
+  });
+
+  it("does not restore a starter phrase deleted after initialization", async () => {
+    await repo.deletePhrase("starter-daily-not-sure");
+    await repo.initialize();
+    expect(await repo.getPhrase("starter-daily-not-sure")).toBeUndefined();
+    expect(await repo.listPhrases()).toHaveLength(39);
+  });
+
+  it("does not overwrite an existing phrase with a starter id", async () => {
+    indexedDB = new IDBFactory();
+    const customRepo = new LocalPhraseRepository(`phrase-bank-${crypto.randomUUID()}`);
+    const custom = { ...createNewPhrase({ english: "My custom version", chinese: "我的版本", categoryId: "daily" }), id: "starter-daily-not-sure", reviewStep: 3, masteryLevel: 3 };
+    await customRepo.savePhrase(custom);
+    await customRepo.initialize();
+    expect(await customRepo.getPhrase(custom.id)).toMatchObject({ english: "My custom version", reviewStep: 3, masteryLevel: 3 });
+    expect(await customRepo.listPhrases()).toHaveLength(40);
   });
 
   it("saves, lists, updates and deletes a phrase", async () => {
