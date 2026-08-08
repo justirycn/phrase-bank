@@ -90,4 +90,22 @@ describe("PhraseBankApp", () => {
     await user.click(screen.getByRole("button", { name: /复习/ }));
     expect(await screen.findByRole("button", { name: "开始今日复习" })).toBeInTheDocument();
   });
+
+  it("keeps a long English phrase readable after navigating from home to the library", async () => {
+    const user = userEvent.setup();
+    const repo = new MemoryRepository();
+    const longPhrase = "Would you mind giving me a little more time to think this through before I make a final decision?";
+    repo.phrases.push(makePhrase({ english: longPhrase }));
+
+    render(<PhraseBankApp repository={repo as never} />);
+
+    expect(await screen.findByText(longPhrase)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "句库" }));
+
+    const readingList = await screen.findByRole("list", { name: "语言块阅读列表" });
+    const phrase = screen.getByText(longPhrase);
+    expect(readingList).toContainElement(phrase);
+    expect(phrase.closest("li")).toBeInTheDocument();
+    expect(phrase).toHaveClass("phrase-english");
+  });
 });

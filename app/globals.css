@@ -942,3 +942,172 @@ label.settings-action:focus-within {
     transition: none !important;
   }
 }
+
+/* Editorial treatment shared by the library, capture, review, and settings flows. */
+.library-reading-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 253, 248, 0.5);
+}
+.library-row {
+  padding: 0;
+  border-bottom: 1px solid var(--line);
+}
+.library-row:last-child {
+  border-bottom: 0;
+}
+.library-row article {
+  padding: 22px 3px 18px;
+}
+.row-meta,
+.row-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.row-meta {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+.row-meta span {
+  color: var(--ink);
+  font-weight: 700;
+}
+.phrase-english {
+  margin: 12px 0 7px;
+  color: var(--ink);
+  font: 500 22px/1.38 Georgia, "Times New Roman", serif;
+  letter-spacing: -0.025em;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+.library-row article > p {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.library-row blockquote {
+  margin: 14px 0;
+  padding: 10px 14px;
+  border-left: 2px solid var(--orange);
+  background: #f4eee3;
+  color: #675f55;
+  font: italic 13px/1.6 Georgia, "Times New Roman", serif;
+  overflow-wrap: anywhere;
+}
+.row-foot {
+  padding-top: 12px;
+  color: #8d918d;
+  font-size: 11px;
+}
+.row-foot button {
+  min-width: 44px;
+  min-height: 44px;
+  margin: -10px -8px -10px 0;
+  border: 0;
+  background: transparent;
+  color: #a64c3d;
+  font-size: 12px;
+}
+
+.phrase-form textarea,
+.phrase-form input,
+.phrase-form select,
+.add-category input,
+.search input {
+  font-size: 16px;
+}
+.phrase-form textarea,
+.phrase-form input,
+.phrase-form select,
+.optional-fields,
+.form-actions {
+  scroll-margin-bottom: 180px;
+}
+.phrase-form {
+  gap: 24px;
+}
+.phrase-form label {
+  font-size: 14px;
+}
+.form-actions {
+  position: static;
+  padding-bottom: calc(20px + env(safe-area-inset-bottom));
+}
+.more-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+}
+
+.review-screen > header {
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+.review-card > small,
+.answer small {
+  color: var(--ink);
+  letter-spacing: 0.18em;
+}
+.review-card > h1,
+.review-done h1 {
+  font-family: Georgia, "Noto Serif SC", "Songti SC", serif;
+  font-weight: 500;
+}
+.reveal {
+  min-width: min(100%, 280px);
+  min-height: 56px;
+  border: 0;
+  background: var(--ink);
+  color: white;
+}
+.answer h2 {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.grade-row button {
+  min-height: 64px;
+}
+.review-done {
+  padding-bottom: calc(40px + env(safe-area-inset-bottom));
+}
+.review-done .primary {
+  min-height: 48px;
+}
+
+.settings-card {
+  margin: 0;
+  padding: 26px 2px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+.settings-card + .settings-card {
+  margin-top: 18px;
+}
+.settings-card .warning {
+  margin-top: 6px;
+  background: #f3ecdd;
+}
+.category-list > div,
+.settings-action {
+  min-height: 52px;
+  border-bottom-color: var(--line);
+}
+.category-list button,
+.add-category button,
+.settings-action {
+  min-height: 44px;
+}
+.add-category input {
+  min-height: 48px;
+}
