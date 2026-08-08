@@ -4,6 +4,14 @@ import { describe, expect, it } from "vitest";
 
 const publicPath = (...parts: string[]) => resolve(process.cwd(), "public", ...parts);
 
+function pngSize(path: string) {
+  const png = readFileSync(path);
+  return {
+    width: png.readUInt32BE(16),
+    height: png.readUInt32BE(20),
+  };
+}
+
 describe("installability", () => {
   it("declares the installable app identity and icons", () => {
     const manifest = JSON.parse(readFileSync(publicPath("manifest.webmanifest"), "utf8"));
@@ -18,9 +26,9 @@ describe("installability", () => {
   });
 
   it("provides a correctly sized Apple touch icon", () => {
-    const png = readFileSync(publicPath("icons", "apple-touch-icon.png"));
-
-    expect(png.readUInt32BE(16)).toBe(180);
-    expect(png.readUInt32BE(20)).toBe(180);
+    expect(pngSize(publicPath("icons", "apple-touch-icon.png"))).toEqual({
+      width: 180,
+      height: 180,
+    });
   });
 });
