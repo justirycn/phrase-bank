@@ -13,11 +13,27 @@ class MemoryRepository {
   async listDuePhrases() { return [...this.phrases]; }
   async savePhrase(phrase: Phrase) { this.phrases = [...this.phrases.filter((p) => p.id !== phrase.id), phrase]; }
   async deletePhrase(id: string) { this.phrases = this.phrases.filter((p) => p.id !== id); }
-  async submitReview(_id: string, _result: ReviewResult) {}
+  async submitReview(id: string, result: ReviewResult) { void id; void result; }
   async saveCategory(category: Category) { this.categories.push(category); }
   async deleteCategoryAndMigrate() {}
   async exportSnapshot(): Promise<BackupEnvelope> { return { format: "personal-phrase-bank", version: 1, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [] }; }
   async importSnapshot() {}
+}
+
+function makePhrase(overrides: Partial<Phrase> = {}): Phrase {
+  const now = new Date().toISOString();
+  return {
+    id: "p1",
+    english: "I'll get back to you.",
+    chinese: "我会回复你的。",
+    categoryId: "daily",
+    reviewStep: 0,
+    masteryLevel: 0,
+    nextReviewAt: now,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
 }
 
 describe("PhraseBankApp", () => {
@@ -46,5 +62,50 @@ describe("PhraseBankApp", () => {
     await user.click(screen.getByRole("button", { name: "显示英文答案" }));
     expect(screen.getByText("I'll get back to you.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /掌握/ })).toBeInTheDocument();
+  });
+
+  it("keeps review, library, add, and settings reachable from mobile navigation", async () => {
+    const user = userEvent.setup();
+    const repo = new MemoryRepository();
+    repo.phrases.push(makePhrase());
+
+    render(<PhraseBankApp repository={repo as never} />);
+
+    expect(await screen.findByRole("button", { name: /开始今日复习/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "复习" })).toHaveAttribute("aria-current", "page");
+    expect(document.querySelector(".phrase-row > svg")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /句库/ }));
+    expect(await screen.findByRole("heading", { name: "我的句库" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "句库" })).toHaveAttribute("aria-current", "page");
+
+    await user.click(screen.getByRole("button", { name: "添加" }));
+    expect(await screen.findByRole("heading", { name: "收藏语言块" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "添加" })).toHaveAttribute("aria-current", "page");
+
+    await user.click(screen.getByRole("button", { name: /设置/ }));
+    expect(await screen.findByRole("heading", { name: "设置" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /设置/ })).toHaveAttribute("aria-current", "page");
+
+    await user.click(screen.getByRole("button", { name: /复习/ }));
+    expect(await screen.findByRole("button", { name: "开始今日复习" })).toBeInTheDocument();
+  });
+
+  it("keeps a long English phrase readable after navigating from home to the library", async () => {
+    const user = userEvent.setup();
+    const repo = new MemoryRepository();
+    const longPhrase = "Would you mind giving me a little more time to think this through before I make a final decision?";
+    repo.phrases.push(makePhrase({ english: longPhrase }));
+
+    render(<PhraseBankApp repository={repo as never} />);
+
+    expect(await screen.findByText(longPhrase)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "句库" }));
+
+    const readingList = await screen.findByRole("list", { name: "语言块阅读列表" });
+    const phrase = screen.getByText(longPhrase);
+    expect(readingList).toContainElement(phrase);
+    expect(phrase.closest("li")).toBeInTheDocument();
+    expect(phrase).toHaveClass("phrase-english");
   });
 });
