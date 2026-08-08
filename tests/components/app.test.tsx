@@ -20,6 +20,22 @@ class MemoryRepository {
   async importSnapshot() {}
 }
 
+function makePhrase(overrides: Partial<Phrase> = {}): Phrase {
+  const now = new Date().toISOString();
+  return {
+    id: "p1",
+    english: "I'll get back to you.",
+    chinese: "我会回复你的。",
+    categoryId: "daily",
+    reviewStep: 0,
+    masteryLevel: 0,
+    nextReviewAt: now,
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
 describe("PhraseBankApp", () => {
   it("validates and saves a new phrase", async () => {
     const user = userEvent.setup();
@@ -46,5 +62,24 @@ describe("PhraseBankApp", () => {
     await user.click(screen.getByRole("button", { name: "显示英文答案" }));
     expect(screen.getByText("I'll get back to you.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /掌握/ })).toBeInTheDocument();
+  });
+
+  it("keeps review, library, add, and settings reachable from mobile navigation", async () => {
+    const user = userEvent.setup();
+    const repo = new MemoryRepository();
+    repo.phrases.push(makePhrase());
+
+    render(<PhraseBankApp repository={repo as never} />);
+
+    expect(await screen.findByRole("button", { name: "开始今日复习" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "句库" }));
+    expect(await screen.findByRole("heading", { name: "我的句库" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "添加" }));
+    expect(await screen.findByRole("heading", { name: "收藏语言块" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    expect(await screen.findByRole("heading", { name: "设置" })).toBeInTheDocument();
   });
 });
