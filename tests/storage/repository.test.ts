@@ -6,7 +6,7 @@ describe("LocalPhraseRepository", () => {
   let repo: LocalPhraseRepository;
 
   beforeEach(async () => {
-    indexedDB = new IDBFactory();
+    globalThis.indexedDB = new IDBFactory();
     repo = new LocalPhraseRepository(`phrase-bank-${crypto.randomUUID()}`);
     await repo.initialize();
   });
@@ -27,7 +27,7 @@ describe("LocalPhraseRepository", () => {
   });
 
   it("does not overwrite an existing phrase with a starter id", async () => {
-    indexedDB = new IDBFactory();
+    globalThis.indexedDB = new IDBFactory();
     const customRepo = new LocalPhraseRepository(`phrase-bank-${crypto.randomUUID()}`);
     const custom = { ...createNewPhrase({ english: "My custom version", chinese: "我的版本", categoryId: "daily" }), id: "starter-daily-not-sure", reviewStep: 3, masteryLevel: 3 };
     await customRepo.savePhrase(custom);

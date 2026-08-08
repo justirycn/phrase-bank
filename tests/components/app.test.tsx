@@ -13,7 +13,7 @@ class MemoryRepository {
   async listDuePhrases() { return [...this.phrases]; }
   async savePhrase(phrase: Phrase) { this.phrases = [...this.phrases.filter((p) => p.id !== phrase.id), phrase]; }
   async deletePhrase(id: string) { this.phrases = this.phrases.filter((p) => p.id !== id); }
-  async submitReview(_id: string, _result: ReviewResult) {}
+  async submitReview(id: string, result: ReviewResult) { void id; void result; }
   async saveCategory(category: Category) { this.categories.push(category); }
   async deleteCategoryAndMigrate() {}
   async exportSnapshot(): Promise<BackupEnvelope> { return { format: "personal-phrase-bank", version: 1, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [] }; }

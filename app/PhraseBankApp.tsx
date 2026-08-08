@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppIcon } from "./components/AppIcon";
 import { Brand } from "./components/Brand";
-import type { BackupEnvelope, Category, Phrase, PhraseInput, ReviewResult } from "./domain/types";
+import type { Category, Phrase, PhraseInput, ReviewResult } from "./domain/types";
 import { createNewPhrase } from "./domain/review";
 import { validateCategoryName, validatePhraseInput, type PhraseErrors } from "./domain/validation";
 import { backupFileName, parseBackup } from "./storage/backup";
@@ -94,7 +94,7 @@ function AddPhrase({ categories, onSave, onCancel }: { categories: Category[]; o
   const submit = async (event: React.FormEvent) => { event.preventDefault(); const next = validatePhraseInput(input); setErrors(next); if (Object.keys(next).length) return; await onSave(input); };
   return <><header className="screen-head"><button className="icon-button" onClick={onCancel} aria-label="返回"><AppIcon name="back" size={24} /></button><div><h1>收藏语言块</h1><p>Save a phrase you’ll actually use.</p></div></header>
     <form className="phrase-form" onSubmit={submit}>
-      <label>英文表达<textarea autoFocus aria-label="英文表达" value={input.english} onChange={(e) => field("english", e.target.value)} placeholder="e.g. I haven't decided yet." rows={3} />{errors.english && <small className="field-error">{errors.english}</small>}</label>
+      <label>英文表达<textarea aria-label="英文表达" value={input.english} onChange={(e) => field("english", e.target.value)} placeholder="e.g. I haven't decided yet." rows={3} />{errors.english && <small className="field-error">{errors.english}</small>}</label>
       <label>中文含义<textarea aria-label="中文含义" value={input.chinese} onChange={(e) => field("chinese", e.target.value)} placeholder="我还没决定。" rows={2} />{errors.chinese && <small className="field-error">{errors.chinese}</small>}</label>
       <label>分类<select aria-label="分类" value={input.categoryId} onChange={(e) => field("categoryId", e.target.value)}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>{errors.categoryId && <small className="field-error">{errors.categoryId}</small>}</label>
       <button className="more-button" type="button" onClick={() => setMore(!more)}>{more ? "收起选填内容" : <><AppIcon name="add" size={14} /> 添加我的例句或来源</>}</button>
