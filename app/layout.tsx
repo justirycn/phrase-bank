@@ -7,18 +7,37 @@ const noto = Noto_Sans_SC({ variable: "--font-cjk", subsets: ["latin"], weight: 
 
 export const metadata: Metadata = {
   title: "Phrase Bank · 我的英语语言块",
-  description: "收藏真正会用到的英语表达，用中文提示练习主动调用。",
+  description: "收藏、复习并主动调用真正会用到的英语表达。",
   manifest: "/manifest.webmanifest",
-  icons: { icon: "/favicon.svg" },
-  openGraph: {
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
     title: "Phrase Bank",
-    description: "让收藏变成脱口而出的表达",
-    images: [{ url: "/og.png", width: 1733, height: 909, alt: "Phrase Bank 分享卡片" }],
   },
-  twitter: { card: "summary_large_image", images: ["/og.png"] },
+  icons: {
+    icon: [
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
 };
-export const viewport: Viewport = { width: "device-width", initialScale: 1, viewportFit: "cover", themeColor: "#153f35" };
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#0b4a3a",
+};
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="zh-CN"><body className={`${geist.variable} ${noto.variable}`}>{children}</body></html>;
+  return (
+    <html lang="zh-CN">
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+      </head>
+      <body className={`${geist.variable} ${noto.variable}`}>{children}</body>
+    </html>
+  );
 }
