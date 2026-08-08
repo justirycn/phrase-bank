@@ -1,4 +1,10 @@
-"""Generate Phrase Bank install icons from the approved app-icon master."""
+"""Generate Phrase Bank install icons from the approved app-icon master.
+
+From the repository root, install the pinned dependency first::
+
+    python -m pip install -r scripts/requirements-icons.txt
+    python scripts/generate_install_icons.py
+"""
 
 from pathlib import Path
 
