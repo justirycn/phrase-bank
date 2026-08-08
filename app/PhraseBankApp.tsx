@@ -65,13 +65,25 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
 
 function Home({ phrases, dueCount, categories, onReview, onAdd }: { phrases: Phrase[]; dueCount: number; categories: Category[]; onReview: () => void; onAdd: () => void }) {
   const names = new Map(categories.map((c) => [c.id, c.name]));
-  return <>
-    <header className="top"><Brand /><p className="date">{new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" }).format(new Date())}</p></header>
-    <section className="hero-card"><div className="eyebrow">TODAY'S PRACTICE</div><h1>{dueCount ? <>今天有 <em>{dueCount}</em> 条<br />语言块等你复习</> : <>今天的复习<br />已经完成了</>}</h1><p>{dueCount ? "先想意思，再让英文自然浮现。" : "积累一点，明天继续让表达更自然。"}</p><button className="primary" aria-label={dueCount ? "开始今日复习，进入练习" : "收藏新的表达，添加语言块"} onClick={dueCount ? onReview : onAdd}>{dueCount ? <>开始今日复习 <AppIcon name="forward" size={16} /></> : <>收藏新的表达 <AppIcon name="add" size={16} /></>}</button></section>
-    <div className="section-title"><div><span>最近收藏</span><small>RECENT PHRASES</small></div><button aria-label="添加最近收藏" onClick={onAdd}><AppIcon name="add" size={14} /> 添加</button></div>
-    {phrases.length ? <div className="recent-list">{phrases.slice(0, 4).map((phrase) => <article className="phrase-row" key={phrase.id}><div className="phrase-initial">{phrase.english.trim()[0]?.toUpperCase()}</div><div><h3>{phrase.english}</h3><p>{phrase.chinese}</p><small>{names.get(phrase.categoryId)} · {formatDate(phrase.createdAt)}</small></div></article>)}</div> : <Empty title="从第一句话开始" detail="收藏你真正想说、将来会反复使用的英语表达。" action={<button className="secondary" onClick={onAdd}>添加第一条</button>} />}
-    <aside className="tip"><span><AppIcon name="review" size={18} /></span><div><b>小提示</b><p>收藏完整表达，而不是孤立单词。比如记住 “I’ll get back to you.”</p></div></aside>
-  </>;
+  const today = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" }).formatToParts(new Date());
+  const date = today.filter((part) => part.type !== "weekday").map((part) => part.value).join("");
+  const weekday = today.find((part) => part.type === "weekday")?.value;
+  return <div className="home">
+    <header className="home-header"><Brand /><p className="date"><span>{date}</span><span>{weekday}</span></p></header>
+    <section className="home-practice">
+      <div className="eyebrow">TODAY’S PRACTICE</div>
+      <h1>{dueCount ? <>今天有 <em>{dueCount}</em> 条<br />语言块等你复习</> : <>今天的复习<br />已经完成了</>}</h1>
+      <p className="practice-copy">{dueCount ? "先想意思，再让英文自然浮现。" : "积累一点，明天继续让表达更自然。"}</p>
+      {dueCount ? <>
+        <div className="home-progress"><span>进度 0 / {dueCount}</span><i aria-hidden="true" /></div>
+        <button className="home-cta" aria-label="开始今日复习" onClick={onReview}>开始今日复习 <AppIcon name="forward" size={22} /></button>
+      </> : <button className="home-cta" aria-label="收藏新的表达" onClick={onAdd}>收藏新的表达 <AppIcon name="add" size={22} /></button>}
+    </section>
+    <section className="home-recent" aria-labelledby="recent-heading">
+      <div className="home-section-title"><h2 id="recent-heading">最近收藏</h2><button aria-label="添加最近收藏" onClick={onAdd}><AppIcon name="bookmark" size={22} /></button></div>
+      {phrases.length ? <div className="recent-list">{phrases.slice(0, 4).map((phrase) => <article className="phrase-row" key={phrase.id}><div><h3>{phrase.english}</h3><p>{phrase.chinese}</p><small>{names.get(phrase.categoryId)} · {formatDate(phrase.createdAt)}</small></div><AppIcon name="next" size={22} /></article>)}</div> : <Empty title="从第一句话开始" detail="收藏你真正想说、将来会反复使用的英语表达。" action={<button className="secondary" onClick={onAdd}>添加第一条</button>} />}
+    </section>
+  </div>;
 }
 
 function AddPhrase({ categories, onSave, onCancel }: { categories: Category[]; onSave: (input: PhraseInput) => Promise<void>; onCancel: () => void }) {
