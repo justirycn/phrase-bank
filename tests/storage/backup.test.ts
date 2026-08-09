@@ -12,11 +12,26 @@ const valid = {
 
 describe("backup parsing", () => {
   it("accepts a valid version-one backup", () => {
-    expect(parseBackup(JSON.stringify(valid)).version).toBe(1);
+    expect(parseBackup(JSON.stringify(valid))).toMatchObject({ version: 2, trainingEvents: [], trainingSessions: [] });
+  });
+
+  it("accepts and validates a version-two backup", () => {
+    const v2 = {
+      ...valid,
+      version: 2,
+      trainingEvents: [{ id: "e1", sessionId: "s1", phraseId: "p1", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 3, occurredAt: valid.exportedAt }],
+      trainingSessions: [{ id: "s1", mode: "quick", startedAt: valid.exportedAt, updatedAt: valid.exportedAt, phraseIds: ["p1"], currentIndex: 0, activeSeconds: 3 }],
+      phrases: [{ id: "p1", english: "A", chinese: "A", categoryId: "daily", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt }],
+    };
+    expect(parseBackup(JSON.stringify(v2))).toEqual(v2);
+    expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], phraseId: "missing" }] }))).toThrow();
+    expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], activeSeconds: -1 }] }))).toThrow();
+    expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], currentIndex: -1 }] }))).toThrow();
+    expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], activeSeconds: null }] }))).toThrow();
   });
 
   it("rejects an unsupported version", () => {
-    expect(() => parseBackup(JSON.stringify({ ...valid, version: 2 }))).toThrow("不支持的备份版本");
+    expect(() => parseBackup(JSON.stringify({ ...valid, version: 3 }))).toThrow();
   });
 
   it("rejects phrases referencing missing categories", () => {

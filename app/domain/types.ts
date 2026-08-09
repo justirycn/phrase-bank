@@ -75,7 +75,7 @@ export interface ReviewLog {
   nextReviewAt: string;
 }
 
-export interface BackupEnvelope {
+export interface BackupEnvelopeV1 {
   format: "personal-phrase-bank";
   version: 1;
   exportedAt: string;
@@ -83,3 +83,16 @@ export interface BackupEnvelope {
   phrases: Phrase[];
   reviewLogs: ReviewLog[];
 }
+
+export interface BackupEnvelopeV2 {
+  format: "personal-phrase-bank";
+  version: 2;
+  exportedAt: string;
+  categories: Category[];
+  phrases: Phrase[];
+  reviewLogs: ReviewLog[];
+  trainingEvents: TrainingEvent[];
+  trainingSessions: TrainingSessionRecord[];
+}
+
+export type BackupEnvelope = BackupEnvelopeV1 | BackupEnvelopeV2;
