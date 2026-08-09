@@ -42,7 +42,7 @@ describe("HTTPS reverse proxy", () => {
     const caddyService = yamlSection(compose, "caddy", 2);
     const volumes = yamlSection(compose, "volumes");
 
-    expect(caddyService).toMatch(/^ {4}image: caddy:2\.10-alpine\s*$/m);
+    expect(caddyService).toMatch(/^ {4}image: caddy:2\.10\.2-alpine\s*$/m);
     expect(caddyService).toMatch(/^ {4}ports:\s*$/m);
     expect(caddyService).toMatch(/^ {6}- "80:80"\s*$/m);
     expect(caddyService).toMatch(/^ {6}- "443:443"\s*$/m);
