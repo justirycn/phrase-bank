@@ -102,9 +102,10 @@ export function useTrainingSession({
     return write;
   }, [now, repository]);
 
-  const persistProposedIndex = useCallback(async (proposedIndex: number): Promise<void> => {
+  const persistProposedIndex = useCallback(async (proposedIndex: number): Promise<boolean> => {
+    if (finishingRef.current) return false;
     const session = sessionRef.current;
-    if (!session) return;
+    if (!session) return false;
     const snapshot: TrainingSessionRecord = {
       ...session,
       phraseIds: queueRef.current.map((candidate) => candidate.phrase.id),
@@ -117,7 +118,9 @@ export function useTrainingSession({
       .then(() => repository.saveTrainingSession(snapshot));
     sessionWriteRef.current = write;
     await write;
+    if (finishingRef.current) return false;
     Object.assign(session, snapshot);
+    return true;
   }, [now, repository]);
 
   useEffect(() => {
@@ -307,12 +310,13 @@ export function useTrainingSession({
     setPhase("prompt");
   }, []);
 
-  const advance = useCallback(async () => {
+  const advance = useCallback(async (): Promise<boolean> => {
     const next = indexRef.current + 1;
-    await persistProposedIndex(next);
+    if (!await persistProposedIndex(next) || finishingRef.current) return false;
     replaceIndex(next);
     resetItemState();
     if (next >= queueRef.current.length) setPhase("complete");
+    return true;
   }, [persistProposedIndex, replaceIndex, resetItemState]);
 
   const startRecording = useCallback(async () => {
@@ -348,6 +352,7 @@ export function useTrainingSession({
       const current = queueRef.current[indexRef.current];
       if (!current) return;
       await recordEvent("again");
+      if (finishingRef.current) return;
       evaluatedRef.current = true;
       const laterQueue = queueRef.current.slice(indexRef.current + 1);
       if (!laterQueue.some((candidate) => candidate.phrase.id === current.phrase.id)) {
@@ -377,8 +382,7 @@ export function useTrainingSession({
         await recordEvent(result);
         evaluatedRef.current = true;
       }
-      await advance();
-      return { accepted: true };
+      return { accepted: await advance() };
     } finally {
       operationRef.current = false;
     }

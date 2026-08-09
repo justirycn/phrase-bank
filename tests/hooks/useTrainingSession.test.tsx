@@ -33,7 +33,7 @@ function memoryRepository(items = Array.from({ length: 12 }, (_, index) => phras
     }),
     listTrainingEvents: vi.fn(async () => [...events]),
     saveTrainingSession: vi.fn(async (next: TrainingSessionRecord) => { session = structuredClone(next); }),
-    getActiveTrainingSession: vi.fn(async () => session && structuredClone(session)),
+    getActiveTrainingSession: vi.fn(async () => session && !session.completedAt ? structuredClone(session) : undefined),
     completeTrainingSession: vi.fn(async (id: string, completedAt: Date) => {
       if (session?.id === id) session = { ...session, completedAt: completedAt.toISOString() };
     }),
@@ -292,5 +292,29 @@ describe("useTrainingSession", () => {
     expect(result.current.index).toBe(1);
     expect(store.events).toHaveLength(1);
     expect(store.repository.submitTrainingReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps completion final when finish races an in-flight grade", async () => {
+    const store = memoryRepository();
+    const api = services();
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+    let release!: () => void;
+    const deferred = new Promise<void>((resolve) => { release = resolve; });
+    const atomicSubmit = store.repository.submitTrainingReview as ReturnType<typeof vi.fn>;
+    atomicSubmit.mockImplementationOnce(async (event: TrainingEvent) => {
+      await deferred;
+      store.events.push(event);
+    });
+    let gradeOutcome: { accepted: boolean } | undefined;
+    const grading = result.current.grade("hard").then((outcome) => { gradeOutcome = outcome; });
+    const finishing = result.current.finish();
+    release();
+    await act(async () => { await Promise.all([grading, finishing]); });
+    expect(gradeOutcome).toEqual({ accepted: false });
+    expect(result.current.phase).toBe("complete");
+    expect(result.current.index).toBe(0);
+    expect(store.getSession()?.completedAt).toBeDefined();
+    expect(await store.repository.getActiveTrainingSession()).toBeUndefined();
   });
 });
