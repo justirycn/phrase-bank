@@ -2,13 +2,46 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make native English pronunciation reliable in iPhone Safari and align the answer-toolbar icons with their labels.
+**Goal:** Make native English pronunciation reliable in iPhone Safari, align the answer-toolbar icons with their labels, and temporarily remove microphone recording from the training UI.
 
 **Architecture:** Harden the existing `BrowserSpeechService` with an early voice cache and `voiceschanged` refresh, then remove the asynchronous preference lookup from the user-gesture playback path by caching preferences in the training controller. Keep speech optional and non-blocking. Fix the toolbar using scoped CSS only.
 
 **Tech Stack:** TypeScript, React hooks, Web Speech API, Vitest, Testing Library, CSS.
 
 ---
+
+### Task 0: Temporarily remove recording from the training UI
+
+**Files:**
+- Modify: `tests/components/speakingPractice.test.tsx`
+- Modify: `app/components/SpeakingPractice.tsx`
+
+- [ ] **Step 1: Replace recording interaction tests with a failing disabled-recording contract**
+
+Assert that prompt mode has no microphone/record button, always shows `查看答案并自评`, clicking it invokes `revealForSelfAssessment`, and `startRecording` is never called.
+
+- [ ] **Step 2: Run the component test and verify RED**
+
+Run: `npm test -- tests/components/speakingPractice.test.tsx`
+
+Expected: FAIL because the recording button still exists and self-assessment is only shown after microphone failure.
+
+- [ ] **Step 3: Remove recording-only component state and handlers**
+
+Delete the microphone state, refs, press/keyboard handlers, recording status UI, microphone fallback class, and record button from `SpeakingPractice`. Always render a `查看答案并自评` button in prompt mode. Keep the controller recording API and answer playback compatibility unchanged.
+
+- [ ] **Step 4: Run the component test and verify GREEN**
+
+Run: `npm test -- tests/components/speakingPractice.test.tsx`
+
+Expected: all active prompt, answer, recovery, and completion tests PASS without a microphone request.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/components/SpeakingPractice.tsx tests/components/speakingPractice.test.tsx docs/superpowers/specs/2026-08-09-iphone-safari-speech-design.md docs/superpowers/plans/2026-08-09-iphone-safari-speech.md
+git commit -m "feat: pause speaking practice recording"
+```
 
 ### Task 1: Cache and explicitly bind Safari voices
 

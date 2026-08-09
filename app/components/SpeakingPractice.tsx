@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type { ReviewResult } from "../domain/types";
 import type { TrainingSessionController } from "../hooks/useTrainingSession";
 import { AppIcon } from "./AppIcon";
@@ -11,36 +11,11 @@ export function SpeakingPractice({ controller, onHome, onAgain }: {
   onAgain: () => void;
 }) {
   const [status, setStatus] = useState("");
-  const [microphoneFailed, setMicrophoneFailed] = useState(false);
-  const recordingStart = useRef<Promise<void>>();
-  const recordingStarted = useRef(false);
-  const pointerGesture = useRef(false);
-  const keyboardGesture = useRef(false);
-  const suppressNextClick = useRef(false);
   const run = async (action: () => Promise<unknown>) => {
     setStatus("");
     try { await action(); } catch { setStatus("操作没有完成，你仍然可以继续练习。再试一次即可。"); }
   };
   const grade = (result: ReviewResult) => run(() => controller.grade(result));
-  const beginRecording = () => {
-    setMicrophoneFailed(false); setStatus("");
-    recordingStarted.current = false;
-    const pending = Promise.resolve(controller.startRecording()).then(() => { recordingStarted.current = true; }).catch(() => {
-      setMicrophoneFailed(true);
-      setStatus("没有获得麦克风权限。你可以在浏览器设置中允许访问，或跳过录音继续练习。");
-    });
-    recordingStart.current = pending;
-    return pending;
-  };
-  const endRecording = async () => {
-    if (!recordingStart.current && controller.phase === "recording") {
-      await controller.stopRecording();
-      return;
-    }
-    try { await recordingStart.current; if (recordingStarted.current) await controller.stopRecording(); } catch { /* Guidance is already visible. */ }
-    finally { recordingStart.current = undefined; }
-  };
-
   if (controller.initializationError) return <section className="practice-error" role="alert"><AppIcon name="completion" size={34} /><h1>训练暂时打不开</h1><p>{controller.initializationError}</p><div className="practice-complete-actions"><button className="secondary" onClick={onHome}>返回首页</button><button className="primary" onClick={onAgain}>重试</button></div></section>;
 
   if (controller.phase === "complete") return <section className="practice-complete">
@@ -54,21 +29,18 @@ export function SpeakingPractice({ controller, onHome, onAgain }: {
   const phrase = controller.current?.phrase;
   if (!phrase) return <section className="practice-loading" aria-live="polite">正在准备今天的语言块…</section>;
   const answered = controller.phase === "answer";
-  const recording = controller.phase === "recording";
-  return <section className={`speaking-practice phase-${controller.phase} ${recording ? "is-recording" : ""} ${microphoneFailed ? "has-microphone-fallback" : ""}`}>
+  return <section className={`speaking-practice phase-${controller.phase}`}>
     <header className="practice-head"><span><AppIcon name="clock" size={18} /> 第 {controller.index + 1} / {controller.total} 个</span><div className="practice-track"><i style={{ width: `${((controller.index + (answered ? .6 : 0)) / Math.max(1, controller.total)) * 100}%` }} /></div></header>
     <div className="practice-prompt"><p className="eyebrow">先用英语表达</p><h1>{phrase.chinese}</h1>
-      {!answered && controller.phase !== "recording" && <p>不用逐字翻译，先说出你自然想到的表达。</p>}
-      {controller.phase === "recording" && <p className="recording-status" role="status"><span />正在听你说…</p>}
+      {!answered && <p>不用逐字翻译，先说出你自然想到的表达。</p>}
       {answered && <div className="practice-answer"><p className="eyebrow">自然表达</p><h2>{phrase.english}</h2>{phrase.personalExample && <blockquote>{phrase.personalExample}</blockquote>}</div>}
     </div>
     {status && <p className="practice-status" role="status">{status}</p>}
     <div className="practice-actions">
-      {(controller.phase === "prompt" || recording) && <button className={`record-action ${recording ? "recording" : ""}`} onPointerDown={() => { pointerGesture.current = true; if (!recording) void beginRecording(); }} onPointerUp={() => void endRecording()} onPointerCancel={() => { pointerGesture.current = false; void endRecording(); }} onKeyDown={(event) => { if (!event.repeat && !recording && (event.key === " " || event.key === "Enter")) { event.preventDefault(); keyboardGesture.current = true; void beginRecording(); } }} onKeyUp={(event) => { if (keyboardGesture.current && (event.key === " " || event.key === "Enter")) { event.preventDefault(); keyboardGesture.current = false; suppressNextClick.current = true; void endRecording(); } }} onClick={() => { if (pointerGesture.current) { pointerGesture.current = false; return; } if (suppressNextClick.current) { suppressNextClick.current = false; return; } if (recording) void endRecording(); else void beginRecording(); }}>{recording ? <AppIcon name="stop" size={24} /> : <AppIcon name="microphone" size={24} />}{recording ? "我说完了" : "按住说英语"}</button>}
       {controller.phase === "prompt" && <>
         <button className="unknown-action" onClick={() => run(controller.revealAsUnknown)}>不会，直接看答案</button>
         <button className="pronounce-action" onClick={() => run(controller.usePronunciationHint)}><AppIcon name="speaker" size={21} />先听发音</button>
-        {microphoneFailed && <button className="skip-recording" onClick={() => run(controller.revealForSelfAssessment)}>跳过录音，继续自评</button>}
+        <button className="self-assessment-action" onClick={() => run(controller.revealForSelfAssessment)}>查看答案并自评</button>
       </>}
       {answered && <>
         {/* This is the learner's just-recorded speech; a caption track does not exist. */}
