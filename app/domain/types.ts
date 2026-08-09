@@ -1,4 +1,45 @@
 export type ReviewResult = "again" | "hard" | "good";
+export type TrainingMode = "quick" | "standard";
+export type TrainingSource = "due" | "weak" | "mature" | "new" | "requeue";
+
+export interface TrainingEvent {
+  id: string;
+  sessionId: string;
+  phraseId: string;
+  source: TrainingSource;
+  result: ReviewResult;
+  usedPronunciationHint: boolean;
+  recorded: boolean;
+  activeSeconds: number;
+  occurredAt: string;
+}
+
+export interface TrainingSessionRecord {
+  id: string;
+  mode: TrainingMode;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  phraseIds: string[];
+  sources?: TrainingSource[];
+  currentIndex: number;
+  activeSeconds: number;
+}
+
+export interface SpeechPreferences {
+  accent: "en-US" | "en-GB";
+  autoSpeak: boolean;
+}
+
+export interface DailyTrainingSummary {
+  date: string;
+  activeSeconds: number;
+  completedGroups: number;
+  spokenCount: number;
+  masteredCount: number;
+  promotedCount: number;
+  lightDayUsed: boolean;
+}
 
 export interface PhraseInput {
   english: string;
@@ -35,7 +76,7 @@ export interface ReviewLog {
   nextReviewAt: string;
 }
 
-export interface BackupEnvelope {
+export interface BackupEnvelopeV1 {
   format: "personal-phrase-bank";
   version: 1;
   exportedAt: string;
@@ -43,3 +84,16 @@ export interface BackupEnvelope {
   phrases: Phrase[];
   reviewLogs: ReviewLog[];
 }
+
+export interface BackupEnvelopeV2 {
+  format: "personal-phrase-bank";
+  version: 2;
+  exportedAt: string;
+  categories: Category[];
+  phrases: Phrase[];
+  reviewLogs: ReviewLog[];
+  trainingEvents: TrainingEvent[];
+  trainingSessions: TrainingSessionRecord[];
+}
+
+export type BackupEnvelope = BackupEnvelopeV1 | BackupEnvelopeV2;

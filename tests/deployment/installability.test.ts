@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const publicPath = (...parts: string[]) => resolve(process.cwd(), "public", ...parts);
+const auditPath = (...parts: string[]) => resolve(process.cwd(), "docs", "audits", "iphone13pro-speaking", ...parts);
 
 function pngSize(path: string) {
   const png = readFileSync(path);
@@ -41,5 +42,18 @@ describe("installability", () => {
     ["apple-touch-icon.png", 180, 180],
   ])("provides %s at %ix%i", (file, width, height) => {
     expect(pngSize(publicPath("icons", file))).toEqual({ width, height });
+  });
+
+  it.each([
+    ["01-home-0-of-30.png", 390, 844],
+    ["02-prompt.png", 390, 844],
+    ["03-active-recording.png", 390, 844],
+    ["04-answer-recording-playback.png", 390, 844],
+    ["05-hint-answer-disabled-mastery.png", 390, 844],
+    ["06-group-complete.png", 390, 844],
+    ["07-speech-settings.png", 390, 844],
+    ["08-microphone-denied-fallback.png", 390, 844],
+  ])("captures iPhone 13 Pro acceptance state %s under the 390x844 viewport", (file, width, height) => {
+    expect(pngSize(auditPath(file))).toEqual({ width, height });
   });
 });

@@ -1,9 +1,8 @@
 import type { Phrase, PhraseInput, ReviewLog, ReviewResult } from "./types";
 
-export const REVIEW_INTERVAL_DAYS = [3, 7, 14, 30, 60] as const;
+export const REVIEW_INTERVAL_DAYS = [1, 3, 7, 14, 30, 60] as const;
 
 const uid = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-const addMinutes = (date: Date, minutes: number) => new Date(date.getTime() + minutes * 60_000);
 const addDays = (date: Date, days: number) => new Date(date.getTime() + days * 86_400_000);
 
 export function createNewPhrase(input: PhraseInput, now = new Date()): Phrase {
@@ -32,10 +31,10 @@ export function scheduleReview(phrase: Phrase, result: ReviewResult, now = new D
   if (result === "again") {
     reviewStep = 0;
     masteryLevel = Math.max(0, masteryLevel - 1);
-    due = addMinutes(now, 10);
+    due = addDays(now, 1);
   } else if (result === "hard") {
     masteryLevel = Math.max(1, masteryLevel);
-    due = addDays(now, 1);
+    due = addDays(now, 3);
   } else {
     const intervalIndex = Math.min(reviewStep, REVIEW_INTERVAL_DAYS.length - 1);
     due = addDays(now, REVIEW_INTERVAL_DAYS[intervalIndex]);

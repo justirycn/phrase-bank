@@ -1,17 +1,29 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppIcon } from "./components/AppIcon";
-import { Brand } from "./components/Brand";
-import type { Category, Phrase, PhraseInput, ReviewResult } from "./domain/types";
+import { SpeakingPractice } from "./components/SpeakingPractice";
+import { TrainingHome } from "./components/TrainingHome";
+import type { Category, Phrase, PhraseInput, ReviewResult, SpeechPreferences, TrainingEvent, TrainingMode, TrainingSessionRecord } from "./domain/types";
 import { createNewPhrase } from "./domain/review";
+import { calculateStreak, summarizeDailyTraining, summarizeWeek } from "./domain/trainingStats";
 import { validateCategoryName, validatePhraseInput, type PhraseErrors } from "./domain/validation";
+import { useTrainingSession } from "./hooks/useTrainingSession";
+import { TemporaryRecorder } from "./services/recorder";
+import { BrowserSpeechService } from "./services/speech";
 import { backupFileName, parseBackup } from "./storage/backup";
 import { LocalPhraseRepository } from "./storage/indexedDbRepository";
+import type { PhraseRepository } from "./storage/repository";
 
-type Screen = "home" | "library" | "add" | "review" | "settings";
-type Repository = LocalPhraseRepository;
+type Screen = "home" | "library" | "add" | "review" | "practice" | "settings";
+type Repository = PhraseRepository;
 const defaultRepository = typeof window === "undefined" ? undefined : new LocalPhraseRepository();
+const defaultSpeech = typeof window === "undefined" ? undefined : new BrowserSpeechService();
+const defaultRecorder = typeof window === "undefined" ? undefined : new TemporaryRecorder();
+const defaultSpeechPreferences: SpeechPreferences = { accent: "en-US", autoSpeak: true };
+const shanghaiDate = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const shanghaiTimestampDate = (timestamp: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(timestamp));
+const mondayOf = (date: string) => { const value = new Date(`${date}T00:00:00.000Z`); value.setUTCDate(value.getUTCDate() - ((value.getUTCDay() + 6) % 7)); return value.toISOString().slice(0, 10); };
 
 const masteryText = ["未掌握", "有印象", "可以使用", "已自动化"];
 const formatDate = (iso: string) => new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(iso));
@@ -26,14 +38,18 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
   const [phrases, setPhrases] = useState<Phrase[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [due, setDue] = useState<Phrase[]>([]);
+  const [trainingEvents, setTrainingEvents] = useState<TrainingEvent[]>([]);
+  const [trainingSessions, setTrainingSessions] = useState<TrainingSessionRecord[]>([]);
+  const [trainingMode, setTrainingMode] = useState<TrainingMode>("standard");
+  const [trainingRun, setTrainingRun] = useState(0);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
   const refresh = useCallback(async () => {
     if (!repo) return;
-    const [nextPhrases, nextCategories, nextDue] = await Promise.all([repo.listPhrases(), repo.listCategories(), repo.listDuePhrases()]);
-    setPhrases(nextPhrases); setCategories(nextCategories); setDue(nextDue);
+    const [nextPhrases, nextCategories, nextDue, nextEvents, snapshot] = await Promise.all([repo.listPhrases(), repo.listCategories(), repo.listDuePhrases(), repo.listTrainingEvents(), repo.exportSnapshot()]);
+    setPhrases(nextPhrases); setCategories(nextCategories); setDue(nextDue); setTrainingEvents(nextEvents); setTrainingSessions(snapshot.trainingSessions);
   }, [repo]);
 
   useEffect(() => {
@@ -42,19 +58,28 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
   }, [repo, refresh]);
 
   const go = (next: Screen) => { setNotice(""); setError(""); setScreen(next); window.scrollTo?.(0, 0); };
+  const startTraining = (mode: TrainingMode) => { setTrainingMode(mode); setTrainingRun((run) => run + 1); go("practice"); };
   if (loading) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
+  const today = shanghaiDate();
+  const dailySummary = summarizeDailyTraining(today, trainingEvents, trainingSessions);
+  const trainingDays = [...new Set(trainingEvents.map((event) => shanghaiTimestampDate(event.occurredAt)))].map((date) => summarizeDailyTraining(date, trainingEvents, trainingSessions));
+  const weeklySummary = summarizeWeek(trainingEvents, trainingSessions, mondayOf(today));
+  const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
+  const weeklyFocus = weeklySummary.weakPhraseIds.flatMap((id) => { const phrase = phrases.find((item) => item.id === id); return phrase ? [{ id, english: phrase.english, chinese: phrase.chinese, categoryName: categoryNames.get(phrase.categoryId) ?? "未分类" }] : []; });
+  const newIntroducedToday = new Set(trainingEvents.filter((event) => event.source === "new" && shanghaiTimestampDate(event.occurredAt) === today).map((event) => event.phraseId)).size;
 
   return <div className="app-shell">
     <main className="app-main">
       {error && <div className="toast error" role="alert">{error}</div>}
       {notice && <div className="toast" role="status">{notice}</div>}
-      {screen === "home" && <Home phrases={phrases} dueCount={due.length} categories={categories} onReview={() => go("review")} onAdd={() => go("add")} />}
+      {screen === "home" && <TrainingHome dailySummary={dailySummary} streak={calculateStreak(trainingDays, today)} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} onStartStandard={() => startTraining("standard")} onStartQuick={() => startTraining("quick")} />}
       {screen === "library" && <Library phrases={phrases} categories={categories} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={async (input) => { if (!repo) return; await repo.savePhrase(createNewPhrase(input)); await refresh(); setNotice("已收入你的句库"); setScreen("library"); }} />}
       {screen === "review" && <Review phrases={due} onBack={() => go("home")} onGrade={async (id, result) => { if (!repo) return; await repo.submitReview(id, result); await refresh(); }} />}
+      {screen === "practice" && repo && defaultSpeech && defaultRecorder && <PracticeSession key={`${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} speech={defaultSpeech} recorder={defaultRecorder} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => { setTrainingRun((run) => run + 1); void refresh().catch(() => setError("本地数据暂时无法刷新，请稍后再试。")); }} setError={setError} />}
       {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} refresh={refresh} setNotice={setNotice} setError={setError} />}
     </main>
-    {screen !== "review" && <nav className="bottom-nav" aria-label="主导航">
+    {screen !== "review" && screen !== "practice" && <nav className="bottom-nav" aria-label="主导航">
       <button className={screen === "home" ? "active" : ""} aria-current={screen === "home" ? "page" : undefined} onClick={() => go("home")}><span><AppIcon name="home" size={21} /></span>复习</button>
       <button className={screen === "library" ? "active" : ""} aria-current={screen === "library" ? "page" : undefined} onClick={() => go("library")}><span><AppIcon name="library" size={21} /></span>句库</button>
       <button className={screen === "add" ? "add-nav active" : "add-nav"} aria-label="添加" aria-current={screen === "add" ? "page" : undefined} onClick={() => go("add")}><span><AppIcon name="add" size={25} /></span>添加</button>
@@ -63,27 +88,16 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
   </div>;
 }
 
-function Home({ phrases, dueCount, categories, onReview, onAdd }: { phrases: Phrase[]; dueCount: number; categories: Category[]; onReview: () => void; onAdd: () => void }) {
-  const names = new Map(categories.map((c) => [c.id, c.name]));
-  const today = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" }).formatToParts(new Date());
-  const date = today.filter((part) => part.type !== "weekday").map((part) => part.value).join("");
-  const weekday = today.find((part) => part.type === "weekday")?.value;
-  return <div className="home">
-    <header className="home-header"><Brand /><p className="date"><span>{date}</span><span>{weekday}</span></p></header>
-    <section className="home-practice">
-      <div className="eyebrow">TODAY’S PRACTICE</div>
-      <h1>{dueCount ? <>今天有 <em>{dueCount}</em> 条<br />语言块等你复习</> : <>今天的复习<br />已经完成了</>}</h1>
-      <p className="practice-copy">{dueCount ? "先想意思，再让英文自然浮现。" : "积累一点，明天继续让表达更自然。"}</p>
-      {dueCount ? <>
-        <div className="home-progress"><span>进度 0 / {dueCount}</span><i aria-hidden="true" /></div>
-        <button className="home-cta" aria-label="开始今日复习" onClick={onReview}><AppIcon name="library" size={22} />开始今日复习 <AppIcon name="forward" size={22} /></button>
-      </> : <button className="home-cta" aria-label="收藏新的表达" onClick={onAdd}>收藏新的表达 <AppIcon name="add" size={22} /></button>}
-    </section>
-    <section className="home-recent" aria-labelledby="recent-heading">
-      <div className="home-section-title"><h2 id="recent-heading">最近收藏</h2><button aria-label="添加最近收藏" onClick={onAdd}><AppIcon name="bookmark" size={22} /></button></div>
-      {phrases.length ? <div className="recent-list">{phrases.slice(0, 4).map((phrase) => <article className="phrase-row" key={phrase.id}><div><h3>{phrase.english}</h3><p>{phrase.chinese}</p><small>{names.get(phrase.categoryId)} · {formatDate(phrase.createdAt)}</small></div></article>)}</div> : <Empty title="从第一句话开始" detail="收藏你真正想说、将来会反复使用的英语表达。" action={<button className="secondary" onClick={onAdd}>添加第一条</button>} />}
-    </section>
-  </div>;
+function PracticeSession({ repository, mode, newIntroducedToday, speech, recorder, onHome, onAgain, setError }: {
+  repository: PhraseRepository; mode: TrainingMode; speech: BrowserSpeechService; recorder: TemporaryRecorder;
+  newIntroducedToday: number; onHome: () => Promise<void>; onAgain: () => void | Promise<void>; setError: (message: string) => void;
+}) {
+  const controller = useTrainingSession({ repository, mode, speech, recorder, newIntroducedToday });
+  const { finish, phase } = controller;
+  useEffect(() => {
+    if (phase === "complete") void finish().catch(() => setError("训练进度暂时无法保存，请稍后重试。"));
+  }, [finish, phase, setError]);
+  return <SpeakingPractice controller={controller} onHome={() => void controller.finish().then(onHome).catch(() => setError("训练进度暂时无法保存，请稍后重试。"))} onAgain={() => void controller.finish().then(onAgain).catch(() => setError("训练进度暂时无法保存，请稍后重试。"))} />;
 }
 
 function AddPhrase({ categories, onSave, onCancel }: { categories: Category[]; onSave: (input: PhraseInput) => Promise<void>; onCancel: () => void }) {
@@ -125,11 +139,59 @@ function Review({ phrases, onBack, onGrade }: { phrases: Phrase[]; onBack: () =>
 
 function Settings({ repository, categories, phrases, refresh, setNotice, setError }: { repository: Repository; categories: Category[]; phrases: Phrase[]; refresh: () => Promise<void>; setNotice: (s: string) => void; setError: (s: string) => void }) {
   const [name, setName] = useState("");
+  const [speechSettings, setSpeechSettings] = useState(() => ({ repository, preferences: defaultSpeechPreferences, loading: true }));
+  const speechPreferences = speechSettings.repository === repository ? speechSettings.preferences : defaultSpeechPreferences;
+  const speechPreferencesLoading = speechSettings.repository !== repository || speechSettings.loading;
+  const mounted = useRef(true);
+  const loadGeneration = useRef(0);
+  const saveSequence = useRef(0);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const persistedPreferences = useRef<SpeechPreferences>(defaultSpeechPreferences);
+  useEffect(() => {
+    const generation = ++loadGeneration.current;
+    mounted.current = true;
+    saveSequence.current = 0;
+    saveQueue.current = Promise.resolve();
+    persistedPreferences.current = defaultSpeechPreferences;
+    repository.getSpeechPreferences()
+      .then((preferences) => {
+        if (!mounted.current || loadGeneration.current !== generation) return;
+        persistedPreferences.current = preferences;
+        setSpeechSettings({ repository, preferences, loading: false });
+      })
+      .catch(() => {
+        if (!mounted.current || loadGeneration.current !== generation) return;
+        setSpeechSettings({ repository, preferences: defaultSpeechPreferences, loading: false });
+        setError("语音偏好暂时无法读取，已使用默认设置。");
+      });
+    return () => { mounted.current = false; loadGeneration.current += 1; };
+  }, [repository, setError]);
+  const saveSpeechPreferences = (preferences: SpeechPreferences) => {
+    const generation = loadGeneration.current;
+    const sequence = ++saveSequence.current;
+    setSpeechSettings({ repository, preferences, loading: false });
+    const persist = async () => {
+      try {
+        await repository.saveSpeechPreferences(preferences);
+        if (!mounted.current || loadGeneration.current !== generation) return;
+        persistedPreferences.current = preferences;
+      } catch {
+        if (!mounted.current || loadGeneration.current !== generation || sequence !== saveSequence.current) return;
+        setSpeechSettings({ repository, preferences: persistedPreferences.current, loading: false });
+        setError("语音偏好暂时无法保存，已恢复上次设置。");
+      }
+    };
+    saveQueue.current = saveQueue.current.then(persist, persist);
+  };
   const addCategory = async () => { const error = validateCategoryName(name, categories.map((c) => c.name)); if (error) return setError(error); const now = new Date().toISOString(); await repository.saveCategory({ id: crypto.randomUUID(), name: name.trim(), isDefault: false, createdAt: now, updatedAt: now }); setName(""); await refresh(); setNotice("分类已添加"); };
   const exportData = async () => { const snapshot = await repository.exportSnapshot(); const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = backupFileName(); link.click(); URL.revokeObjectURL(url); setNotice("备份文件已导出"); };
   const importData = async (file?: File) => { if (!file) return; try { const backup = parseBackup(await file.text()); const policy = confirm("遇到重复记录时，用备份中的内容覆盖吗？\n选择“取消”将跳过重复项。") ? "overwrite" : "skip"; await repository.importSnapshot(backup, policy); await refresh(); setNotice("备份已成功导入"); } catch (e) { setError(e instanceof Error ? e.message : "导入失败"); } };
   return <><header className="top"><div><h1>设置</h1><p>管理你的分类与本地数据。</p></div></header>
     <section className="settings-card"><div className="section-title"><div><span>分类管理</span><small>{categories.length} 个分类</small></div></div><div className="category-list">{categories.map((c) => <div key={c.id}><span className="category-dot" /><b>{c.name}</b><small>{phrases.filter((p) => p.categoryId === c.id).length} 条</small>{!c.isDefault && <button onClick={async () => { const target = categories.find((x) => x.id !== c.id); if (!target || !confirm(`删除“${c.name}”并将内容移到“${target.name}”？`)) return; await repository.deleteCategoryAndMigrate(c.id, target.id); await refresh(); }}>删除</button>}</div>)}</div><div className="add-category"><input aria-label="新分类名称" value={name} onChange={(e) => setName(e.target.value)} placeholder="新分类名称" /><button onClick={addCategory}>添加</button></div></section>
+    <section className="settings-card speech-settings"><div className="section-title"><div><span>语音训练</span><small>SPEAKING PRACTICE</small></div></div>
+      <label className="speech-toggle"><span><b>自动朗读答案</b><small>显示英文后自动播放发音</small></span><input aria-label="自动朗读答案" type="checkbox" disabled={speechPreferencesLoading} checked={speechPreferences.autoSpeak} onChange={(event) => saveSpeechPreferences({ ...speechPreferences, autoSpeak: event.target.checked })} /></label>
+      <fieldset className="accent-options" disabled={speechPreferencesLoading}><legend>朗读口音</legend><label><input type="radio" name="speech-accent" value="en-US" checked={speechPreferences.accent === "en-US"} onChange={() => saveSpeechPreferences({ ...speechPreferences, accent: "en-US" })} /><span>美式英语</span></label><label><input type="radio" name="speech-accent" value="en-GB" checked={speechPreferences.accent === "en-GB"} onChange={() => saveSpeechPreferences({ ...speechPreferences, accent: "en-GB" })} /><span>英式英语</span></label></fieldset>
+    </section>
     <section className="settings-card"><div className="section-title"><div><span>数据备份</span><small>BACKUP & RESTORE</small></div></div><div className="warning"><b>数据只保存在当前设备</b><p>更换设备、卸载浏览器或清除网站数据前，请先导出备份。</p></div><button className="settings-action" onClick={exportData}><span><AppIcon name="download" size={20} /></span><div><b>导出备份</b><small>下载完整 JSON 文件</small></div><i><AppIcon name="next" size={20} /></i></button><label className="settings-action"><span><AppIcon name="upload" size={20} /></span><div><b>导入备份</b><small>从以前的备份恢复</small></div><i><AppIcon name="next" size={20} /></i><input type="file" accept="application/json,.json" onChange={(e) => importData(e.target.files?.[0])} hidden /></label></section>
     <p className="version">Phrase Bank · 本地版 MVP</p>
   </>;
