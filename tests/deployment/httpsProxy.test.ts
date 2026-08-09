@@ -33,6 +33,7 @@ describe("HTTPS reverse proxy", () => {
 
     expect(domainSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(1);
     expect(legacyIpSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(1);
+    expect(caddy.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(2);
   });
 
   it("makes Caddy the only public entry point and persists certificates", () => {
@@ -41,13 +42,16 @@ describe("HTTPS reverse proxy", () => {
     const caddyService = yamlSection(compose, "caddy", 2);
     const volumes = yamlSection(compose, "volumes");
 
+    expect(caddyService).toMatch(/^ {4}image: caddy:2\.10-alpine\s*$/m);
     expect(caddyService).toMatch(/^ {4}ports:\s*$/m);
     expect(caddyService).toMatch(/^ {6}- "80:80"\s*$/m);
     expect(caddyService).toMatch(/^ {6}- "443:443"\s*$/m);
     expect(caddyService).toMatch(/^ {4}volumes:\s*$/m);
+    expect(caddyService).toMatch(/^ {6}- \.\/Caddyfile:\/etc\/caddy\/Caddyfile:ro\s*$/m);
     expect(caddyService).toMatch(/^ {6}- caddy_data:\/data\s*$/m);
     expect(caddyService).toMatch(/^ {6}- caddy_config:\/config\s*$/m);
     expect(phraseBankService).not.toMatch(/^ {4}ports:\s*$/m);
+    expect(compose).not.toContain('"80:3000"');
     expect(volumes).toMatch(/^ {2}caddy_data:\s*$/m);
     expect(volumes).toMatch(/^ {2}caddy_config:\s*$/m);
   });
