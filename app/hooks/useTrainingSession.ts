@@ -42,6 +42,13 @@ const IDLE_LIMIT_MS = 60_000;
 const CHECKPOINT_SECONDS = 30;
 const systemNow = () => new Date();
 const trainingSources = new Set<TrainingSource>(["due", "weak", "mature", "new", "requeue"]);
+const shanghaiDayFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+});
+const shanghaiDay = (value: Date | string) => {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : shanghaiDayFormatter.format(date);
+};
 
 export function useTrainingSession({
   repository,
@@ -191,11 +198,15 @@ export function useTrainingSession({
       }
 
       const started = now();
+      const startedDay = shanghaiDay(started);
+      const persistedNewCount = new Set(events.filter((event) =>
+        event.source === "new" && shanghaiDay(event.occurredAt) === startedDay)
+        .map((event) => event.phraseId)).size;
       const selected = selectTrainingGroup(phrases, {
         mode,
         now: started,
         seed: seed ?? started.toISOString().slice(0, 10),
-        newIntroducedToday,
+        newIntroducedToday: Math.max(newIntroducedToday, persistedNewCount),
       });
       const session: TrainingSessionRecord = {
         id: globalThis.crypto.randomUUID(),

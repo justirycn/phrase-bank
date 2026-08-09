@@ -78,6 +78,21 @@ describe("useTrainingSession", () => {
     expect(result.current.total).toBe(0);
   });
 
+  it("uses persisted Shanghai-day new events when the app count is stale", async () => {
+    const reviewed = [phrase("reviewed-0")];
+    const newItems = Array.from({ length: 4 }, (_, index) => ({ ...phrase(`new-${index}`), reviewStep: 0, masteryLevel: 0, lastReviewedAt: undefined }));
+    const store = memoryRepository([...reviewed, ...newItems]); const api = services();
+    store.events.push(...Array.from({ length: 3 }, (_, index): TrainingEvent => ({
+      id: `prior-new-${index}`, sessionId: "prior", phraseId: `prior-${index}`, source: "new",
+      result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1,
+      occurredAt: "2026-08-08T16:30:00.000Z",
+    })));
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, newIntroducedToday: 0 }));
+    await waitFor(() => expect(result.current.total).toBeGreaterThan(0));
+    expect(result.current.total).toBe(1);
+    expect(store.getSession()?.sources).not.toContain("new");
+  });
+
   it("records unknown once, reveals it and appends the phrase once", async () => {
     const store = memoryRepository();
     const api = services();
