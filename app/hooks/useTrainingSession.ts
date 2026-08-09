@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReviewResult, TrainingMode, TrainingSessionRecord, TrainingSource } from "../domain/types";
+import type { ReviewResult, TrainingEvent, TrainingMode, TrainingSessionRecord, TrainingSource } from "../domain/types";
 import { selectTrainingGroup, type TrainingCandidate } from "../domain/trainingSelection";
 import type { PhraseRepository } from "../storage/repository";
 import type { BrowserSpeechService } from "../services/speech";
@@ -66,6 +66,10 @@ export function useTrainingSession({
   const lastTickRef = useRef(0);
   const checkpointRef = useRef(0);
   const eventActiveBaseRef = useRef(0);
+  const pendingEventRef = useRef<{ event: TrainingEvent; activeSecondsSnapshot: number }>();
+  const sessionWriteRef = useRef<Promise<void>>(Promise.resolve());
+  const finishingRef = useRef(false);
+  const finishPromiseRef = useRef<Promise<void>>();
 
   const replaceQueue = useCallback((next: TrainingCandidate[]) => {
     queueRef.current = next;
@@ -77,15 +81,25 @@ export function useTrainingSession({
     setIndex(next);
   }, []);
 
-  const persistSession = useCallback(async () => {
+  const persistSession = useCallback((whileFinishing = false): Promise<void> => {
+    if (finishingRef.current && !whileFinishing) return Promise.resolve();
     const session = sessionRef.current;
-    if (!session) return;
+    if (!session) return Promise.resolve();
     const timestamp = now().toISOString();
     session.phraseIds = queueRef.current.map((candidate) => candidate.phrase.id);
     session.sources = queueRef.current.map((candidate) => candidate.source);
     session.currentIndex = indexRef.current;
     session.updatedAt = timestamp;
-    await repository.saveTrainingSession({ ...session, phraseIds: [...session.phraseIds] });
+    const snapshot: TrainingSessionRecord = {
+      ...session,
+      phraseIds: [...session.phraseIds],
+      sources: session.sources ? [...session.sources] : undefined,
+    };
+    const write = sessionWriteRef.current
+      .catch(() => undefined)
+      .then(() => repository.saveTrainingSession(snapshot));
+    sessionWriteRef.current = write;
+    return write;
   }, [now, repository]);
 
   useEffect(() => {
@@ -103,15 +117,18 @@ export function useTrainingSession({
         const seen = new Set<string>();
         const hasAlignedSources = active.sources?.length === active.phraseIds.length
           && active.sources.every((source) => trainingSources.has(source));
-        const restored = active.phraseIds.flatMap((id, position) => {
+        const restoredWithPositions = active.phraseIds.flatMap((id, position) => {
           const item = byId.get(id);
           if (!item) return [];
           const source = hasAlignedSources
             ? active.sources![position]
             : seen.has(id) ? "requeue" as const : "due" as const;
           seen.add(id);
-          return [{ phrase: item, source }];
+          return [{ candidate: { phrase: item, source }, position }];
         });
+        const restored = restoredWithPositions.map((item) => item.candidate);
+        const originalIndex = Math.min(active.currentIndex, active.phraseIds.length);
+        const normalizedIndex = restoredWithPositions.filter((item) => item.position < originalIndex).length;
         sessionRef.current = {
           ...active,
           phraseIds: restored.map((item) => item.phrase.id),
@@ -122,13 +139,13 @@ export function useTrainingSession({
           .filter((event) => event.sessionId === active.id)
           .reduce((sum, event) => sum + event.activeSeconds, 0);
         replaceQueue(restored);
-        replaceIndex(Math.min(active.currentIndex, restored.length));
-        if (active.currentIndex >= restored.length) {
+        replaceIndex(normalizedIndex);
+        if (normalizedIndex >= restored.length) {
           setPhase("complete");
         } else {
-          const currentPhraseId = restored[active.currentIndex]?.phrase.id;
+          const currentPhraseId = restored[normalizedIndex]?.phrase.id;
           const priorOccurrences = active.phraseIds
-            .slice(0, active.currentIndex)
+            .slice(0, originalIndex)
             .filter((id) => id === currentPhraseId).length;
           const phraseEvents = events
             .filter((event) => event.sessionId === active.id && event.phraseId === currentPhraseId)
@@ -142,6 +159,7 @@ export function useTrainingSession({
             setPhase("answer");
           }
         }
+        await persistSession();
         return;
       }
 
@@ -167,10 +185,10 @@ export function useTrainingSession({
       replaceQueue(selected);
       replaceIndex(0);
       if (selected.length === 0) setPhase("complete");
-      await repository.saveTrainingSession({ ...session, phraseIds: [...session.phraseIds] });
+      await persistSession();
     })();
     return () => { cancelled = true; };
-  }, [mode, newIntroducedToday, now, repository, replaceIndex, replaceQueue, seed]);
+  }, [mode, newIntroducedToday, now, persistSession, repository, replaceIndex, replaceQueue, seed]);
 
   useEffect(() => {
     lastInteractionRef.current = Date.now();
@@ -185,6 +203,7 @@ export function useTrainingSession({
       const session = sessionRef.current;
       if (
         !session
+        || finishingRef.current
         || phase === "complete"
         || document.visibilityState !== "visible"
         || tick - lastInteractionRef.current > IDLE_LIMIT_MS
@@ -236,21 +255,28 @@ export function useTrainingSession({
     const session = sessionRef.current;
     const current = queueRef.current[indexRef.current];
     if (!session || !current) return;
-    const occurredAt = now();
-    const eventActiveSeconds = Math.max(0, session.activeSeconds - eventActiveBaseRef.current);
-    await repository.saveTrainingEvent({
-      id: globalThis.crypto.randomUUID(),
-      sessionId: session.id,
-      phraseId: current.phrase.id,
-      source: current.source,
-      result,
-      usedPronunciationHint: usedHintRef.current,
-      recorded: recordedRef.current,
-      activeSeconds: eventActiveSeconds,
-      occurredAt: occurredAt.toISOString(),
-    });
-    eventActiveBaseRef.current = session.activeSeconds;
-    await repository.submitReview(current.phrase.id, result, occurredAt);
+    if (!pendingEventRef.current) {
+      const occurredAt = now();
+      const activeSecondsSnapshot = session.activeSeconds;
+      pendingEventRef.current = {
+        activeSecondsSnapshot,
+        event: {
+          id: globalThis.crypto.randomUUID(),
+          sessionId: session.id,
+          phraseId: current.phrase.id,
+          source: current.source,
+          result,
+          usedPronunciationHint: usedHintRef.current,
+          recorded: recordedRef.current,
+          activeSeconds: Math.max(0, activeSecondsSnapshot - eventActiveBaseRef.current),
+          occurredAt: occurredAt.toISOString(),
+        },
+      };
+    }
+    const pending = pendingEventRef.current;
+    await repository.saveTrainingEvent(pending.event);
+    await repository.submitReview(pending.event.phraseId, pending.event.result, new Date(pending.event.occurredAt));
+    eventActiveBaseRef.current = pending.activeSecondsSnapshot;
   }, [now, repository]);
 
   const resetItemState = useCallback(() => {
@@ -258,6 +284,7 @@ export function useTrainingSession({
     usedHintRef.current = false;
     recordedRef.current = false;
     evaluatedRef.current = false;
+    pendingEventRef.current = undefined;
     setRecordingUrl(undefined);
     setPhase("prompt");
   }, []);
@@ -340,16 +367,28 @@ export function useTrainingSession({
   }, [advance, phase, recordEvent]);
 
   const finish = useCallback(async () => {
+    if (finishPromiseRef.current) return finishPromiseRef.current;
     const session = sessionRef.current;
-    if (session && !session.completedAt) {
-      const finishedAt = now();
-      await persistSession();
-      await repository.completeTrainingSession(session.id, finishedAt);
-      session.completedAt = finishedAt.toISOString();
-    }
+    finishingRef.current = true;
+    if (mountedRef.current) setPhase("complete");
     speech.cancel();
     recorder.dispose();
-    if (mountedRef.current) setPhase("complete");
+    const completion = (async () => {
+      if (session && !session.completedAt) {
+        const finishedAt = now();
+        await persistSession(true);
+        await repository.completeTrainingSession(session.id, finishedAt);
+        session.completedAt = finishedAt.toISOString();
+      }
+    })();
+    finishPromiseRef.current = completion;
+    try {
+      await completion;
+    } catch (error) {
+      finishingRef.current = false;
+      finishPromiseRef.current = undefined;
+      throw error;
+    }
   }, [now, persistSession, recorder, repository, speech]);
 
   return {

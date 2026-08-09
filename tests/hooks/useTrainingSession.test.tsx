@@ -18,7 +18,11 @@ function memoryRepository(items = Array.from({ length: 12 }, (_, index) => phras
   const repository = {
     listPhrases: vi.fn(async () => items),
     getPhrase: vi.fn(async (id: string) => items.find((item) => item.id === id)),
-    saveTrainingEvent: vi.fn(async (event: TrainingEvent) => { events.push(event); }),
+    saveTrainingEvent: vi.fn(async (event: TrainingEvent) => {
+      const existing = events.findIndex((item) => item.id === event.id);
+      if (existing >= 0) events[existing] = event;
+      else events.push(event);
+    }),
     listTrainingEvents: vi.fn(async () => [...events]),
     saveTrainingSession: vi.fn(async (next: TrainingSessionRecord) => { session = structuredClone(next); }),
     getActiveTrainingSession: vi.fn(async () => session && structuredClone(session)),
@@ -197,5 +201,67 @@ describe("useTrainingSession", () => {
     const second = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "different" }));
     await waitFor(() => expect(second.result.current.total).toBe(savedSources.length));
     expect(store.getSession()!.sources).toEqual(savedSources);
+  });
+
+  it.each([
+    { label: "before the cursor", phraseIds: ["missing", "a", "c"], sources: ["weak", "due", "mature"] as const, cursor: 2 },
+    { label: "at the cursor", phraseIds: ["a", "missing", "c"], sources: ["due", "new", "mature"] as const, cursor: 1 },
+  ])("normalizes the cursor when a saved phrase $label was deleted", async ({ phraseIds, sources, cursor }) => {
+    const items = [phrase("a"), phrase("b"), phrase("c"), phrase("d")];
+    const store = memoryRepository(items);
+    const api = services();
+    await store.repository.saveTrainingSession({
+      id: "saved", mode: "standard", startedAt: "2026-08-09T07:00:00.000Z",
+      updatedAt: "2026-08-09T07:00:00.000Z", phraseIds, sources: [...sources],
+      currentIndex: cursor, activeSeconds: 4,
+    });
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
+    await waitFor(() => expect(result.current.current?.phrase.id).toBe("c"));
+    expect(result.current.index).toBe(1);
+    await waitFor(() => expect(store.getSession()).toMatchObject({
+      phraseIds: ["a", "c"], sources: ["due", "mature"], currentIndex: 1,
+    }));
+  });
+
+  it("serializes a pending checkpoint before the final save and completion", async () => {
+    const store = memoryRepository();
+    const api = services();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+    let release!: () => void;
+    const deferred = new Promise<void>((resolve) => { release = resolve; });
+    const originalSave = store.repository.saveTrainingSession as ReturnType<typeof vi.fn>;
+    originalSave.mockImplementationOnce(async (session: TrainingSessionRecord) => {
+      await deferred;
+      const target = store.getSession();
+      if (target) Object.assign(target, structuredClone(session));
+    });
+    act(() => window.dispatchEvent(new Event("pointerdown")));
+    await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
+    const finishing = result.current.finish();
+    await Promise.resolve();
+    expect(store.repository.completeTrainingSession).not.toHaveBeenCalled();
+    release();
+    await act(() => finishing);
+    expect(store.repository.completeTrainingSession).toHaveBeenCalledTimes(1);
+    expect(store.getSession()?.completedAt).toBeDefined();
+    visibility.mockRestore();
+  });
+
+  it("retries a failed review with the same id and active-time snapshot", async () => {
+    const store = memoryRepository();
+    const api = services();
+    const submit = store.repository.submitReview as ReturnType<typeof vi.fn>;
+    submit.mockRejectedValueOnce(new Error("temporary failure"));
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+    await expect(act(() => result.current.grade("hard"))).rejects.toThrow("temporary failure");
+    const firstEvent = structuredClone(store.events[0]);
+    await act(() => result.current.grade("hard"));
+    expect(store.events).toEqual([firstEvent]);
+    expect(store.repository.saveTrainingEvent).toHaveBeenCalledTimes(2);
+    expect(submit).toHaveBeenCalledTimes(2);
+    expect(result.current.index).toBe(1);
   });
 });
