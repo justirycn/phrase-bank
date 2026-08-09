@@ -98,6 +98,19 @@ describe("useTrainingSession", () => {
     expect(store.events).toHaveLength(0);
   });
 
+  it("reveals for self assessment without saving a result until grading", async () => {
+    const store = memoryRepository(Array.from({ length: 3 }, (_, index) => phrase(`self-${index}`)));
+    const api = services();
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "self" }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+    await act(() => result.current.revealForSelfAssessment());
+    expect(result.current.phase).toBe("answer");
+    expect(store.events).toHaveLength(0);
+    await act(() => result.current.grade("hard"));
+    expect(store.events).toHaveLength(1);
+    expect(store.events[0].result).toBe("hard");
+  });
+
   it("keeps pronunciation failures non-blocking", async () => {
     const store = memoryRepository();
     const api = services();
@@ -159,6 +172,16 @@ describe("useTrainingSession", () => {
     await act(() => result.current.finish());
     expect(api.recorder.dispose).toHaveBeenCalled();
     expect(api.speech.cancel).toHaveBeenCalled();
+  });
+
+  it("stops through a prompt-phase callback captured before recording starts", async () => {
+    const store = memoryRepository(); const api = services();
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+    const stopFromPressDownRender = result.current.stopRecording;
+    await act(() => result.current.startRecording());
+    await act(() => stopFromPressDownRender());
+    expect(result.current.phase).toBe("answer");
   });
 
   it("restores the saved queue and index after remount and disposes temporary media", async () => {

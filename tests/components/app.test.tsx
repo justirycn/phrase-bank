@@ -58,6 +58,17 @@ describe("PhraseBankApp", () => {
     expect(screen.getByRole("button", { name: /快速练一组/ })).toBeVisible();
   });
 
+  it("shows completed groups and a completed-day headline", async () => {
+    const repo = new MemoryRepository();
+    const now = new Date().toISOString();
+    repo.events.push({ id: "e1", sessionId: "s1", phraseId: "p1", source: "due", result: "good", usedPronunciationHint: false, recorded: true, activeSeconds: 1800, occurredAt: now });
+    repo.sessions.push({ id: "s1", mode: "quick", startedAt: now, updatedAt: now, completedAt: now, phraseIds: ["p1"], currentIndex: 1, activeSeconds: 1800 });
+    render(<PhraseBankApp repository={repo as never} />);
+    expect(await screen.findByText("今天已经完成")).toBeVisible();
+    expect(screen.getByText((_, element) => element?.tagName === "P" && element.textContent?.includes("完成 1 组") === true)).toBeVisible();
+    expect(screen.getByRole("button", { name: /再练一组/ })).toBeVisible();
+  });
+
   it("starts standard practice with Chinese before English", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     repo.phrases.push(makePhrase({ chinese: "我还没决定。", english: "I haven't decided yet." }));
@@ -76,6 +87,25 @@ describe("PhraseBankApp", () => {
     expect(await screen.findByText(/中文/)).toBeVisible();
     expect(repo.sessions[0]).toMatchObject({ mode: "quick", phraseIds: expect.any(Array) });
     expect(repo.sessions[0]?.phraseIds).toHaveLength(3);
+  });
+
+  it("does not introduce more new phrases after three distinct new items today", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository(); const now = new Date().toISOString();
+    repo.phrases = Array.from({ length: 4 }, (_, index) => makePhrase({ id: `new-${index}`, chinese: `新句 ${index}`, lastReviewedAt: undefined }));
+    repo.events = Array.from({ length: 3 }, (_, index) => ({ id: `event-${index}`, sessionId: "old", phraseId: `seen-${index}`, source: "new" as const, result: "hard" as const, usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: now }));
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: /快速练一组/ }));
+    await screen.findByText("这一组完成了");
+    expect(repo.sessions[0]?.phraseIds).toHaveLength(0);
+  });
+
+  it("turns weak phrase ids into readable weekly focus phrases", async () => {
+    const repo = new MemoryRepository(); const now = new Date().toISOString();
+    repo.phrases.push(makePhrase({ id: "weak-readable", english: "Could you clarify that?", chinese: "你能说明一下吗？" }));
+    repo.events.push({ id: "weak-event", sessionId: "old", phraseId: "weak-readable", source: "weak", result: "again", usedPronunciationHint: false, recorded: false, activeSeconds: 20, occurredAt: now });
+    render(<PhraseBankApp repository={repo as never} />);
+    expect(await screen.findByText("Could you clarify that?")).toBeVisible();
+    expect(screen.getByText("你能说明一下吗？")).toBeVisible();
   });
 
   it("keeps the library, add and settings navigation", async () => {

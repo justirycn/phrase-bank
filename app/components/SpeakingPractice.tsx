@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ReviewResult } from "../domain/types";
 import type { TrainingSessionController } from "../hooks/useTrainingSession";
 import { AppIcon } from "./AppIcon";
@@ -11,11 +11,28 @@ export function SpeakingPractice({ controller, onHome, onAgain }: {
   onAgain: () => void;
 }) {
   const [status, setStatus] = useState("");
+  const [microphoneFailed, setMicrophoneFailed] = useState(false);
+  const recordingStart = useRef<Promise<void>>();
+  const recordingStarted = useRef(false);
   const run = async (action: () => Promise<unknown>) => {
     setStatus("");
     try { await action(); } catch { setStatus("操作没有完成，你仍然可以继续练习。再试一次即可。"); }
   };
   const grade = (result: ReviewResult) => run(() => controller.grade(result));
+  const beginRecording = () => {
+    setMicrophoneFailed(false); setStatus("");
+    recordingStarted.current = false;
+    const pending = Promise.resolve(controller.startRecording()).then(() => { recordingStarted.current = true; }).catch(() => {
+      setMicrophoneFailed(true);
+      setStatus("没有获得麦克风权限。你可以在浏览器设置中允许访问，或跳过录音继续练习。");
+    });
+    recordingStart.current = pending;
+    return pending;
+  };
+  const endRecording = async () => {
+    try { await recordingStart.current; if (recordingStarted.current) await controller.stopRecording(); } catch { /* Guidance is already visible. */ }
+    finally { recordingStart.current = undefined; }
+  };
 
   if (controller.phase === "complete") return <section className="practice-complete">
     <div className="done-mark"><AppIcon name="completion" size={36} /></div>
@@ -28,7 +45,7 @@ export function SpeakingPractice({ controller, onHome, onAgain }: {
   const phrase = controller.current?.phrase;
   if (!phrase) return <section className="practice-loading" aria-live="polite">正在准备今天的语言块…</section>;
   const answered = controller.phase === "answer";
-  return <section className={`speaking-practice ${controller.phase === "recording" ? "is-recording" : ""}`}>
+  return <section className={`speaking-practice phase-${controller.phase} ${controller.phase === "recording" ? "is-recording" : ""}`}>
     <header className="practice-head"><span><AppIcon name="clock" size={18} /> 第 {controller.index + 1} / {controller.total} 个</span><div className="practice-track"><i style={{ width: `${((controller.index + (answered ? .6 : 0)) / Math.max(1, controller.total)) * 100}%` }} /></div></header>
     <div className="practice-prompt"><p className="eyebrow">先用英语表达</p><h1>{phrase.chinese}</h1>
       {!answered && controller.phase !== "recording" && <p>不用逐字翻译，先说出你自然想到的表达。</p>}
@@ -39,8 +56,9 @@ export function SpeakingPractice({ controller, onHome, onAgain }: {
     <div className="practice-actions">
       {controller.phase === "prompt" && <>
         <button className="unknown-action" onClick={() => run(controller.revealAsUnknown)}>不会，直接看答案</button>
-        <button className="record-action" onClick={() => run(controller.startRecording)}><AppIcon name="microphone" size={24} />按住说英语</button>
+        <button className="record-action" onPointerDown={() => void beginRecording()} onPointerUp={() => void endRecording()} onPointerCancel={() => void endRecording()} onKeyDown={(event) => { if (!event.repeat && (event.key === " " || event.key === "Enter")) void beginRecording(); }} onKeyUp={(event) => { if (event.key === " " || event.key === "Enter") void endRecording(); }} onClick={(event) => event.preventDefault()}><AppIcon name="microphone" size={24} />按住说英语</button>
         <button className="pronounce-action" onClick={() => run(controller.usePronunciationHint)}><AppIcon name="speaker" size={21} />先听发音</button>
+        {microphoneFailed && <button className="skip-recording" onClick={() => run(controller.revealForSelfAssessment)}>跳过录音，继续自评</button>}
       </>}
       {controller.phase === "recording" && <button className="record-action recording" onClick={() => run(controller.stopRecording)}><AppIcon name="stop" size={24} />我说完了</button>}
       {answered && <>

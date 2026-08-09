@@ -20,6 +20,7 @@ export interface TrainingSessionController {
   startRecording(): Promise<void>;
   stopRecording(): Promise<void>;
   revealAsUnknown(): Promise<void>;
+  revealForSelfAssessment(): Promise<void>;
   usePronunciationHint(): Promise<void>;
   repeatPronunciation(): Promise<void>;
   grade(result: ReviewResult): Promise<{ accepted: boolean }>;
@@ -336,7 +337,10 @@ export function useTrainingSession({
   }, [phase, recorder]);
 
   const stopRecording = useCallback(async () => {
-    if (operationRef.current || phase !== "recording") return;
+    // A press can be released before React commits the recording phase. The
+    // component awaits startRecording first, so accepting the prompt closure
+    // here safely completes that same recording.
+    if (operationRef.current || (phase !== "recording" && phase !== "prompt")) return;
     operationRef.current = true;
     try {
       const recording = await recorder.stop();
@@ -370,6 +374,12 @@ export function useTrainingSession({
       operationRef.current = false;
     }
   }, [autoSpeakCurrent, persistSession, phase, recordEvent, replaceQueue]);
+
+  const revealForSelfAssessment = useCallback(async () => {
+    if (operationRef.current || phase !== "prompt") return;
+    setPhase("answer");
+    await autoSpeakCurrent();
+  }, [autoSpeakCurrent, phase]);
 
   const usePronunciationHint = useCallback(async () => {
     if (phase !== "prompt") return;
@@ -429,6 +439,7 @@ export function useTrainingSession({
     startRecording,
     stopRecording,
     revealAsUnknown,
+    revealForSelfAssessment,
     usePronunciationHint,
     repeatPronunciation: speakCurrent,
     grade,

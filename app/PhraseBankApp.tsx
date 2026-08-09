@@ -21,6 +21,7 @@ const defaultRepository = typeof window === "undefined" ? undefined : new LocalP
 const defaultSpeech = typeof window === "undefined" ? undefined : new BrowserSpeechService();
 const defaultRecorder = typeof window === "undefined" ? undefined : new TemporaryRecorder();
 const shanghaiDate = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const shanghaiTimestampDate = (timestamp: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(timestamp));
 const mondayOf = (date: string) => { const value = new Date(`${date}T00:00:00.000Z`); value.setUTCDate(value.getUTCDate() - ((value.getUTCDay() + 6) % 7)); return value.toISOString().slice(0, 10); };
 
 const masteryText = ["未掌握", "有印象", "可以使用", "已自动化"];
@@ -58,16 +59,22 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
   const go = (next: Screen) => { setNotice(""); setError(""); setScreen(next); window.scrollTo?.(0, 0); };
   const startTraining = (mode: TrainingMode) => { setTrainingMode(mode); setTrainingRun((run) => run + 1); go("practice"); };
   if (loading) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
+  const today = shanghaiDate();
+  const dailySummary = summarizeDailyTraining(today, trainingEvents, trainingSessions);
+  const trainingDays = [...new Set(trainingEvents.map((event) => shanghaiTimestampDate(event.occurredAt)))].map((date) => summarizeDailyTraining(date, trainingEvents, trainingSessions));
+  const weeklySummary = summarizeWeek(trainingEvents, trainingSessions, mondayOf(today));
+  const weeklyFocus = weeklySummary.weakPhraseIds.flatMap((id) => { const phrase = phrases.find((item) => item.id === id); return phrase ? [{ id, english: phrase.english, chinese: phrase.chinese }] : []; });
+  const newIntroducedToday = new Set(trainingEvents.filter((event) => event.source === "new" && shanghaiTimestampDate(event.occurredAt) === today).map((event) => event.phraseId)).size;
 
   return <div className="app-shell">
     <main className="app-main">
       {error && <div className="toast error" role="alert">{error}</div>}
       {notice && <div className="toast" role="status">{notice}</div>}
-      {screen === "home" && <TrainingHome dailySummary={summarizeDailyTraining(shanghaiDate(), trainingEvents, trainingSessions)} streak={calculateStreak([...new Set(trainingEvents.map((event) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date(event.occurredAt))))].map((date) => summarizeDailyTraining(date, trainingEvents, trainingSessions)), shanghaiDate())} weeklySummary={summarizeWeek(trainingEvents, trainingSessions, mondayOf(shanghaiDate()))} onStartStandard={() => startTraining("standard")} onStartQuick={() => startTraining("quick")} />}
+      {screen === "home" && <TrainingHome dailySummary={dailySummary} streak={calculateStreak(trainingDays, today)} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} onStartStandard={() => startTraining("standard")} onStartQuick={() => startTraining("quick")} />}
       {screen === "library" && <Library phrases={phrases} categories={categories} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={async (input) => { if (!repo) return; await repo.savePhrase(createNewPhrase(input)); await refresh(); setNotice("已收入你的句库"); setScreen("library"); }} />}
       {screen === "review" && <Review phrases={due} onBack={() => go("home")} onGrade={async (id, result) => { if (!repo) return; await repo.submitReview(id, result); await refresh(); }} />}
-      {screen === "practice" && repo && defaultSpeech && defaultRecorder && <PracticeSession key={`${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} speech={defaultSpeech} recorder={defaultRecorder} onHome={async () => { await refresh(); go("home"); }} onAgain={() => setTrainingRun((run) => run + 1)} setError={setError} />}
+      {screen === "practice" && repo && defaultSpeech && defaultRecorder && <PracticeSession key={`${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} speech={defaultSpeech} recorder={defaultRecorder} onHome={async () => { await refresh(); go("home"); }} onAgain={async () => { await refresh(); setTrainingRun((run) => run + 1); }} setError={setError} />}
       {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} refresh={refresh} setNotice={setNotice} setError={setError} />}
     </main>
     {screen !== "review" && screen !== "practice" && <nav className="bottom-nav" aria-label="主导航">
@@ -79,11 +86,11 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
   </div>;
 }
 
-function PracticeSession({ repository, mode, speech, recorder, onHome, onAgain, setError }: {
+function PracticeSession({ repository, mode, newIntroducedToday, speech, recorder, onHome, onAgain, setError }: {
   repository: PhraseRepository; mode: TrainingMode; speech: BrowserSpeechService; recorder: TemporaryRecorder;
-  onHome: () => Promise<void>; onAgain: () => void; setError: (message: string) => void;
+  newIntroducedToday: number; onHome: () => Promise<void>; onAgain: () => void | Promise<void>; setError: (message: string) => void;
 }) {
-  const controller = useTrainingSession({ repository, mode, speech, recorder });
+  const controller = useTrainingSession({ repository, mode, speech, recorder, newIntroducedToday });
   const { finish, phase } = controller;
   useEffect(() => {
     if (phase === "complete") void finish().catch(() => setError("训练进度暂时无法保存，请稍后重试。"));

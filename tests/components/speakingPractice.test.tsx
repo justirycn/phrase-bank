@@ -18,6 +18,7 @@ function controller(overrides: Partial<TrainingSessionController> = {}): Trainin
     },
     index: 0, total: 3, activeSeconds: 0, usedHint: false,
     startRecording: vi.fn(), stopRecording: vi.fn(), revealAsUnknown: vi.fn(),
+    revealForSelfAssessment: vi.fn(),
     usePronunciationHint: vi.fn(), repeatPronunciation: vi.fn(), grade: vi.fn(async () => ({ accepted: true })),
     finish: vi.fn(), ...overrides,
   };
@@ -36,6 +37,26 @@ describe("SpeakingPractice", () => {
     expect(value.revealAsUnknown).toHaveBeenCalledOnce();
     expect(value.startRecording).toHaveBeenCalledOnce();
     expect(value.usePronunciationHint).toHaveBeenCalledOnce();
+  });
+
+  it("starts on pointer down and stops on pointer up", async () => {
+    const value = controller();
+    render(<SpeakingPractice controller={value} onHome={vi.fn()} onAgain={vi.fn()} />);
+    const record = screen.getByRole("button", { name: "按住说英语" });
+    record.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    await vi.waitFor(() => expect(value.startRecording).toHaveBeenCalledOnce());
+    record.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
+    await vi.waitFor(() => expect(value.stopRecording).toHaveBeenCalledOnce());
+  });
+
+  it("offers self assessment when microphone permission fails", async () => {
+    const user = userEvent.setup();
+    const value = controller({ startRecording: vi.fn(async () => { throw new Error("denied"); }) });
+    render(<SpeakingPractice controller={value} onHome={vi.fn()} onAgain={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "按住说英语" }));
+    expect(await screen.findByText("没有获得麦克风权限。你可以在浏览器设置中允许访问，或跳过录音继续练习。")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "跳过录音，继续自评" }));
+    expect(value.revealForSelfAssessment).toHaveBeenCalledOnce();
   });
 
   it("shows the answer, recording playback and caps mastery after a hint", async () => {
