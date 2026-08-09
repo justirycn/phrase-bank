@@ -6,11 +6,30 @@ services:
     image: phrase-bank:latest
     container_name: phrase-bank
     restart: unless-stopped
-    ports:
-      - "80:3000"
+    expose:
+      - "3000"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  caddy:
+    image: caddy:2.10-alpine
+    container_name: phrase-bank-proxy
+    restart: unless-stopped
+    depends_on:
+      phrase-bank:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
