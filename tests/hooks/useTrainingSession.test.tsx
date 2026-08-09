@@ -215,6 +215,41 @@ describe("useTrainingSession", () => {
     expect(api.speech.cancel).toHaveBeenCalled();
   });
 
+  it("never lets stalled automatic speech block reveal grading or recording grading", async () => {
+    const never = new Promise<void>(() => undefined);
+
+    const unknownStore = memoryRepository(); const unknownApi = services();
+    unknownApi.speech.speak.mockImplementation(() => never);
+    const unknown = renderHook(() => useTrainingSession({ repository: unknownStore.repository, mode: "quick", ...unknownApi, seed: "stalled-unknown" }));
+    await waitFor(() => expect(unknown.result.current.current).toBeDefined());
+    act(() => { void unknown.result.current.revealAsUnknown(); });
+    await waitFor(() => expect(unknown.result.current.phase).toBe("answer"));
+    await expect(act(() => unknown.result.current.grade("hard"))).resolves.toEqual({ accepted: true });
+    unknown.unmount();
+
+    const recordingStore = memoryRepository(); const recordingApi = services();
+    recordingApi.speech.speak.mockImplementation(() => never);
+    const recording = renderHook(() => useTrainingSession({ repository: recordingStore.repository, mode: "quick", ...recordingApi, seed: "stalled-recording" }));
+    await waitFor(() => expect(recording.result.current.current).toBeDefined());
+    await act(() => recording.result.current.startRecording());
+    act(() => { void recording.result.current.stopRecording(); });
+    await waitFor(() => expect(recording.result.current.phase).toBe("answer"));
+    await expect(act(() => recording.result.current.grade("hard"))).resolves.toEqual({ accepted: true });
+    recording.unmount();
+  });
+
+  it("resolves self-assessment reveal even when automatic speech stalls", async () => {
+    const store = memoryRepository(); const api = services();
+    api.speech.speak.mockImplementation(() => new Promise<void>(() => undefined));
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+    let settled = false;
+    act(() => { void result.current.revealForSelfAssessment().then(() => { settled = true; }); });
+    await waitFor(() => expect(result.current.phase).toBe("answer"));
+    await act(async () => { await Promise.resolve(); });
+    expect(settled).toBe(true);
+  });
+
   it("stops through a prompt-phase callback captured before recording starts", async () => {
     const store = memoryRepository(); const api = services();
     const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));

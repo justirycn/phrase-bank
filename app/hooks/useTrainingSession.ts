@@ -368,7 +368,7 @@ export function useTrainingSession({
       recordedRef.current = true;
       setRecordingUrl(recording.url);
       setPhase("answer");
-      await autoSpeakCurrent();
+      void autoSpeakCurrent();
     } finally {
       operationRef.current = false;
     }
@@ -389,7 +389,7 @@ export function useTrainingSession({
       }
       setPhase("answer");
       await persistSession();
-      await autoSpeakCurrent();
+      void autoSpeakCurrent();
     } finally {
       operationRef.current = false;
     }
@@ -398,7 +398,7 @@ export function useTrainingSession({
   const revealForSelfAssessment = useCallback(async () => {
     if (operationRef.current || phase !== "prompt") return;
     setPhase("answer");
-    await autoSpeakCurrent();
+    void autoSpeakCurrent();
   }, [autoSpeakCurrent, phase]);
 
   const usePronunciationHint = useCallback(async () => {
