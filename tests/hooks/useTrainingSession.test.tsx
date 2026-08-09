@@ -268,6 +268,17 @@ describe("useTrainingSession", () => {
     expect(settled).toBe(true);
   });
 
+  it("starts automatic speech synchronously inside the reveal gesture", async () => {
+    const store = memoryRepository(); const api = services();
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "ios-gesture" }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+    api.speech.speak.mockClear();
+
+    act(() => { void result.current.revealForSelfAssessment(); });
+
+    expect(api.speech.speak).toHaveBeenCalledWith(result.current.current?.phrase.english, "en-US");
+  });
+
   it("stops through a prompt-phase callback captured before recording starts", async () => {
     const store = memoryRepository(); const api = services();
     const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));

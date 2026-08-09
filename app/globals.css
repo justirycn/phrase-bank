@@ -1111,3 +1111,21 @@ label.settings-action:focus-within {
 .add-category input {
   min-height: 48px;
 }
+
+.answer-tools button {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+  min-height:44px;
+  white-space:nowrap;
+}
+.answer-tools button svg {
+  flex:0 0 auto;
+}
+.self-assessment-action {
+  border:1px solid rgba(27,67,50,.18);
+  border-radius:14px;
+  background:#fff;
+  color:var(--forest,#173f30);
+}

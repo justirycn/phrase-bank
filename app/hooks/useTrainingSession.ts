@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReviewResult, TrainingEvent, TrainingMode, TrainingSessionRecord, TrainingSource } from "../domain/types";
+import type { ReviewResult, SpeechPreferences, TrainingEvent, TrainingMode, TrainingSessionRecord, TrainingSource } from "../domain/types";
 import { selectTrainingGroup, type TrainingCandidate } from "../domain/trainingSelection";
 import type { PhraseRepository } from "../storage/repository";
 import type { BrowserSpeechService } from "../services/speech";
@@ -83,6 +83,7 @@ export function useTrainingSession({
   const sessionWriteRef = useRef<Promise<void>>(Promise.resolve());
   const finishingRef = useRef(false);
   const finishPromiseRef = useRef<Promise<void>>();
+  const speechPreferencesRef = useRef<SpeechPreferences>({ accent: "en-US", autoSpeak: true });
 
   const replaceQueue = useCallback((next: TrainingCandidate[]) => {
     queueRef.current = next;
@@ -140,12 +141,14 @@ export function useTrainingSession({
     mountedRef.current = true;
     let cancelled = false;
     void (async () => {
-      const [active, phrases, events] = await Promise.all([
+      const [active, phrases, events, speechPreferences] = await Promise.all([
         repository.getActiveTrainingSession(),
         repository.listPhrases(),
         repository.listTrainingEvents(),
+        repository.getSpeechPreferences().catch(() => ({ accent: "en-US", autoSpeak: true } as const)),
       ]);
       if (cancelled) return;
+      speechPreferencesRef.current = speechPreferences;
       if (active) {
         const byId = new Map(phrases.map((item) => [item.id, item]));
         const seen = new Set<string>();
@@ -282,23 +285,20 @@ export function useTrainingSession({
     const current = queueRef.current[indexRef.current];
     if (!current) return;
     try {
-      const preferences = await repository.getSpeechPreferences();
-      await speech.speak(current.phrase.english, preferences.accent);
+      await speech.speak(current.phrase.english, speechPreferencesRef.current.accent);
     } catch {
       // Pronunciation is an enhancement; unsupported browsers must not block practice.
     }
-  }, [repository, speech]);
+  }, [speech]);
 
-  const autoSpeakCurrent = useCallback(async () => {
-    try {
-      const preferences = await repository.getSpeechPreferences();
-      if (!preferences.autoSpeak) return;
-      const current = queueRef.current[indexRef.current];
-      if (current) await speech.speak(current.phrase.english, preferences.accent);
-    } catch {
+  const autoSpeakCurrent = useCallback(() => {
+    const preferences = speechPreferencesRef.current;
+    if (!preferences.autoSpeak) return;
+    const current = queueRef.current[indexRef.current];
+    if (current) void speech.speak(current.phrase.english, preferences.accent).catch(() => {
       // Keep the answer and grading controls usable after a speech failure.
-    }
-  }, [repository, speech]);
+    });
+  }, [speech]);
 
   const recordEvent = useCallback(async (result: ReviewResult) => {
     const session = sessionRef.current;
