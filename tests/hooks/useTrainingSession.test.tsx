@@ -87,7 +87,10 @@ describe("useTrainingSession", () => {
       result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1,
       occurredAt: "2026-08-08T16:30:00.000Z",
     })));
-    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, newIntroducedToday: 0 }));
+    const { result } = renderHook(() => useTrainingSession({
+      repository: store.repository, mode: "quick", ...api, newIntroducedToday: 0,
+      now: () => new Date("2026-08-09T08:00:00.000Z"),
+    }));
     await waitFor(() => expect(result.current.total).toBeGreaterThan(0));
     expect(result.current.total).toBe(1);
     expect(store.getSession()?.sources).not.toContain("new");
