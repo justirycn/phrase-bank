@@ -17,6 +17,7 @@ export interface TrainingSessionController {
   activeSeconds: number;
   usedHint: boolean;
   recordingUrl?: string;
+  initializationError?: string;
   startRecording(): Promise<void>;
   stopRecording(): Promise<void>;
   revealAsUnknown(): Promise<void>;
@@ -57,6 +58,7 @@ export function useTrainingSession({
   const [activeSeconds, setActiveSeconds] = useState(0);
   const [usedHint, setUsedHint] = useState(false);
   const [recordingUrl, setRecordingUrl] = useState<string>();
+  const [initializationError, setInitializationError] = useState<string>();
   const sessionRef = useRef<TrainingSessionRecord>();
   const queueRef = useRef<TrainingCandidate[]>([]);
   const indexRef = useRef(0);
@@ -212,7 +214,14 @@ export function useTrainingSession({
       replaceIndex(0);
       if (selected.length === 0) setPhase("complete");
       await persistSession();
-    })();
+    })().catch(() => {
+      if (cancelled || !mountedRef.current) return;
+      sessionRef.current = undefined;
+      replaceQueue([]);
+      replaceIndex(0);
+      setPhase("prompt");
+      setInitializationError("训练内容暂时无法加载，请检查本地数据后重试。");
+    });
     return () => { cancelled = true; };
   }, [mode, newIntroducedToday, now, persistSession, repository, replaceIndex, replaceQueue, seed]);
 
@@ -436,6 +445,7 @@ export function useTrainingSession({
     activeSeconds,
     usedHint,
     recordingUrl,
+    initializationError,
     startRecording,
     stopRecording,
     revealAsUnknown,

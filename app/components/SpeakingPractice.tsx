@@ -15,6 +15,8 @@ export function SpeakingPractice({ controller, onHome, onAgain }: {
   const recordingStart = useRef<Promise<void>>();
   const recordingStarted = useRef(false);
   const pointerGesture = useRef(false);
+  const keyboardGesture = useRef(false);
+  const suppressNextClick = useRef(false);
   const run = async (action: () => Promise<unknown>) => {
     setStatus("");
     try { await action(); } catch { setStatus("操作没有完成，你仍然可以继续练习。再试一次即可。"); }
@@ -39,6 +41,8 @@ export function SpeakingPractice({ controller, onHome, onAgain }: {
     finally { recordingStart.current = undefined; }
   };
 
+  if (controller.initializationError) return <section className="practice-error" role="alert"><AppIcon name="completion" size={34} /><h1>训练暂时打不开</h1><p>{controller.initializationError}</p><div className="practice-complete-actions"><button className="secondary" onClick={onHome}>返回首页</button><button className="primary" onClick={onAgain}>重试</button></div></section>;
+
   if (controller.phase === "complete") return <section className="practice-complete">
     <div className="done-mark"><AppIcon name="completion" size={36} /></div>
     <p className="eyebrow">GROUP COMPLETE</p><h1>这一组完成了</h1>
@@ -60,7 +64,7 @@ export function SpeakingPractice({ controller, onHome, onAgain }: {
     </div>
     {status && <p className="practice-status" role="status">{status}</p>}
     <div className="practice-actions">
-      {(controller.phase === "prompt" || recording) && <button className={`record-action ${recording ? "recording" : ""}`} onPointerDown={() => { pointerGesture.current = true; if (!recording) void beginRecording(); }} onPointerUp={() => void endRecording()} onPointerCancel={() => void endRecording()} onKeyDown={(event) => { if (!event.repeat && !recording && (event.key === " " || event.key === "Enter")) { event.preventDefault(); void beginRecording(); } }} onKeyUp={(event) => { if (recording && (event.key === " " || event.key === "Enter")) { event.preventDefault(); void endRecording(); } }} onClick={() => { if (pointerGesture.current) { pointerGesture.current = false; return; } if (recording) void endRecording(); else void beginRecording(); }}>{recording ? <AppIcon name="stop" size={24} /> : <AppIcon name="microphone" size={24} />}{recording ? "我说完了" : "按住说英语"}</button>}
+      {(controller.phase === "prompt" || recording) && <button className={`record-action ${recording ? "recording" : ""}`} onPointerDown={() => { pointerGesture.current = true; if (!recording) void beginRecording(); }} onPointerUp={() => void endRecording()} onPointerCancel={() => { pointerGesture.current = false; void endRecording(); }} onKeyDown={(event) => { if (!event.repeat && !recording && (event.key === " " || event.key === "Enter")) { event.preventDefault(); keyboardGesture.current = true; void beginRecording(); } }} onKeyUp={(event) => { if (keyboardGesture.current && (event.key === " " || event.key === "Enter")) { event.preventDefault(); keyboardGesture.current = false; suppressNextClick.current = true; void endRecording(); } }} onClick={() => { if (pointerGesture.current) { pointerGesture.current = false; return; } if (suppressNextClick.current) { suppressNextClick.current = false; return; } if (recording) void endRecording(); else void beginRecording(); }}>{recording ? <AppIcon name="stop" size={24} /> : <AppIcon name="microphone" size={24} />}{recording ? "我说完了" : "按住说英语"}</button>}
       {controller.phase === "prompt" && <>
         <button className="unknown-action" onClick={() => run(controller.revealAsUnknown)}>不会，直接看答案</button>
         <button className="pronounce-action" onClick={() => run(controller.usePronunciationHint)}><AppIcon name="speaker" size={21} />先听发音</button>

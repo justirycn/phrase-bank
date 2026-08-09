@@ -69,6 +69,15 @@ describe("useTrainingSession", () => {
     expect(result.current.phase).toBe("prompt");
   });
 
+  it("surfaces repository initialization failure without an unhandled rejection", async () => {
+    const store = memoryRepository(); const api = services();
+    (store.repository.listPhrases as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("db failed"));
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
+    await waitFor(() => expect(result.current.initializationError).toBe("训练内容暂时无法加载，请检查本地数据后重试。"));
+    expect(result.current.current).toBeUndefined();
+    expect(result.current.total).toBe(0);
+  });
+
   it("records unknown once, reveals it and appends the phrase once", async () => {
     const store = memoryRepository();
     const api = services();

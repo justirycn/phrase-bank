@@ -67,6 +67,30 @@ describe("SpeakingPractice", () => {
     expect(value.revealForSelfAssessment).toHaveBeenCalledOnce();
   });
 
+  it("ends a pending keyboard recording and suppresses the synthesized click", async () => {
+    let resolveStart!: () => void;
+    const startRecording = vi.fn(() => new Promise<void>((resolve) => { resolveStart = resolve; }));
+    const stopRecording = vi.fn(async () => undefined);
+    render(<SpeakingPractice controller={controller({ startRecording, stopRecording })} onHome={vi.fn()} onAgain={vi.fn()} />);
+    const record = screen.getByRole("button", { name: "按住说英语" });
+    record.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    record.dispatchEvent(new KeyboardEvent("keyup", { key: " ", bubbles: true }));
+    record.click();
+    expect(startRecording).toHaveBeenCalledOnce();
+    resolveStart();
+    await vi.waitFor(() => expect(stopRecording).toHaveBeenCalledOnce());
+    expect(startRecording).toHaveBeenCalledOnce();
+  });
+
+  it("shows initialization recovery actions", async () => {
+    const onHome = vi.fn(); const onAgain = vi.fn(); const user = userEvent.setup();
+    render(<SpeakingPractice controller={controller({ initializationError: "训练内容暂时无法加载，请检查本地数据后重试。", current: undefined })} onHome={onHome} onAgain={onAgain} />);
+    expect(screen.getByRole("alert")).toHaveTextContent("训练内容暂时无法加载");
+    await user.click(screen.getByRole("button", { name: "返回首页" }));
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(onHome).toHaveBeenCalledOnce(); expect(onAgain).toHaveBeenCalledOnce();
+  });
+
   it("shows the answer, recording playback and caps mastery after a hint", async () => {
     const user = userEvent.setup();
     const value = controller({ phase: "answer", usedHint: true, recordingUrl: "blob:voice" });
