@@ -21,6 +21,7 @@ export interface TrainingSessionRecord {
   updatedAt: string;
   completedAt?: string;
   phraseIds: string[];
+  sources?: TrainingSource[];
   currentIndex: number;
   activeSeconds: number;
 }

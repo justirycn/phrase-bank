@@ -163,4 +163,39 @@ describe("useTrainingSession", () => {
     expect(second.result.current.total).toBe(saved.phraseIds.length);
     expect(second.result.current.current?.phrase.id).toBe(saved.phraseIds[1]);
   });
+
+  it("restores an unknown answer without recording or reviewing it twice", async () => {
+    const store = memoryRepository();
+    const api = services();
+    const first = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "day" }));
+    await waitFor(() => expect(first.result.current.current).toBeDefined());
+    await act(() => first.result.current.revealAsUnknown());
+    expect(store.events).toHaveLength(1);
+    expect(store.repository.submitReview).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    const second = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "day" }));
+    await waitFor(() => expect(second.result.current.phase).toBe("answer"));
+    await act(() => second.result.current.revealAsUnknown());
+    expect(store.events).toHaveLength(1);
+    expect(store.repository.submitReview).toHaveBeenCalledTimes(1);
+    await act(() => second.result.current.grade("hard"));
+    expect(second.result.current.index).toBe(1);
+    expect(store.events).toHaveLength(1);
+    expect(store.repository.submitReview).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves every candidate source across remounts", async () => {
+    const store = memoryRepository();
+    const api = services();
+    const first = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "day" }));
+    await waitFor(() => expect(first.result.current.current).toBeDefined());
+    await act(() => first.result.current.revealAsUnknown());
+    const savedSources = [...store.getSession()!.sources!];
+    expect(savedSources.at(-1)).toBe("requeue");
+    first.unmount();
+    const second = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "different" }));
+    await waitFor(() => expect(second.result.current.total).toBe(savedSources.length));
+    expect(store.getSession()!.sources).toEqual(savedSources);
+  });
 });

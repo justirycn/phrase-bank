@@ -123,7 +123,7 @@ describe("LocalPhraseRepository", () => {
     expect(base).toMatchObject({ version: 2, trainingEvents: [], trainingSessions: [] });
     const v1: BackupEnvelopeV1 = { format: base.format, version: 1, exportedAt: base.exportedAt, categories: [], phrases: [], reviewLogs: [] };
     const event: TrainingEvent = { id: "event", sessionId: "session", phraseId: "starter-daily-not-sure", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: base.exportedAt };
-    const session: TrainingSessionRecord = { id: "session", mode: "quick", startedAt: base.exportedAt, updatedAt: base.exportedAt, phraseIds: [event.phraseId], currentIndex: 0, activeSeconds: 1 };
+    const session: TrainingSessionRecord = { id: "session", mode: "quick", startedAt: base.exportedAt, updatedAt: base.exportedAt, phraseIds: [event.phraseId], sources: ["due"], currentIndex: 0, activeSeconds: 1 };
     await repo.saveTrainingEvent(event);
     await repo.saveTrainingSession(session);
     const normalizedV1 = parseBackup(JSON.stringify(v1));

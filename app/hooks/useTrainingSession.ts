@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReviewResult, TrainingMode, TrainingSessionRecord } from "../domain/types";
+import type { ReviewResult, TrainingMode, TrainingSessionRecord, TrainingSource } from "../domain/types";
 import { selectTrainingGroup, type TrainingCandidate } from "../domain/trainingSelection";
 import type { PhraseRepository } from "../storage/repository";
 import type { BrowserSpeechService } from "../services/speech";
@@ -38,6 +38,7 @@ export interface UseTrainingSessionOptions {
 const IDLE_LIMIT_MS = 60_000;
 const CHECKPOINT_SECONDS = 30;
 const systemNow = () => new Date();
+const trainingSources = new Set<TrainingSource>(["due", "weak", "mature", "new", "requeue"]);
 
 export function useTrainingSession({
   repository,
@@ -81,6 +82,7 @@ export function useTrainingSession({
     if (!session) return;
     const timestamp = now().toISOString();
     session.phraseIds = queueRef.current.map((candidate) => candidate.phrase.id);
+    session.sources = queueRef.current.map((candidate) => candidate.source);
     session.currentIndex = indexRef.current;
     session.updatedAt = timestamp;
     await repository.saveTrainingSession({ ...session, phraseIds: [...session.phraseIds] });
@@ -99,21 +101,47 @@ export function useTrainingSession({
       if (active) {
         const byId = new Map(phrases.map((item) => [item.id, item]));
         const seen = new Set<string>();
-        const restored = active.phraseIds.flatMap((id) => {
+        const hasAlignedSources = active.sources?.length === active.phraseIds.length
+          && active.sources.every((source) => trainingSources.has(source));
+        const restored = active.phraseIds.flatMap((id, position) => {
           const item = byId.get(id);
           if (!item) return [];
-          const source = seen.has(id) ? "requeue" as const : "due" as const;
+          const source = hasAlignedSources
+            ? active.sources![position]
+            : seen.has(id) ? "requeue" as const : "due" as const;
           seen.add(id);
           return [{ phrase: item, source }];
         });
-        sessionRef.current = { ...active, phraseIds: restored.map((item) => item.phrase.id) };
+        sessionRef.current = {
+          ...active,
+          phraseIds: restored.map((item) => item.phrase.id),
+          sources: restored.map((item) => item.source),
+        };
         checkpointRef.current = active.activeSeconds;
         eventActiveBaseRef.current = events
           .filter((event) => event.sessionId === active.id)
           .reduce((sum, event) => sum + event.activeSeconds, 0);
         replaceQueue(restored);
         replaceIndex(Math.min(active.currentIndex, restored.length));
-        if (active.currentIndex >= restored.length) setPhase("complete");
+        if (active.currentIndex >= restored.length) {
+          setPhase("complete");
+        } else {
+          const currentPhraseId = restored[active.currentIndex]?.phrase.id;
+          const priorOccurrences = active.phraseIds
+            .slice(0, active.currentIndex)
+            .filter((id) => id === currentPhraseId).length;
+          const phraseEvents = events
+            .filter((event) => event.sessionId === active.id && event.phraseId === currentPhraseId)
+            .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
+          if (phraseEvents.length > priorOccurrences) {
+            const evaluation = phraseEvents[priorOccurrences];
+            evaluatedRef.current = true;
+            usedHintRef.current = evaluation.usedPronunciationHint;
+            recordedRef.current = evaluation.recorded;
+            setUsedHint(evaluation.usedPronunciationHint);
+            setPhase("answer");
+          }
+        }
         return;
       }
 
@@ -130,6 +158,7 @@ export function useTrainingSession({
         startedAt: started.toISOString(),
         updatedAt: started.toISOString(),
         phraseIds: selected.map((item) => item.phrase.id),
+        sources: selected.map((item) => item.source),
         currentIndex: 0,
         activeSeconds: 0,
       };

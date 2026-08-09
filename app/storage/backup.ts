@@ -24,16 +24,21 @@ export function parseBackup(raw: string): BackupEnvelopeV2 {
   const validDuration = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
   const validIndex = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0;
   const validDate = (value: unknown) => typeof value === "string" && value.length > 0 && Number.isFinite(Date.parse(value));
+  const sources = new Set(["due", "weak", "mature", "new", "requeue"]);
   const invalidSession = (session: TrainingSessionRecord) => !session.id?.trim()
     || (session.mode !== "quick" && session.mode !== "standard")
     || !validDate(session.startedAt) || !validDate(session.updatedAt)
     || (session.completedAt !== undefined && !validDate(session.completedAt))
     || !Array.isArray(session.phraseIds) || session.phraseIds.some((id) => !phraseIds.has(id))
+    || (session.sources !== undefined && (
+      !Array.isArray(session.sources)
+      || session.sources.length !== session.phraseIds.length
+      || session.sources.some((source) => !sources.has(source))
+    ))
     || !validIndex(session.currentIndex) || session.currentIndex > session.phraseIds.length
     || !validDuration(session.activeSeconds);
   if (backup.trainingSessions.some(invalidSession)) throw new Error("备份包含无效的训练会话");
   const sessionIds = new Set(backup.trainingSessions.map((session) => session.id));
-  const sources = new Set(["due", "weak", "mature", "new", "requeue"]);
   const results = new Set(["again", "hard", "good"]);
   const invalidEvent = (event: TrainingEvent) => !event.id?.trim() || !event.sessionId?.trim() || !sessionIds.has(event.sessionId)
     || !event.phraseId?.trim() || !phraseIds.has(event.phraseId)

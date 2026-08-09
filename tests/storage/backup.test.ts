@@ -46,6 +46,11 @@ describe("backup parsing", () => {
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], currentIndex: 0.5 }] }))).toThrow();
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], currentIndex: 2 }] }))).toThrow();
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], activeSeconds: "1" }] }))).toThrow();
+    expect(parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], sources: ["due"] }] }))).toMatchObject({
+      trainingSessions: [{ sources: ["due"] }],
+    });
+    expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], sources: [] }] }))).toThrow();
+    expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], sources: ["invalid"] }] }))).toThrow();
   });
 
   it("rejects an unsupported version", () => {
