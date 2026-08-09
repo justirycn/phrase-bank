@@ -41,6 +41,7 @@ export interface UseTrainingSessionOptions {
 const IDLE_LIMIT_MS = 60_000;
 const CHECKPOINT_SECONDS = 30;
 const systemNow = () => new Date();
+const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const trainingSources = new Set<TrainingSource>(["due", "weak", "mature", "new", "requeue"]);
 const shanghaiDayFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
@@ -209,7 +210,7 @@ export function useTrainingSession({
         newIntroducedToday: Math.max(newIntroducedToday, persistedNewCount),
       });
       const session: TrainingSessionRecord = {
-        id: globalThis.crypto.randomUUID(),
+        id: createId(),
         mode,
         startedAt: started.toISOString(),
         updatedAt: started.toISOString(),
@@ -309,7 +310,7 @@ export function useTrainingSession({
       pendingEventRef.current = {
         activeSecondsSnapshot,
         event: {
-          id: globalThis.crypto.randomUUID(),
+          id: createId(),
           sessionId: session.id,
           phraseId: current.phrase.id,
           source: current.source,

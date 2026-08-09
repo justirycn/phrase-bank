@@ -69,6 +69,22 @@ describe("useTrainingSession", () => {
     expect(result.current.phase).toBe("prompt");
   });
 
+  it("starts and grades training when randomUUID is unavailable on an insecure origin", async () => {
+    const originalCrypto = globalThis.crypto;
+    vi.stubGlobal("crypto", { getRandomValues: originalCrypto.getRandomValues.bind(originalCrypto) });
+    const store = memoryRepository();
+    const api = services();
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "http-origin" }));
+
+    await waitFor(() => expect(result.current.total).toBe(3));
+    await act(async () => { await result.current.revealForSelfAssessment(); });
+    await act(async () => { expect(await result.current.grade("good")).toEqual({ accepted: true }); });
+
+    expect(store.getSession()?.id).toBeTruthy();
+    expect(store.events).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+
   it("surfaces repository initialization failure without an unhandled rejection", async () => {
     const store = memoryRepository(); const api = services();
     (store.repository.listPhrases as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("db failed"));
