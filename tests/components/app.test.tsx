@@ -19,6 +19,9 @@ class MemoryRepository {
   events: TrainingEvent[] = [];
   sessions: TrainingSessionRecord[] = [];
   preferences: SpeechPreferences = { accent: "en-US", autoSpeak: false };
+  failPreferenceLoad = false;
+  failPreferenceSave = false;
+  preferenceSaves: SpeechPreferences[] = [];
   async getPhrase(id: string) { return this.phrases.find((phrase) => phrase.id === id); }
   async submitTrainingReview(event: TrainingEvent) { this.events.push(event); }
   async saveTrainingEvent(event: TrainingEvent) { this.events = [...this.events.filter((item) => item.id !== event.id), event]; }
@@ -26,8 +29,8 @@ class MemoryRepository {
   async saveTrainingSession(session: TrainingSessionRecord) { this.sessions = [...this.sessions.filter((item) => item.id !== session.id), session]; }
   async getActiveTrainingSession() { return this.sessions.find((session) => !session.completedAt); }
   async completeTrainingSession(id: string, completedAt: Date) { this.sessions = this.sessions.map((session) => session.id === id ? { ...session, completedAt: completedAt.toISOString() } : session); }
-  async getSpeechPreferences() { return this.preferences; }
-  async saveSpeechPreferences(value: SpeechPreferences) { this.preferences = value; }
+  async getSpeechPreferences() { if (this.failPreferenceLoad) throw new Error("preference load failed"); return this.preferences; }
+  async saveSpeechPreferences(value: SpeechPreferences) { if (this.failPreferenceSave) throw new Error("preference save failed"); this.preferences = value; this.preferenceSaves.push(value); }
   async saveCategory(category: Category) { this.categories.push(category); }
   async deleteCategoryAndMigrate() {}
   async exportSnapshot(): Promise<BackupEnvelopeV2> { return { format: "personal-phrase-bank", version: 2, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [], trainingEvents: this.events, trainingSessions: this.sessions }; }
@@ -137,5 +140,47 @@ describe("PhraseBankApp", () => {
     expect(await screen.findByRole("heading", { name: "收藏语言块" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "设置" }));
     expect(await screen.findByRole("heading", { name: "设置" })).toBeVisible();
+  });
+
+  it("loads speech preferences and persists auto reading and accent changes", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.preferences = { accent: "en-GB", autoSpeak: true };
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+
+    const autoSpeak = await screen.findByRole("checkbox", { name: "自动朗读答案" });
+    expect(autoSpeak).toBeChecked();
+    expect(screen.getByRole("radio", { name: "英式英语" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "美式英语" })).not.toBeChecked();
+
+    await user.click(autoSpeak);
+    await vi.waitFor(() => expect(repo.preferenceSaves.at(-1)).toEqual({ accent: "en-GB", autoSpeak: false }));
+    await user.click(screen.getByRole("radio", { name: "美式英语" }));
+    await vi.waitFor(() => expect(repo.preferenceSaves.at(-1)).toEqual({ accent: "en-US", autoSpeak: false }));
+  });
+
+  it("keeps settings usable when speech preferences cannot be loaded or saved", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.failPreferenceLoad = true;
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+
+    expect(await screen.findByRole("checkbox", { name: "自动朗读答案" })).not.toBeChecked();
+    expect(await screen.findByRole("alert")).toHaveTextContent("语音偏好暂时无法读取");
+    repo.failPreferenceLoad = false;
+    repo.failPreferenceSave = true;
+    await user.click(screen.getByRole("checkbox", { name: "自动朗读答案" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("语音偏好暂时无法保存");
+    expect(screen.getByRole("heading", { name: "设置" })).toBeVisible();
+  });
+
+  it("does not request microphone permission from speech settings", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    const getUserMedia = vi.fn();
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia } });
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    await screen.findByText("语音训练");
+    expect(getUserMedia).not.toHaveBeenCalled();
   });
 });
