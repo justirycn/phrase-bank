@@ -78,6 +78,36 @@ describe("LocalPhraseRepository", () => {
     expect((await repo.listTrainingEvents(new Date("2026-08-07T08:00:00.000Z"), new Date("2026-08-07T08:00:00.000Z"))).map(({ id }) => id)).toEqual(["early"]);
   });
 
+  it("atomically applies a training event and review only once", async () => {
+    const occurredAt = "2026-08-07T08:00:00.000Z";
+    const phrase = createNewPhrase({ english: "Atomic", chinese: "Atomic", categoryId: "daily" }, new Date(occurredAt));
+    await repo.savePhrase(phrase);
+    const event: TrainingEvent = {
+      id: "atomic-event", sessionId: "atomic-session", phraseId: phrase.id, source: "due",
+      result: "good", usedPronunciationHint: false, recorded: true, activeSeconds: 4, occurredAt,
+    };
+    await repo.submitTrainingReview(event);
+    await repo.submitTrainingReview(event);
+    expect(await repo.listTrainingEvents()).toContainEqual(event);
+    expect((await repo.listTrainingEvents()).filter((item) => item.id === event.id)).toHaveLength(1);
+    expect((await repo.getPhrase(phrase.id))?.reviewStep).toBe(1);
+    expect((await repo.exportSnapshot()).reviewLogs.filter((log) => log.phraseId === phrase.id)).toHaveLength(1);
+  });
+
+  it("does not store a training event when its atomic review cannot be applied", async () => {
+    const before = await repo.exportSnapshot();
+    const event: TrainingEvent = {
+      id: "failed-atomic-event", sessionId: "atomic-session", phraseId: "missing", source: "due",
+      result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1,
+      occurredAt: "2026-08-07T08:00:00.000Z",
+    };
+    await expect(repo.submitTrainingReview(event)).rejects.toThrow();
+    const after = await repo.exportSnapshot();
+    expect(after.trainingEvents).toEqual(before.trainingEvents);
+    expect(after.reviewLogs).toEqual(before.reviewLogs);
+    expect(after.phrases).toEqual(before.phrases);
+  });
+
   it("returns the newest incomplete session and completes sessions", async () => {
     const session = (id: string, updatedAt: string, completedAt?: string): TrainingSessionRecord => ({ id, mode: "quick", startedAt: updatedAt, updatedAt, completedAt, phraseIds: [], currentIndex: 0, activeSeconds: 0 });
     await repo.saveTrainingSession(session("older", "2026-08-07T08:00:00.000Z"));

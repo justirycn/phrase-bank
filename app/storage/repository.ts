@@ -8,6 +8,7 @@ export interface PhraseRepository {
   deletePhrase(id: string): Promise<void>;
   listDuePhrases(now?: Date): Promise<Phrase[]>;
   submitReview(id: string, result: ReviewResult, now?: Date): Promise<void>;
+  submitTrainingReview(event: TrainingEvent): Promise<void>;
   listCategories(): Promise<Category[]>;
   saveCategory(category: Category): Promise<void>;
   deleteCategoryAndMigrate(id: string, targetId: string): Promise<void>;

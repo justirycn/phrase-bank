@@ -134,6 +134,27 @@ export class LocalPhraseRepository implements PhraseRepository {
     await store.put({ ...session, completedAt: timestamp, updatedAt: timestamp });
     await tx.done;
   }
+  async submitTrainingReview(event: TrainingEvent) {
+    const db = await this.db();
+    const tx = db.transaction(["trainingEvents", "phrases", "reviewLogs"], "readwrite");
+    const eventStore = tx.objectStore("trainingEvents");
+    if (await eventStore.get(event.id)) {
+      await tx.done;
+      return;
+    }
+    const phraseStore = tx.objectStore("phrases");
+    const phrase = await phraseStore.get(event.phraseId);
+    if (!phrase) {
+      tx.abort();
+      try { await tx.done; } catch { /* The explicit abort preserves the atomic boundary. */ }
+      throw new Error("找不到这条语言块");
+    }
+    const scheduled = scheduleReview(phrase, event.result, new Date(event.occurredAt));
+    await phraseStore.put(scheduled.phrase);
+    await tx.objectStore("reviewLogs").put(scheduled.log);
+    await eventStore.put(event);
+    await tx.done;
+  }
   async getSpeechPreferences(): Promise<SpeechPreferences> {
     const fallback: SpeechPreferences = { accent: "en-US", autoSpeak: true };
     const item = await (await this.db()).get("metadata", "speechPreferences");

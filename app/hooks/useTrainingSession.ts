@@ -102,6 +102,24 @@ export function useTrainingSession({
     return write;
   }, [now, repository]);
 
+  const persistProposedIndex = useCallback(async (proposedIndex: number): Promise<void> => {
+    const session = sessionRef.current;
+    if (!session) return;
+    const snapshot: TrainingSessionRecord = {
+      ...session,
+      phraseIds: queueRef.current.map((candidate) => candidate.phrase.id),
+      sources: queueRef.current.map((candidate) => candidate.source),
+      currentIndex: proposedIndex,
+      updatedAt: now().toISOString(),
+    };
+    const write = sessionWriteRef.current
+      .catch(() => undefined)
+      .then(() => repository.saveTrainingSession(snapshot));
+    sessionWriteRef.current = write;
+    await write;
+    Object.assign(session, snapshot);
+  }, [now, repository]);
+
   useEffect(() => {
     mountedRef.current = true;
     let cancelled = false;
@@ -204,6 +222,7 @@ export function useTrainingSession({
       if (
         !session
         || finishingRef.current
+        || operationRef.current
         || phase === "complete"
         || document.visibilityState !== "visible"
         || tick - lastInteractionRef.current > IDLE_LIMIT_MS
@@ -274,8 +293,7 @@ export function useTrainingSession({
       };
     }
     const pending = pendingEventRef.current;
-    await repository.saveTrainingEvent(pending.event);
-    await repository.submitReview(pending.event.phraseId, pending.event.result, new Date(pending.event.occurredAt));
+    await repository.submitTrainingReview(pending.event);
     eventActiveBaseRef.current = pending.activeSecondsSnapshot;
   }, [now, repository]);
 
@@ -291,11 +309,11 @@ export function useTrainingSession({
 
   const advance = useCallback(async () => {
     const next = indexRef.current + 1;
+    await persistProposedIndex(next);
     replaceIndex(next);
     resetItemState();
     if (next >= queueRef.current.length) setPhase("complete");
-    await persistSession();
-  }, [persistSession, replaceIndex, resetItemState]);
+  }, [persistProposedIndex, replaceIndex, resetItemState]);
 
   const startRecording = useCallback(async () => {
     if (operationRef.current || phase !== "prompt") return;

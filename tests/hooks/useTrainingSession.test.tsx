@@ -13,6 +13,7 @@ const phrase = (id: string): Phrase => ({
 
 function memoryRepository(items = Array.from({ length: 12 }, (_, index) => phrase(`p-${index}`))) {
   const events: TrainingEvent[] = [];
+  const reviewedEventIds = new Set<string>();
   let session: TrainingSessionRecord | undefined;
   const preferences: SpeechPreferences = { accent: "en-US", autoSpeak: true };
   const repository = {
@@ -22,6 +23,13 @@ function memoryRepository(items = Array.from({ length: 12 }, (_, index) => phras
       const existing = events.findIndex((item) => item.id === event.id);
       if (existing >= 0) events[existing] = event;
       else events.push(event);
+    }),
+    submitTrainingReview: vi.fn(async (event: TrainingEvent) => {
+      if (reviewedEventIds.has(event.id)) return;
+      const existing = events.findIndex((item) => item.id === event.id);
+      if (existing >= 0) events[existing] = event;
+      else events.push(event);
+      reviewedEventIds.add(event.id);
     }),
     listTrainingEvents: vi.fn(async () => [...events]),
     saveTrainingSession: vi.fn(async (next: TrainingSessionRecord) => { session = structuredClone(next); }),
@@ -175,18 +183,18 @@ describe("useTrainingSession", () => {
     await waitFor(() => expect(first.result.current.current).toBeDefined());
     await act(() => first.result.current.revealAsUnknown());
     expect(store.events).toHaveLength(1);
-    expect(store.repository.submitReview).toHaveBeenCalledTimes(1);
+    expect(store.repository.submitTrainingReview).toHaveBeenCalledTimes(1);
     first.unmount();
 
     const second = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "day" }));
     await waitFor(() => expect(second.result.current.phase).toBe("answer"));
     await act(() => second.result.current.revealAsUnknown());
     expect(store.events).toHaveLength(1);
-    expect(store.repository.submitReview).toHaveBeenCalledTimes(1);
+    expect(store.repository.submitTrainingReview).toHaveBeenCalledTimes(1);
     await act(() => second.result.current.grade("hard"));
     expect(second.result.current.index).toBe(1);
     expect(store.events).toHaveLength(1);
-    expect(store.repository.submitReview).toHaveBeenCalledTimes(1);
+    expect(store.repository.submitTrainingReview).toHaveBeenCalledTimes(1);
   });
 
   it("preserves every candidate source across remounts", async () => {
@@ -252,16 +260,37 @@ describe("useTrainingSession", () => {
   it("retries a failed review with the same id and active-time snapshot", async () => {
     const store = memoryRepository();
     const api = services();
-    const submit = store.repository.submitReview as ReturnType<typeof vi.fn>;
+    const submit = store.repository.submitTrainingReview as ReturnType<typeof vi.fn>;
     submit.mockRejectedValueOnce(new Error("temporary failure"));
     const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
     await waitFor(() => expect(result.current.current).toBeDefined());
     await expect(act(() => result.current.grade("hard"))).rejects.toThrow("temporary failure");
-    const firstEvent = structuredClone(store.events[0]);
+    const firstAttempt = structuredClone(submit.mock.calls[0][0]);
+    expect(store.events).toHaveLength(0);
     await act(() => result.current.grade("hard"));
-    expect(store.events).toEqual([firstEvent]);
-    expect(store.repository.saveTrainingEvent).toHaveBeenCalledTimes(2);
+    expect(store.events).toEqual([firstAttempt]);
+    expect(submit.mock.calls[1][0]).toEqual(firstAttempt);
     expect(submit).toHaveBeenCalledTimes(2);
     expect(result.current.index).toBe(1);
+  });
+
+  it("keeps the answered item visible until its next cursor is durably saved", async () => {
+    const store = memoryRepository();
+    const api = services();
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+    await act(() => result.current.startRecording());
+    await act(() => result.current.stopRecording());
+    const currentId = result.current.current!.phrase.id;
+    const save = store.repository.saveTrainingSession as ReturnType<typeof vi.fn>;
+    save.mockRejectedValueOnce(new Error("session write failed"));
+    await expect(act(() => result.current.grade("hard"))).rejects.toThrow("session write failed");
+    expect(result.current).toMatchObject({ phase: "answer", index: 0 });
+    expect(result.current.current?.phrase.id).toBe(currentId);
+    expect(store.events).toHaveLength(1);
+    await act(() => result.current.grade("hard"));
+    expect(result.current.index).toBe(1);
+    expect(store.events).toHaveLength(1);
+    expect(store.repository.submitTrainingReview).toHaveBeenCalledTimes(1);
   });
 });
