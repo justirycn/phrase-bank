@@ -36,13 +36,16 @@ describe("backup parsing", () => {
     for (const result of ["invalid"]) expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], result }] }))).toThrow();
     for (const field of ["usedPronunciationHint", "recorded"] as const) expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], [field]: "yes" }] }))).toThrow();
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], occurredAt: "not-a-date" }] }))).toThrow();
-    expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], activeSeconds: 1.5 }] }))).toThrow();
+    expect(parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], activeSeconds: 1.5 }], trainingSessions: [{ ...v2.trainingSessions[0], activeSeconds: 2.5 }] }))).toMatchObject({
+      trainingEvents: [{ activeSeconds: 1.5 }],
+      trainingSessions: [{ activeSeconds: 2.5 }],
+    });
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], sessionId: "missing" }] }))).toThrow();
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], mode: "invalid" }] }))).toThrow();
     for (const field of ["startedAt", "updatedAt", "completedAt"] as const) expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], [field]: "not-a-date" }] }))).toThrow();
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], currentIndex: 0.5 }] }))).toThrow();
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], currentIndex: 2 }] }))).toThrow();
-    expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], activeSeconds: 0.5 }] }))).toThrow();
+    expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], activeSeconds: "1" }] }))).toThrow();
   });
 
   it("rejects an unsupported version", () => {
