@@ -225,6 +225,8 @@ describe("useTrainingSession", () => {
     act(() => { void unknown.result.current.revealAsUnknown(); });
     await waitFor(() => expect(unknown.result.current.phase).toBe("answer"));
     await expect(act(() => unknown.result.current.grade("hard"))).resolves.toEqual({ accepted: true });
+    expect(unknownApi.speech.cancel).toHaveBeenCalledOnce();
+    expect(unknown.result.current.phase).toBe("prompt");
     unknown.unmount();
 
     const recordingStore = memoryRepository(); const recordingApi = services();

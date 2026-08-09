@@ -339,11 +339,12 @@ export function useTrainingSession({
   const advance = useCallback(async (): Promise<boolean> => {
     const next = indexRef.current + 1;
     if (!await persistProposedIndex(next) || finishingRef.current) return false;
+    speech.cancel();
     replaceIndex(next);
     resetItemState();
     if (next >= queueRef.current.length) setPhase("complete");
     return true;
-  }, [persistProposedIndex, replaceIndex, resetItemState]);
+  }, [persistProposedIndex, replaceIndex, resetItemState, speech]);
 
   const startRecording = useCallback(async () => {
     if (operationRef.current || phase !== "prompt") return;
