@@ -69,8 +69,12 @@ describe("LocalPhraseRepository", () => {
     const event = (id: string, occurredAt: string): TrainingEvent => ({ id, sessionId: "s1", phraseId: "starter-daily-not-sure", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 2, occurredAt });
     await repo.saveTrainingEvent(event("late", "2026-08-07T10:00:00.000Z"));
     await repo.saveTrainingEvent(event("early", "2026-08-07T08:00:00.000Z"));
+    await repo.saveTrainingEvent(event("middle", "2026-08-07T09:00:00.000Z"));
     await repo.saveTrainingEvent(event("late", "2026-08-07T10:00:00.000Z"));
-    expect((await repo.listTrainingEvents()).map(({ id }) => id)).toEqual(["early", "late"]);
+    expect((await repo.listTrainingEvents()).map(({ id }) => id)).toEqual(["early", "middle", "late"]);
+    expect((await repo.listTrainingEvents(new Date("2026-08-07T09:00:00.000Z"))).map(({ id }) => id)).toEqual(["middle", "late"]);
+    expect((await repo.listTrainingEvents(undefined, new Date("2026-08-07T09:00:00.000Z"))).map(({ id }) => id)).toEqual(["early", "middle"]);
+    expect((await repo.listTrainingEvents(new Date("2026-08-07T08:00:00.000Z"), new Date("2026-08-07T09:00:00.000Z"))).map(({ id }) => id)).toEqual(["early", "middle"]);
     expect((await repo.listTrainingEvents(new Date("2026-08-07T08:00:00.000Z"), new Date("2026-08-07T08:00:00.000Z"))).map(({ id }) => id)).toEqual(["early"]);
   });
 
@@ -80,9 +84,10 @@ describe("LocalPhraseRepository", () => {
     await repo.saveTrainingSession(session("completed-newest", "2026-08-07T10:00:00.000Z", "2026-08-07T10:00:00.000Z"));
     await repo.saveTrainingSession(session("newest-active", "2026-08-07T09:00:00.000Z"));
     expect((await repo.getActiveTrainingSession())?.id).toBe("newest-active");
+    await repo.saveTrainingSession({ ...session("newest-active", "2026-08-07T10:30:00.000Z"), currentIndex: 2, activeSeconds: 17, phraseIds: ["p1", "p2", "p3"] });
     const completedAt = new Date("2026-08-07T11:00:00.000Z");
     await repo.completeTrainingSession("newest-active", completedAt);
-    expect((await repo.exportSnapshot()).trainingSessions.find(({ id }) => id === "newest-active")).toMatchObject({ completedAt: completedAt.toISOString(), updatedAt: completedAt.toISOString() });
+    expect((await repo.exportSnapshot()).trainingSessions.find(({ id }) => id === "newest-active")).toMatchObject({ completedAt: completedAt.toISOString(), updatedAt: completedAt.toISOString(), currentIndex: 2, activeSeconds: 17, phraseIds: ["p1", "p2", "p3"] });
     await expect(repo.completeTrainingSession("missing", completedAt)).rejects.toThrow();
   });
 
@@ -134,6 +139,17 @@ describe("LocalPhraseRepository", () => {
     await repo.importSnapshot({ ...v2, trainingEvents: [{ ...event, activeSeconds: 9 }], trainingSessions: [{ ...session, activeSeconds: 9 }] }, "overwrite");
     expect((await repo.listTrainingEvents())[0].activeSeconds).toBe(9);
     expect((await repo.exportSnapshot()).trainingSessions[0].activeSeconds).toBe(9);
+  });
+
+  it("exports related phrase, session, and event in one snapshot", async () => {
+    const phrase = createNewPhrase({ english: "Coherent", chinese: "Coherent", categoryId: "daily" });
+    const session: TrainingSessionRecord = { id: "coherent-session", mode: "quick", startedAt: phrase.createdAt, updatedAt: phrase.updatedAt, phraseIds: [phrase.id], currentIndex: 0, activeSeconds: 1 };
+    const event: TrainingEvent = { id: "coherent-event", sessionId: session.id, phraseId: phrase.id, source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: phrase.createdAt };
+    await repo.savePhrase(phrase); await repo.saveTrainingSession(session); await repo.saveTrainingEvent(event);
+    const snapshot = await repo.exportSnapshot();
+    expect(snapshot.phrases).toContainEqual(phrase);
+    expect(snapshot.trainingSessions).toContainEqual(session);
+    expect(snapshot.trainingEvents).toContainEqual(event);
   });
 
   it("migrates a manually-created v1 database without losing records", async () => {

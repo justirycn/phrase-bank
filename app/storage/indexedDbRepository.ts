@@ -110,10 +110,14 @@ export class LocalPhraseRepository implements PhraseRepository {
   }
   async saveTrainingEvent(event: TrainingEvent) { await (await this.db()).put("trainingEvents", event); }
   async listTrainingEvents(from?: Date, to?: Date) {
-    const events = await (await this.db()).getAllFromIndex("trainingEvents", "by-occurred");
-    const lower = from?.toISOString();
-    const upper = to?.toISOString();
-    return events.filter((event) => (!lower || event.occurredAt >= lower) && (!upper || event.occurredAt <= upper));
+    const range = from && to
+      ? IDBKeyRange.bound(from.toISOString(), to.toISOString())
+      : from
+        ? IDBKeyRange.lowerBound(from.toISOString())
+        : to
+          ? IDBKeyRange.upperBound(to.toISOString())
+          : undefined;
+    return (await this.db()).getAllFromIndex("trainingEvents", "by-occurred", range);
   }
   async saveTrainingSession(session: TrainingSessionRecord) { await (await this.db()).put("trainingSessions", session); }
   async getActiveTrainingSession() {
@@ -122,10 +126,13 @@ export class LocalPhraseRepository implements PhraseRepository {
   }
   async completeTrainingSession(id: string, completedAt: Date) {
     const db = await this.db();
-    const session = await db.get("trainingSessions", id);
+    const tx = db.transaction("trainingSessions", "readwrite");
+    const store = tx.objectStore("trainingSessions");
+    const session = await store.get(id);
     if (!session) throw new Error("找不到训练会话");
     const timestamp = completedAt.toISOString();
-    await db.put("trainingSessions", { ...session, completedAt: timestamp, updatedAt: timestamp });
+    await store.put({ ...session, completedAt: timestamp, updatedAt: timestamp });
+    await tx.done;
   }
   async getSpeechPreferences(): Promise<SpeechPreferences> {
     const fallback: SpeechPreferences = { accent: "en-US", autoSpeak: true };
@@ -141,7 +148,15 @@ export class LocalPhraseRepository implements PhraseRepository {
   }
   async exportSnapshot(): Promise<BackupEnvelopeV2> {
     const db = await this.db();
-    const [categories, phrases, reviewLogs, trainingEvents, trainingSessions] = await Promise.all([db.getAll("categories"), db.getAll("phrases"), db.getAll("reviewLogs"), db.getAll("trainingEvents"), db.getAll("trainingSessions")]);
+    const tx = db.transaction(["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions"]);
+    const [categories, phrases, reviewLogs, trainingEvents, trainingSessions] = await Promise.all([
+      tx.objectStore("categories").getAll(),
+      tx.objectStore("phrases").getAll(),
+      tx.objectStore("reviewLogs").getAll(),
+      tx.objectStore("trainingEvents").getAll(),
+      tx.objectStore("trainingSessions").getAll(),
+    ]);
+    await tx.done;
     return { format: "personal-phrase-bank", version: 2, exportedAt: new Date().toISOString(), categories, phrases, reviewLogs, trainingEvents, trainingSessions };
   }
 
