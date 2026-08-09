@@ -79,8 +79,24 @@ describe("TemporaryRecorder", () => {
     expect(first.tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
   });
 
-  it("stops tracks and revokes the latest URL when disposed", async () => {
+  it("stops every active track when disposed during recording", async () => {
     const { stream, tracks } = makeStream();
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia: vi.fn(async () => stream) },
+    });
+    vi.stubGlobal("MediaRecorder", MockMediaRecorder);
+    vi.stubGlobal("URL", { createObjectURL: vi.fn(), revokeObjectURL: vi.fn() });
+
+    const recorder = new TemporaryRecorder();
+    await recorder.start();
+    recorder.dispose();
+
+    expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("revokes the latest completed recording URL when disposed", async () => {
+    const { stream } = makeStream();
     Object.defineProperty(navigator, "mediaDevices", {
       configurable: true,
       value: { getUserMedia: vi.fn(async () => stream) },
@@ -94,7 +110,6 @@ describe("TemporaryRecorder", () => {
     await recorder.stop();
     recorder.dispose();
 
-    expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:last");
   });
 });
