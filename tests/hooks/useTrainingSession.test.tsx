@@ -112,6 +112,20 @@ describe("useTrainingSession", () => {
     expect(store.getSession()?.phraseIds.filter((id) => id === first)).toHaveLength(2);
   });
 
+  it("does not append a requeue occurrence again when it is still unknown", async () => {
+    const store = memoryRepository(); const api = services();
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "requeue-once" }));
+    await waitFor(() => expect(result.current.total).toBe(3));
+    await act(() => result.current.revealAsUnknown());
+    expect(result.current.total).toBe(4);
+    await act(() => result.current.grade("hard"));
+    await act(() => result.current.grade("hard"));
+    await act(() => result.current.grade("hard"));
+    expect(result.current.current?.source).toBe("requeue");
+    await act(() => result.current.revealAsUnknown());
+    expect(result.current.total).toBe(4);
+  });
+
   it("uses pronunciation without revealing and caps a good grade", async () => {
     const store = memoryRepository();
     const api = services();

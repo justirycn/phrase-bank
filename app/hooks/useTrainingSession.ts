@@ -384,7 +384,7 @@ export function useTrainingSession({
       if (finishingRef.current) return;
       evaluatedRef.current = true;
       const laterQueue = queueRef.current.slice(indexRef.current + 1);
-      if (!laterQueue.some((candidate) => candidate.phrase.id === current.phrase.id)) {
+      if (current.source !== "requeue" && !laterQueue.some((candidate) => candidate.phrase.id === current.phrase.id)) {
         replaceQueue([...queueRef.current, { ...current, source: "requeue" }]);
       }
       setPhase("answer");
