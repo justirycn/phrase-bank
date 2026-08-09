@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { LocalPhraseRepository } from "../../app/storage/indexedDbRepository";
 import { createNewPhrase } from "../../app/domain/review";
 import type { BackupEnvelopeV1, BackupEnvelopeV2, Category, Phrase, ReviewLog, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import { parseBackup } from "../../app/storage/backup";
 
 describe("LocalPhraseRepository", () => {
   let repo: LocalPhraseRepository;
@@ -104,16 +105,27 @@ describe("LocalPhraseRepository", () => {
     tx.objectStore("metadata").put({ key: "speechPreferences", value: "{" });
     await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); });
     expect(await corruptRepo.getSpeechPreferences()).toEqual({ accent: "en-US", autoSpeak: true });
+    for (const value of [JSON.stringify({ accent: "fr-FR", autoSpeak: true }), JSON.stringify({ accent: "en-US", autoSpeak: "yes" })]) {
+      const invalidTx = db.transaction("metadata", "readwrite");
+      invalidTx.objectStore("metadata").put({ key: "speechPreferences", value });
+      await new Promise<void>((resolve, reject) => { invalidTx.oncomplete = () => resolve(); invalidTx.onerror = () => reject(invalidTx.error); });
+      expect(await corruptRepo.getSpeechPreferences()).toEqual({ accent: "en-US", autoSpeak: true });
+    }
   });
 
   it("exports v2 and imports v1/v2 training data with skip and overwrite policies", async () => {
     const base = await repo.exportSnapshot();
     expect(base).toMatchObject({ version: 2, trainingEvents: [], trainingSessions: [] });
     const v1: BackupEnvelopeV1 = { format: base.format, version: 1, exportedAt: base.exportedAt, categories: [], phrases: [], reviewLogs: [] };
-    await repo.importSnapshot(v1, "overwrite");
-    expect((await repo.exportSnapshot()).trainingEvents).toEqual([]);
     const event: TrainingEvent = { id: "event", sessionId: "session", phraseId: "starter-daily-not-sure", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: base.exportedAt };
     const session: TrainingSessionRecord = { id: "session", mode: "quick", startedAt: base.exportedAt, updatedAt: base.exportedAt, phraseIds: [event.phraseId], currentIndex: 0, activeSeconds: 1 };
+    await repo.saveTrainingEvent(event);
+    await repo.saveTrainingSession(session);
+    const normalizedV1 = parseBackup(JSON.stringify(v1));
+    expect(normalizedV1).toMatchObject({ version: 2, trainingEvents: [], trainingSessions: [] });
+    await repo.importSnapshot(normalizedV1, "overwrite");
+    expect((await repo.exportSnapshot()).trainingEvents).toEqual([event]);
+    expect((await repo.exportSnapshot()).trainingSessions).toEqual([session]);
     const v2: BackupEnvelopeV2 = { ...base, trainingEvents: [event], trainingSessions: [session] };
     await repo.importSnapshot(v2, "overwrite");
     await repo.importSnapshot({ ...v2, trainingEvents: [{ ...event, activeSeconds: 9 }], trainingSessions: [{ ...session, activeSeconds: 9 }] }, "skip");
@@ -135,7 +147,8 @@ describe("LocalPhraseRepository", () => {
     request.onupgradeneeded = () => { const db = request.result; const phrases = db.createObjectStore("phrases", { keyPath: "id" }); phrases.createIndex("by-due", "nextReviewAt"); phrases.createIndex("by-created", "createdAt"); phrases.createIndex("by-category", "categoryId"); db.createObjectStore("categories", { keyPath: "id" }); const logs = db.createObjectStore("reviewLogs", { keyPath: "id" }); logs.createIndex("by-phrase", "phraseId"); db.createObjectStore("metadata", { keyPath: "key" }); };
     const oldDb = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
     const tx = oldDb.transaction(["phrases", "categories", "reviewLogs", "metadata"], "readwrite");
-    tx.objectStore("categories").put(category); tx.objectStore("phrases").put(phrase); tx.objectStore("reviewLogs").put(log); tx.objectStore("metadata").put({ key: "initialized", value: "custom-value" }); tx.objectStore("metadata").put({ key: "starterPhrasesVersion", value: "1" });
+    const originalMetadata = [{ key: "initialized", value: "custom-value" }, { key: "starterPhrasesVersion", value: "1" }, { key: "customMetadata", value: "preserve-me" }];
+    tx.objectStore("categories").put(category); tx.objectStore("phrases").put(phrase); tx.objectStore("reviewLogs").put(log); for (const entry of originalMetadata) tx.objectStore("metadata").put(entry);
     await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); }); oldDb.close();
     const migrated = new LocalPhraseRepository(dbName); await migrated.initialize();
     expect(await migrated.getPhrase(phrase.id)).toEqual(phrase);
@@ -143,9 +156,18 @@ describe("LocalPhraseRepository", () => {
     expect((await migrated.exportSnapshot()).reviewLogs).toContainEqual(log);
     const reopened = indexedDB.open(dbName, 2);
     const upgradedDb = await new Promise<IDBDatabase>((resolve, reject) => { reopened.onsuccess = () => resolve(reopened.result); reopened.onerror = () => reject(reopened.error); });
-    const metadata = await new Promise<{ key: string; value: string }>((resolve, reject) => { const read = upgradedDb.transaction("metadata").objectStore("metadata").get("initialized"); read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error); });
-    expect(metadata.value).toBe("custom-value");
+    const metadata = await new Promise<Array<{ key: string; value: string }>>((resolve, reject) => { const read = upgradedDb.transaction("metadata").objectStore("metadata").getAll(); read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error); });
+    expect(metadata).toEqual([...originalMetadata].sort((a, b) => a.key.localeCompare(b.key)));
+    expect(upgradedDb.objectStoreNames.contains("trainingEvents")).toBe(true);
+    expect(upgradedDb.objectStoreNames.contains("trainingSessions")).toBe(true);
+    const schemaTx = upgradedDb.transaction(["trainingEvents", "trainingSessions"]);
+    expect(Array.from(schemaTx.objectStore("trainingEvents").indexNames)).toEqual(expect.arrayContaining(["by-occurred", "by-session", "by-phrase"]));
+    expect(Array.from(schemaTx.objectStore("trainingSessions").indexNames)).toContain("by-updated");
     await migrated.saveTrainingSession({ id: "new-session", mode: "quick", startedAt: timestamp, updatedAt: timestamp, phraseIds: [phrase.id], currentIndex: 0, activeSeconds: 0 });
     expect((await migrated.getActiveTrainingSession())?.id).toBe("new-session");
+    await migrated.saveTrainingEvent({ id: "new-event", sessionId: "new-session", phraseId: phrase.id, source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: timestamp });
+    expect((await migrated.listTrainingEvents()).map(({ id }) => id)).toContain("new-event");
+    await migrated.saveSpeechPreferences({ accent: "en-GB", autoSpeak: false });
+    expect(await migrated.getSpeechPreferences()).toEqual({ accent: "en-GB", autoSpeak: false });
   });
 });

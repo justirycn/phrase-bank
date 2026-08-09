@@ -1,10 +1,16 @@
-import type { BackupEnvelope, BackupEnvelopeV2, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+import type { BackupEnvelopeV1, BackupEnvelopeV2, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+
+type BackupCandidate = Omit<Partial<BackupEnvelopeV1>, "version"> & {
+  version?: 1 | 2;
+  trainingEvents?: TrainingEvent[];
+  trainingSessions?: TrainingSessionRecord[];
+};
 
 export function parseBackup(raw: string): BackupEnvelopeV2 {
   let value: unknown;
   try { value = JSON.parse(raw); } catch { throw new Error("备份文件不是有效的 JSON"); }
   if (!value || typeof value !== "object") throw new Error("备份文件格式不正确");
-  const backup = value as Partial<BackupEnvelope>;
+  const backup = value as BackupCandidate;
   if (backup.format !== "personal-phrase-bank") throw new Error("这不是 Phrase Bank 备份文件");
   if (backup.version !== 1 && backup.version !== 2) throw new Error("不支持的备份版本");
   if (!Array.isArray(backup.categories) || !Array.isArray(backup.phrases) || !Array.isArray(backup.reviewLogs)) throw new Error("备份文件缺少必要数据");
