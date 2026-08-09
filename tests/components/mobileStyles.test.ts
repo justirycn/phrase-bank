@@ -17,4 +17,16 @@ describe("mobile phrase typography", () => {
     expect(css).toMatch(/\.practice-actions button[^}]*min-height:44px/);
     expect(css).toMatch(/overflow-wrap:anywhere/);
   });
+
+  it("centers answer toolbar icons with their labels", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+    const rules = [...css.matchAll(/\.answer-tools button\s*\{([^}]*)\}/g)];
+    const rule = rules.at(-1)?.[1] ?? "";
+
+    expect(rule).toMatch(/display:flex/);
+    expect(rule).toMatch(/align-items:center/);
+    expect(rule).toMatch(/justify-content:center/);
+    expect(rule).toMatch(/gap:7px/);
+    expect(rule).toMatch(/min-height:44px/);
+  });
 });
