@@ -80,4 +80,56 @@ describe("BrowserSpeechService", () => {
 
     await expect(new BrowserSpeechService().speak("Hello", "en-GB")).rejects.toThrow("发音播放失败，请稍后再试");
   });
+
+  it("rejects replaced speech and ignores its stale callbacks", async () => {
+    const utterances: SpeechSynthesisUtterance[] = [];
+    const synthesis = {
+      getVoices: vi.fn(() => []),
+      cancel: vi.fn(),
+      speak: vi.fn((utterance: SpeechSynthesisUtterance) => utterances.push(utterance)),
+    };
+    class Utterance {
+      lang = "";
+      voice: SpeechSynthesisVoice | null = null;
+      onend: ((event: SpeechSynthesisEvent) => void) | null = null;
+      onerror: ((event: SpeechSynthesisErrorEvent) => void) | null = null;
+      constructor(public text: string) {}
+    }
+    vi.stubGlobal("speechSynthesis", synthesis);
+    vi.stubGlobal("SpeechSynthesisUtterance", Utterance);
+    const service = new BrowserSpeechService();
+
+    const first = service.speak("First", "en-US");
+    const staleEnd = utterances[0].onend;
+    const second = service.speak("Second", "en-US");
+    await expect(first).rejects.toThrow("发音已取消");
+
+    let secondSettled = false;
+    void second.finally(() => { secondSettled = true; });
+    staleEnd?.({} as SpeechSynthesisEvent);
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+
+    utterances[1].onend?.({} as SpeechSynthesisEvent);
+    await expect(second).resolves.toBeUndefined();
+  });
+
+  it("settles the active speech promise when cancelled without a browser callback", async () => {
+    const synthesis = { getVoices: vi.fn(() => []), cancel: vi.fn(), speak: vi.fn() };
+    class Utterance {
+      lang = "";
+      voice: SpeechSynthesisVoice | null = null;
+      onend: ((event: SpeechSynthesisEvent) => void) | null = null;
+      onerror: ((event: SpeechSynthesisErrorEvent) => void) | null = null;
+      constructor(public text: string) {}
+    }
+    vi.stubGlobal("speechSynthesis", synthesis);
+    vi.stubGlobal("SpeechSynthesisUtterance", Utterance);
+    const service = new BrowserSpeechService();
+
+    const speaking = service.speak("Hello", "en-US");
+    service.cancel();
+
+    await expect(speaking).rejects.toThrow("发音已取消");
+  });
 });

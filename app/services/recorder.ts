@@ -3,98 +3,198 @@ interface TemporaryRecording {
   url: string;
 }
 
-function stopTracks(stream?: MediaStream): void {
-  stream?.getTracks().forEach((track) => track.stop());
+interface PendingStart {
+  generation: number;
+  cancel: () => void;
 }
 
-export class TemporaryRecorder {
-  private recorder?: MediaRecorder;
-  private stream?: MediaStream;
-  private chunks: Blob[] = [];
-  private currentUrl?: string;
+interface PendingStop {
+  settled: boolean;
+  resolve: (recording: TemporaryRecording) => void;
+  reject: (error: Error) => void;
+}
 
-  async start(): Promise<void> {
-    this.releaseActiveRecording();
+interface ActiveRecording {
+  generation: number;
+  recorder: MediaRecorder;
+  stream: MediaStream;
+  chunks: Blob[];
+  pendingStop?: PendingStop;
+}
+
+const cancelledError = () => new Error("录音已取消");
+
+export class TemporaryRecorder {
+  private generation = 0;
+  private pendingStart?: PendingStart;
+  private active?: ActiveRecording;
+  private currentUrl?: string;
+  private releasedStreams = new WeakSet<MediaStream>();
+
+  start(): Promise<void> {
+    const generation = ++this.generation;
+    this.cancelPendingStart();
+    this.cancelActive();
     this.revokeCurrentUrl();
 
     if (!navigator.mediaDevices?.getUserMedia || typeof globalThis.MediaRecorder === "undefined") {
-      throw new Error("当前浏览器暂不支持录音，请继续练习");
+      return Promise.reject(new Error("当前浏览器暂不支持录音，请继续练习"));
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    try {
-      this.stream = stream;
-      this.recorder = new globalThis.MediaRecorder(stream);
-      this.chunks = [];
-      this.recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) this.chunks.push(event.data);
-      };
-      this.recorder.start();
-    } catch (error) {
-      stopTracks(stream);
-      this.stream = undefined;
-      this.recorder = undefined;
-      throw error;
-    }
+    let rejectCancellation!: (error: Error) => void;
+    const cancellation = new Promise<never>((_, reject) => {
+      rejectCancellation = reject;
+    });
+    const pending: PendingStart = {
+      generation,
+      cancel: () => rejectCancellation(cancelledError()),
+    };
+    this.pendingStart = pending;
+
+    const permission = Promise.resolve().then(() => navigator.mediaDevices.getUserMedia({ audio: true }));
+    void permission.then(
+      (stream) => {
+        if (generation !== this.generation) this.releaseStream(stream);
+      },
+      () => undefined,
+    );
+
+    return Promise.race([permission, cancellation]).then(
+      (stream) => {
+        if (generation !== this.generation || this.pendingStart !== pending) {
+          this.releaseStream(stream);
+          throw cancelledError();
+        }
+        this.pendingStart = undefined;
+
+        try {
+          const recorder = new globalThis.MediaRecorder(stream);
+          const active: ActiveRecording = { generation, recorder, stream, chunks: [] };
+          recorder.ondataavailable = (event) => {
+            if (this.active === active && event.data.size > 0) active.chunks.push(event.data);
+          };
+          recorder.start();
+          this.active = active;
+        } catch (error) {
+          this.releaseStream(stream);
+          throw error;
+        }
+      },
+      (error: unknown) => {
+        if (this.pendingStart === pending) this.pendingStart = undefined;
+        throw error;
+      },
+    );
   }
 
   stop(): Promise<TemporaryRecording> {
-    const recorder = this.recorder;
-    if (!recorder || recorder.state === "inactive") {
+    const active = this.active;
+    if (!active || active.recorder.state === "inactive" || active.pendingStop) {
       return Promise.reject(new Error("当前没有正在进行的录音"));
     }
 
     return new Promise<TemporaryRecording>((resolve, reject) => {
-      recorder.onstop = () => {
-        const blob = new Blob(this.chunks, { type: recorder.mimeType });
-        const url = URL.createObjectURL(blob);
-        this.currentUrl = url;
-        this.finishRecorder(recorder);
-        resolve({ blob, url });
-      };
-      recorder.onerror = () => {
-        this.finishRecorder(recorder);
-        reject(new Error("录音失败，请稍后再试"));
+      const pending: PendingStop = { settled: false, resolve, reject };
+      active.pendingStop = pending;
+      active.recorder.onstop = () => this.finishStop(active, pending);
+      active.recorder.onerror = () => {
+        this.finishStop(active, pending, new Error("录音失败，请稍后再试"));
       };
 
       try {
-        recorder.stop();
+        active.recorder.stop();
       } catch (error) {
-        this.finishRecorder(recorder);
-        reject(error);
+        this.finishStop(
+          active,
+          pending,
+          error instanceof Error ? error : new Error("录音失败，请稍后再试"),
+        );
       }
     });
   }
 
   dispose(): void {
-    this.releaseActiveRecording();
+    this.generation += 1;
+    this.cancelPendingStart();
+    this.cancelActive();
     this.revokeCurrentUrl();
   }
 
-  private finishRecorder(recorder: MediaRecorder): void {
-    if (this.recorder !== recorder) return;
-    stopTracks(this.stream);
-    this.stream = undefined;
-    this.recorder = undefined;
-    this.chunks = [];
+  private finishStop(active: ActiveRecording, pending: PendingStop, error?: Error): void {
+    if (pending.settled) return;
+    if (this.active !== active || active.pendingStop !== pending) {
+      this.settlePendingStop(pending, cancelledError());
+      return;
+    }
+
+    if (error) {
+      this.cleanupActive(active);
+      this.settlePendingStop(pending, error);
+      return;
+    }
+
+    try {
+      const blob = new Blob(active.chunks, { type: active.recorder.mimeType });
+      const url = URL.createObjectURL(blob);
+      this.revokeCurrentUrl();
+      this.currentUrl = url;
+      this.cleanupActive(active);
+      this.settlePendingStop(pending, undefined, { blob, url });
+    } catch (creationError) {
+      this.cleanupActive(active);
+      this.settlePendingStop(
+        pending,
+        creationError instanceof Error ? creationError : new Error("录音失败，请稍后再试"),
+      );
+    }
   }
 
-  private releaseActiveRecording(): void {
-    const recorder = this.recorder;
-    if (recorder && recorder.state !== "inactive") {
-      recorder.ondataavailable = null;
-      recorder.onstop = null;
-      recorder.onerror = null;
+  private settlePendingStop(
+    pending: PendingStop,
+    error?: Error,
+    recording?: TemporaryRecording,
+  ): void {
+    if (pending.settled) return;
+    pending.settled = true;
+    if (error) pending.reject(error);
+    else if (recording) pending.resolve(recording);
+  }
+
+  private cancelPendingStart(): void {
+    const pending = this.pendingStart;
+    this.pendingStart = undefined;
+    pending?.cancel();
+  }
+
+  private cancelActive(): void {
+    const active = this.active;
+    if (!active) return;
+    const pending = active.pendingStop;
+    this.cleanupActive(active);
+    if (pending) this.settlePendingStop(pending, cancelledError());
+    if (active.recorder.state !== "inactive") {
       try {
-        recorder.stop();
+        active.recorder.stop();
       } catch {
-        // Tracks are still released below when stopping the recorder fails.
+        // The owned stream has already been released.
       }
     }
-    stopTracks(this.stream);
-    this.recorder = undefined;
-    this.stream = undefined;
-    this.chunks = [];
+  }
+
+  private cleanupActive(active: ActiveRecording): void {
+    active.recorder.ondataavailable = null;
+    active.recorder.onstop = null;
+    active.recorder.onerror = null;
+    this.releaseStream(active.stream);
+    active.chunks = [];
+    active.pendingStop = undefined;
+    if (this.active === active) this.active = undefined;
+  }
+
+  private releaseStream(stream: MediaStream): void {
+    if (this.releasedStreams.has(stream)) return;
+    this.releasedStreams.add(stream);
+    stream.getTracks().forEach((track) => track.stop());
   }
 
   private revokeCurrentUrl(): void {
