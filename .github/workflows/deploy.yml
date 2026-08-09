@@ -52,10 +52,14 @@ jobs:
           docker compose build
           docker compose up -d
           for attempt in $(seq 1 24); do
-            if curl --fail --silent --show-error https://phrase.archdemy.com/ >/dev/null; then
+            local_status=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --resolve phrase.archdemy.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://phrase.archdemy.com/ || true)
+            public_status=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --location -o /dev/null -w '%{http_code}' https://phrase.archdemy.com/ || true)
+            if [ "$local_status" = 200 ] && [ "$public_status" = 200 ]; then
               exit 0
             fi
-            sleep 5
+            if [ "$attempt" -lt 24 ]; then
+              sleep 5
+            fi
           done
           docker compose ps
           docker compose logs --tail=100 phrase-bank caddy

@@ -28,8 +28,23 @@ const yamlSection = (yaml: string, name: string, indent = 0) => {
 describe("HTTPS reverse proxy", () => {
   it("checks the public HTTPS endpoint during deployment", () => {
     const workflow = rootFile(".github/workflows/deploy.yml");
-    expect(workflow).toContain("https://phrase.archdemy.com/");
-    expect(workflow).toContain("docker compose logs --tail=100 phrase-bank caddy");
+    const remoteScript = workflow.match(/<<'REMOTE'\r?\n([\s\S]*?)\r?\n\s+REMOTE/)?.[1] ?? "";
+    const retryLoop = remoteScript.match(
+      /for attempt in \$\(seq 1 24\); do\r?\n([\s\S]*?)\r?\n\s+done/,
+    )?.[1] ?? "";
+
+    expect(remoteScript).not.toBe("");
+    expect(retryLoop).toMatch(
+      /curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --resolve phrase\.archdemy\.com:443:127\.0\.0\.1 -o \/dev\/null -w '%\{http_code\}' https:\/\/phrase\.archdemy\.com\//,
+    );
+    expect(retryLoop).toMatch(
+      /curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --location -o \/dev\/null -w '%\{http_code\}' https:\/\/phrase\.archdemy\.com\//,
+    );
+    expect(retryLoop).toMatch(
+      /if \[ "\$local_status" = 200 \] && \[ "\$public_status" = 200 \]; then\r?\n\s+exit 0/,
+    );
+    expect(remoteScript).toContain("docker compose logs --tail=100 phrase-bank caddy");
+    expect(remoteScript).not.toContain("http://127.0.0.1/");
   });
 
   it("serves the installable domain and preserves the legacy IP origin", () => {
