@@ -55,6 +55,9 @@ describe("HTTPS reverse proxy", () => {
     expect(domainSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(1);
     expect(domainSite).toMatch(/^\s*@manifest path \/manifest\.webmanifest\s*$/m);
     expect(domainSite).toMatch(
+      /^\s*header @manifest >Content-Type application\/manifest\+json\s*$/m,
+    );
+    expect(domainSite).not.toMatch(
       /^\s*header @manifest Content-Type application\/manifest\+json\s*$/m,
     );
     expect(legacyIpSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(1);

@@ -1,7 +1,7 @@
 phrase.archdemy.com {
   encode zstd gzip
   @manifest path /manifest.webmanifest
-  header @manifest Content-Type application/manifest+json
+  header @manifest >Content-Type application/manifest+json
   reverse_proxy phrase-bank:3000
 }
 
