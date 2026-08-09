@@ -1,0 +1,8 @@
+phrase.archdemy.com {
+  encode zstd gzip
+  reverse_proxy phrase-bank:3000
+}
+
+http://43.153.204.17 {
+  reverse_proxy phrase-bank:3000
+}

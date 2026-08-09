@@ -13,9 +13,11 @@ describe("deployment configuration", () => {
     expect(dockerfile).toMatch(/EXPOSE 3000/);
   });
 
-  it("maps HTTP port 80 and defines restart and health behavior", async () => {
+  it("publishes HTTP and HTTPS through Caddy and defines app restart and health behavior", async () => {
     const compose = await text("compose.yaml");
-    expect(compose).toContain('"80:3000"');
+    expect(compose).toContain('"80:80"');
+    expect(compose).toContain('"443:443"');
+    expect(compose).not.toContain('"80:3000"');
     expect(compose).toContain("restart: unless-stopped");
     expect(compose).toContain("healthcheck:");
     expect(compose).toContain("http://127.0.0.1:3000/");
@@ -29,6 +31,7 @@ describe("deployment configuration", () => {
     expect(workflow).toContain("StrictHostKeyChecking=yes");
     expect(workflow.indexOf("docker compose build")).toBeLessThan(workflow.indexOf("docker compose up -d"));
     expect(workflow).not.toContain("sudo docker");
-    expect(workflow).toContain("http://127.0.0.1/");
+    expect(workflow).toContain("https://phrase.archdemy.com/");
+    expect(workflow).toContain("--resolve phrase.archdemy.com:443:127.0.0.1");
   });
 });
