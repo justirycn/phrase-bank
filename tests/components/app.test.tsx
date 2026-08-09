@@ -1,14 +1,16 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PhraseBankApp } from "../../app/PhraseBankApp";
 import type { BackupEnvelopeV2, Category, Phrase, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 
 class MemoryRepository {
   phrases: Phrase[] = [];
+  failPhraseReads = false;
+  phraseReadAttempts = 0;
   categories: Category[] = [{ id: "daily", name: "日常", isDefault: true, createdAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-07T00:00:00.000Z" }];
   async initialize() {}
-  async listPhrases() { return [...this.phrases]; }
+  async listPhrases() { this.phraseReadAttempts += 1; if (this.failPhraseReads) throw new Error("db failed"); return [...this.phrases]; }
   async listCategories() { return [...this.categories]; }
   async listDuePhrases() { return [...this.phrases]; }
   async savePhrase(phrase: Phrase) { this.phrases = [...this.phrases.filter((p) => p.id !== phrase.id), phrase]; }
@@ -108,6 +110,21 @@ describe("PhraseBankApp", () => {
     expect(screen.getByText("你能说明一下吗？")).toBeVisible();
     expect(screen.getByText("日常")).toBeVisible();
     expect(screen.getByText("从模糊到掌握")).toBeVisible();
+  });
+
+  it("retries and returns home even when repository refresh keeps failing", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository(); repo.phrases.push(makePhrase());
+    render(<PhraseBankApp repository={repo as never} />);
+    await screen.findByText("今天，说出来");
+    repo.failPhraseReads = true;
+    await user.click(screen.getByRole("button", { name: /快速练一组/ }));
+    expect(await screen.findByRole("heading", { name: "训练暂时打不开" })).toBeVisible();
+    const attemptsBeforeRetry = repo.phraseReadAttempts;
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    await vi.waitFor(() => expect(repo.phraseReadAttempts).toBeGreaterThan(attemptsBeforeRetry));
+    expect(await screen.findByRole("heading", { name: "训练暂时打不开" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "返回首页" }));
+    expect(await screen.findByText("今天，说出来")).toBeVisible();
   });
 
   it("keeps the library, add and settings navigation", async () => {
