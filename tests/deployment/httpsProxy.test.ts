@@ -53,6 +53,10 @@ describe("HTTPS reverse proxy", () => {
     const legacyIpSite = caddySiteBlock(caddy, "http://43.153.204.17");
 
     expect(domainSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(1);
+    expect(domainSite).toMatch(/^\s*@manifest path \/manifest\.webmanifest\s*$/m);
+    expect(domainSite).toMatch(
+      /^\s*header @manifest Content-Type application\/manifest\+json\s*$/m,
+    );
     expect(legacyIpSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(1);
     expect(caddy.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(2);
   });
