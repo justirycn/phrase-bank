@@ -1,4 +1,44 @@
 export type ReviewResult = "again" | "hard" | "good";
+export type TrainingMode = "quick" | "standard";
+export type TrainingSource = "due" | "weak" | "mature" | "new" | "requeue";
+
+export interface TrainingEvent {
+  id: string;
+  sessionId: string;
+  phraseId: string;
+  source: TrainingSource;
+  result: ReviewResult;
+  usedPronunciationHint: boolean;
+  recorded: boolean;
+  activeSeconds: number;
+  occurredAt: string;
+}
+
+export interface TrainingSessionRecord {
+  id: string;
+  mode: TrainingMode;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  phraseIds: string[];
+  currentIndex: number;
+  activeSeconds: number;
+}
+
+export interface SpeechPreferences {
+  accent: "en-US" | "en-GB";
+  autoSpeak: boolean;
+}
+
+export interface DailyTrainingSummary {
+  date: string;
+  activeSeconds: number;
+  completedGroups: number;
+  spokenCount: number;
+  masteredCount: number;
+  promotedCount: number;
+  lightDayUsed: boolean;
+}
 
 export interface PhraseInput {
   english: string;
