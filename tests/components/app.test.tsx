@@ -22,6 +22,8 @@ class MemoryRepository {
   failPreferenceLoad = false;
   failPreferenceSave = false;
   preferenceSaves: SpeechPreferences[] = [];
+  preferenceLoad?: Promise<SpeechPreferences>;
+  savePreferenceImpl?: (value: SpeechPreferences) => Promise<void>;
   async getPhrase(id: string) { return this.phrases.find((phrase) => phrase.id === id); }
   async submitTrainingReview(event: TrainingEvent) { this.events.push(event); }
   async saveTrainingEvent(event: TrainingEvent) { this.events = [...this.events.filter((item) => item.id !== event.id), event]; }
@@ -29,8 +31,8 @@ class MemoryRepository {
   async saveTrainingSession(session: TrainingSessionRecord) { this.sessions = [...this.sessions.filter((item) => item.id !== session.id), session]; }
   async getActiveTrainingSession() { return this.sessions.find((session) => !session.completedAt); }
   async completeTrainingSession(id: string, completedAt: Date) { this.sessions = this.sessions.map((session) => session.id === id ? { ...session, completedAt: completedAt.toISOString() } : session); }
-  async getSpeechPreferences() { if (this.failPreferenceLoad) throw new Error("preference load failed"); return this.preferences; }
-  async saveSpeechPreferences(value: SpeechPreferences) { if (this.failPreferenceSave) throw new Error("preference save failed"); this.preferences = value; this.preferenceSaves.push(value); }
+  async getSpeechPreferences() { if (this.preferenceLoad) return this.preferenceLoad; if (this.failPreferenceLoad) throw new Error("preference load failed"); return this.preferences; }
+  async saveSpeechPreferences(value: SpeechPreferences) { this.preferenceSaves.push(value); if (this.savePreferenceImpl) return this.savePreferenceImpl(value); if (this.failPreferenceSave) throw new Error("preference save failed"); this.preferences = value; }
   async saveCategory(category: Category) { this.categories.push(category); }
   async deleteCategoryAndMigrate() {}
   async exportSnapshot(): Promise<BackupEnvelopeV2> { return { format: "personal-phrase-bank", version: 2, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [], trainingEvents: this.events, trainingSessions: this.sessions }; }
@@ -165,13 +167,54 @@ describe("PhraseBankApp", () => {
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: "设置" }));
 
-    expect(await screen.findByRole("checkbox", { name: "自动朗读答案" })).not.toBeChecked();
+    expect(await screen.findByRole("checkbox", { name: "自动朗读答案" })).toBeChecked();
     expect(await screen.findByRole("alert")).toHaveTextContent("语音偏好暂时无法读取");
     repo.failPreferenceLoad = false;
     repo.failPreferenceSave = true;
     await user.click(screen.getByRole("checkbox", { name: "自动朗读答案" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("语音偏好暂时无法保存");
+    expect(screen.getByRole("checkbox", { name: "自动朗读答案" })).toBeChecked();
     expect(screen.getByRole("heading", { name: "设置" })).toBeVisible();
+  });
+
+  it("waits for delayed preference loading before allowing changes", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    let resolveLoad!: (value: SpeechPreferences) => void;
+    repo.preferenceLoad = new Promise((resolve) => { resolveLoad = resolve; });
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+
+    const autoSpeak = await screen.findByRole("checkbox", { name: "自动朗读答案" });
+    expect(autoSpeak).toBeDisabled();
+    expect(screen.getByRole("radio", { name: "英式英语" })).toBeDisabled();
+    resolveLoad({ accent: "en-GB", autoSpeak: false });
+    await vi.waitFor(() => expect(autoSpeak).toBeEnabled());
+    expect(autoSpeak).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: "英式英语" })).toBeChecked();
+    await user.click(autoSpeak);
+    expect(repo.preferenceSaves.at(-1)).toEqual({ accent: "en-GB", autoSpeak: true });
+  });
+
+  it("does not let an older failed save roll back a newer successful preference", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.preferences = { accent: "en-US", autoSpeak: true };
+    let rejectFirst!: (error: Error) => void;
+    let resolveSecond!: () => void;
+    const saves = [new Promise<void>((_, reject) => { rejectFirst = reject; }), new Promise<void>((resolve) => { resolveSecond = resolve; })];
+    repo.savePreferenceImpl = () => saves.shift() ?? Promise.resolve();
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const autoSpeak = await screen.findByRole("checkbox", { name: "自动朗读答案" });
+    await vi.waitFor(() => expect(autoSpeak).toBeEnabled());
+
+    await user.click(autoSpeak);
+    await user.click(screen.getByRole("radio", { name: "英式英语" }));
+    resolveSecond();
+    rejectFirst(new Error("older save failed"));
+    await vi.waitFor(() => expect(repo.preferenceSaves).toHaveLength(2));
+    expect(autoSpeak).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: "英式英语" })).toBeChecked();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("does not request microphone permission from speech settings", async () => {
