@@ -51,13 +51,13 @@ jobs:
           git pull --ff-only origin main
           docker compose build
           docker compose up -d
-          for attempt in $(seq 1 12); do
-            if curl --fail --silent --show-error http://127.0.0.1/ >/dev/null; then
+          for attempt in $(seq 1 24); do
+            if curl --fail --silent --show-error https://phrase.archdemy.com/ >/dev/null; then
               exit 0
             fi
             sleep 5
           done
           docker compose ps
-          docker compose logs --tail=100
+          docker compose logs --tail=100 phrase-bank caddy
           exit 1
           REMOTE

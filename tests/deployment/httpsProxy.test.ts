@@ -26,6 +26,12 @@ const yamlSection = (yaml: string, name: string, indent = 0) => {
 };
 
 describe("HTTPS reverse proxy", () => {
+  it("checks the public HTTPS endpoint during deployment", () => {
+    const workflow = rootFile(".github/workflows/deploy.yml");
+    expect(workflow).toContain("https://phrase.archdemy.com/");
+    expect(workflow).toContain("docker compose logs --tail=100 phrase-bank caddy");
+  });
+
   it("serves the installable domain and preserves the legacy IP origin", () => {
     const caddy = rootFile("Caddyfile");
     const domainSite = caddySiteBlock(caddy, "phrase.archdemy.com");
