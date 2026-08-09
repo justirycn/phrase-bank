@@ -195,13 +195,13 @@ describe("PhraseBankApp", () => {
     expect(repo.preferenceSaves.at(-1)).toEqual({ accent: "en-GB", autoSpeak: true });
   });
 
-  it("does not let an older failed save roll back a newer successful preference", async () => {
+  it("serializes preference writes and rolls a failed latest change back to the last stored value", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     repo.preferences = { accent: "en-US", autoSpeak: true };
-    let rejectFirst!: (error: Error) => void;
-    let resolveSecond!: () => void;
-    const saves = [new Promise<void>((_, reject) => { rejectFirst = reject; }), new Promise<void>((resolve) => { resolveSecond = resolve; })];
-    repo.savePreferenceImpl = () => saves.shift() ?? Promise.resolve();
+    const pending: Array<{ value: SpeechPreferences; resolve: () => void; reject: (error: Error) => void }> = [];
+    repo.savePreferenceImpl = (value) => new Promise<void>((resolve, reject) => {
+      pending.push({ value, resolve: () => { repo.preferences = value; resolve(); }, reject });
+    });
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: "设置" }));
     const autoSpeak = await screen.findByRole("checkbox", { name: "自动朗读答案" });
@@ -209,12 +209,19 @@ describe("PhraseBankApp", () => {
 
     await user.click(autoSpeak);
     await user.click(screen.getByRole("radio", { name: "英式英语" }));
-    resolveSecond();
-    rejectFirst(new Error("older save failed"));
-    await vi.waitFor(() => expect(repo.preferenceSaves).toHaveLength(2));
+    expect(pending).toHaveLength(1);
     expect(autoSpeak).not.toBeChecked();
     expect(screen.getByRole("radio", { name: "英式英语" })).toBeChecked();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    pending[0].resolve();
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    expect(pending[1].value).toEqual({ accent: "en-GB", autoSpeak: false });
+    pending[1].reject(new Error("latest save failed"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("已恢复上次设置");
+    expect(autoSpeak).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: "美式英语" })).toBeChecked();
+    expect(repo.preferences).toEqual({ accent: "en-US", autoSpeak: false });
   });
 
   it("does not request microphone permission from speech settings", async () => {

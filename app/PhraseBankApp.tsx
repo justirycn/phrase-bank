@@ -145,13 +145,13 @@ function Settings({ repository, categories, phrases, refresh, setNotice, setErro
   const mounted = useRef(true);
   const loadGeneration = useRef(0);
   const saveSequence = useRef(0);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const persistedPreferences = useRef<SpeechPreferences>(defaultSpeechPreferences);
-  const persistedSequence = useRef(0);
   useEffect(() => {
     const generation = ++loadGeneration.current;
     mounted.current = true;
     saveSequence.current = 0;
-    persistedSequence.current = 0;
+    saveQueue.current = Promise.resolve();
     persistedPreferences.current = defaultSpeechPreferences;
     repository.getSpeechPreferences()
       .then((preferences) => {
@@ -170,17 +170,18 @@ function Settings({ repository, categories, phrases, refresh, setNotice, setErro
     const generation = loadGeneration.current;
     const sequence = ++saveSequence.current;
     setSpeechSettings({ repository, preferences, loading: false });
-    void repository.saveSpeechPreferences(preferences)
-      .then(() => {
-        if (!mounted.current || loadGeneration.current !== generation || sequence < persistedSequence.current) return;
-        persistedSequence.current = sequence;
+    const persist = async () => {
+      try {
+        await repository.saveSpeechPreferences(preferences);
+        if (!mounted.current || loadGeneration.current !== generation) return;
         persistedPreferences.current = preferences;
-      })
-      .catch(() => {
+      } catch {
         if (!mounted.current || loadGeneration.current !== generation || sequence !== saveSequence.current) return;
         setSpeechSettings({ repository, preferences: persistedPreferences.current, loading: false });
         setError("语音偏好暂时无法保存，已恢复上次设置。");
-      });
+      }
+    };
+    saveQueue.current = saveQueue.current.then(persist, persist);
   };
   const addCategory = async () => { const error = validateCategoryName(name, categories.map((c) => c.name)); if (error) return setError(error); const now = new Date().toISOString(); await repository.saveCategory({ id: crypto.randomUUID(), name: name.trim(), isDefault: false, createdAt: now, updatedAt: now }); setName(""); await refresh(); setNotice("分类已添加"); };
   const exportData = async () => { const snapshot = await repository.exportSnapshot(); const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = backupFileName(); link.click(); URL.revokeObjectURL(url); setNotice("备份文件已导出"); };
