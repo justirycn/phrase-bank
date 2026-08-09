@@ -20,10 +20,18 @@ const cancelledMessage = "发音已取消";
 
 export class BrowserSpeechService {
   private current?: SpeechOperation;
+  private voices: SpeechSynthesisVoice[] = [];
+
+  constructor() {
+    if (typeof globalThis.speechSynthesis === "undefined") return;
+    this.refreshVoices();
+    globalThis.speechSynthesis.addEventListener?.("voiceschanged", this.refreshVoices);
+  }
 
   listVoices(): SpeechSynthesisVoice[] {
     if (typeof globalThis.speechSynthesis === "undefined") return [];
-    return globalThis.speechSynthesis.getVoices();
+    this.refreshVoices();
+    return this.voices;
   }
 
   speak(text: string, accent: EnglishAccent): Promise<void> {
@@ -39,13 +47,19 @@ export class BrowserSpeechService {
     synthesis.cancel();
 
     return new Promise<void>((resolve, reject) => {
+      this.refreshVoices();
+      const selectedVoice = selectVoice(this.voices, accent);
+      if (!selectedVoice) {
+        reject(new Error("英文语音尚未准备好，请稍后再试"));
+        return;
+      }
+
       const utterance = new globalThis.SpeechSynthesisUtterance(text);
       const operation: SpeechOperation = { utterance, settled: false, resolve, reject };
       this.current = operation;
 
       utterance.lang = accent;
-      const selectedVoice = selectVoice(synthesis.getVoices(), accent);
-      if (selectedVoice) utterance.voice = selectedVoice;
+      utterance.voice = selectedVoice;
       utterance.onend = () => this.settle(operation);
       utterance.onerror = () => this.settle(operation, new Error("发音播放失败，请稍后再试"));
 
@@ -67,6 +81,12 @@ export class BrowserSpeechService {
   private cancelCurrent(): void {
     if (this.current) this.settle(this.current, new Error(cancelledMessage));
   }
+
+  private refreshVoices = (): void => {
+    if (typeof globalThis.speechSynthesis === "undefined") return;
+    const available = globalThis.speechSynthesis.getVoices();
+    if (available.length > 0) this.voices = available;
+  };
 
   private settle(operation: SpeechOperation, error?: Error): void {
     if (operation.settled) return;

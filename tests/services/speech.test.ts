@@ -24,6 +24,58 @@ describe("selectVoice", () => {
 });
 
 describe("BrowserSpeechService", () => {
+  it("uses an English voice that arrives through voiceschanged", async () => {
+    let voices: SpeechSynthesisVoice[] = [];
+    let onVoicesChanged: EventListener | undefined;
+    const synthesis = {
+      getVoices: vi.fn(() => voices),
+      addEventListener: vi.fn((name: string, listener: EventListener) => {
+        if (name === "voiceschanged") onVoicesChanged = listener;
+      }),
+      cancel: vi.fn(),
+      speak: vi.fn((utterance: SpeechSynthesisUtterance) => utterance.onend?.({} as SpeechSynthesisEvent)),
+    };
+    class Utterance {
+      lang = "";
+      voice: SpeechSynthesisVoice | null = null;
+      onend: ((event: SpeechSynthesisEvent) => void) | null = null;
+      onerror: ((event: SpeechSynthesisErrorEvent) => void) | null = null;
+      constructor(public text: string) {}
+    }
+    vi.stubGlobal("speechSynthesis", synthesis);
+    vi.stubGlobal("SpeechSynthesisUtterance", Utterance);
+
+    const service = new BrowserSpeechService();
+    voices = [voice("en-US", "Samantha")];
+    onVoicesChanged?.(new Event("voiceschanged"));
+
+    await service.speak("Hello", "en-US");
+    expect(synthesis.speak.mock.calls[0][0].voice).toBe(voices[0]);
+  });
+
+  it("does not ask Safari to speak without an English voice", async () => {
+    const synthesis = {
+      getVoices: vi.fn(() => [voice("zh-CN")]),
+      addEventListener: vi.fn(),
+      cancel: vi.fn(),
+      speak: vi.fn(),
+    };
+    class Utterance {
+      lang = "";
+      voice: SpeechSynthesisVoice | null = null;
+      onend: ((event: SpeechSynthesisEvent) => void) | null = null;
+      onerror: ((event: SpeechSynthesisErrorEvent) => void) | null = null;
+      constructor(public text: string) {}
+    }
+    vi.stubGlobal("speechSynthesis", synthesis);
+    vi.stubGlobal("SpeechSynthesisUtterance", Utterance);
+
+    await expect(new BrowserSpeechService().speak("Hello", "en-US")).rejects.toThrow(
+      "英文语音尚未准备好，请稍后再试",
+    );
+    expect(synthesis.speak).not.toHaveBeenCalled();
+  });
+
   it("lists voices, cancels prior speech, and speaks with the requested accent", async () => {
     const voices = [voice("en-US")];
     const synthesis = {
@@ -64,7 +116,7 @@ describe("BrowserSpeechService", () => {
 
   it("rejects when the browser reports a speech error", async () => {
     const synthesis = {
-      getVoices: vi.fn(() => []),
+      getVoices: vi.fn(() => [voice("en-GB")]),
       cancel: vi.fn(),
       speak: vi.fn((utterance: SpeechSynthesisUtterance) => utterance.onerror?.({ error: "network" } as SpeechSynthesisErrorEvent)),
     };
@@ -84,7 +136,7 @@ describe("BrowserSpeechService", () => {
   it("rejects replaced speech and ignores its stale callbacks", async () => {
     const utterances: SpeechSynthesisUtterance[] = [];
     const synthesis = {
-      getVoices: vi.fn(() => []),
+      getVoices: vi.fn(() => [voice("en-US")]),
       cancel: vi.fn(),
       speak: vi.fn((utterance: SpeechSynthesisUtterance) => utterances.push(utterance)),
     };
@@ -115,7 +167,7 @@ describe("BrowserSpeechService", () => {
   });
 
   it("settles the active speech promise when cancelled without a browser callback", async () => {
-    const synthesis = { getVoices: vi.fn(() => []), cancel: vi.fn(), speak: vi.fn() };
+    const synthesis = { getVoices: vi.fn(() => [voice("en-US")]), cancel: vi.fn(), speak: vi.fn() };
     class Utterance {
       lang = "";
       voice: SpeechSynthesisVoice | null = null;
