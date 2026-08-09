@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SpeakingPractice } from "../../app/components/SpeakingPractice";
@@ -40,13 +41,19 @@ describe("SpeakingPractice", () => {
   });
 
   it("starts on pointer down and stops on pointer up", async () => {
-    const value = controller();
-    render(<SpeakingPractice controller={value} onHome={vi.fn()} onAgain={vi.fn()} />);
+    const stopRecording = vi.fn(async () => undefined);
+    function Harness() {
+      const [phase, setPhase] = useState<TrainingSessionController["phase"]>("prompt");
+      const value = controller({ phase, startRecording: vi.fn(async () => setPhase("recording")), stopRecording });
+      return <SpeakingPractice controller={value} onHome={vi.fn()} onAgain={vi.fn()} />;
+    }
+    render(<Harness />);
     const record = screen.getByRole("button", { name: "按住说英语" });
     record.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
-    await vi.waitFor(() => expect(value.startRecording).toHaveBeenCalledOnce());
+    await screen.findByRole("button", { name: "我说完了" });
+    expect(screen.getByRole("button", { name: "我说完了" })).toBe(record);
     record.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
-    await vi.waitFor(() => expect(value.stopRecording).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(stopRecording).toHaveBeenCalledOnce());
   });
 
   it("offers self assessment when microphone permission fails", async () => {
@@ -55,6 +62,7 @@ describe("SpeakingPractice", () => {
     render(<SpeakingPractice controller={value} onHome={vi.fn()} onAgain={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "按住说英语" }));
     expect(await screen.findByText("没有获得麦克风权限。你可以在浏览器设置中允许访问，或跳过录音继续练习。")).toBeVisible();
+    expect(document.querySelector(".speaking-practice")).toHaveClass("has-microphone-fallback");
     await user.click(screen.getByRole("button", { name: "跳过录音，继续自评" }));
     expect(value.revealForSelfAssessment).toHaveBeenCalledOnce();
   });

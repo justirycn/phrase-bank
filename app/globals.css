@@ -16,6 +16,7 @@
 @media (prefers-reduced-motion:reduce){.recording-status span{animation:none}}
 @media (max-width:390px){.speaking-practice{padding-inline:16px}.practice-actions{padding-inline:16px}.practice-prompt h1{font-size:2.35rem}.answer-tools button{font-size:.75rem;padding-inline:4px}}
 .speaking-practice.phase-answer{padding-bottom:calc(220px + env(safe-area-inset-bottom))}.speaking-practice.phase-prompt{padding-bottom:calc(190px + env(safe-area-inset-bottom))}.skip-recording{border:1px solid rgba(27,67,50,.18);border-radius:14px;background:#fff;color:var(--forest,#173f30)}.practice-duration{display:flex;align-items:center;justify-content:center;gap:7px}.weekly-focus{margin-top:18px;padding-top:16px;border-top:1px solid rgba(27,67,50,.12)}.weekly-focus h3{font-size:.92rem}.weekly-focus ul{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:8px}.weekly-focus li{display:grid;gap:3px;background:#f7f2e8;border-radius:12px;padding:12px;overflow-wrap:anywhere}.weekly-focus li span,.weekly-focus>p{font-size:.8rem;color:#657067}
+.speaking-practice.has-microphone-fallback{padding-bottom:calc(250px + env(safe-area-inset-bottom))}.weekly-focus li small{color:var(--coral,#d86b4b);font-size:.7rem}.practice-actions>.unknown-action{order:-1}
 * {
   box-sizing: border-box;
 }

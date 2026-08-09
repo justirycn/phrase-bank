@@ -106,6 +106,8 @@ describe("PhraseBankApp", () => {
     render(<PhraseBankApp repository={repo as never} />);
     expect(await screen.findByText("Could you clarify that?")).toBeVisible();
     expect(screen.getByText("你能说明一下吗？")).toBeVisible();
+    expect(screen.getByText("日常")).toBeVisible();
+    expect(screen.getByText("从模糊到掌握")).toBeVisible();
   });
 
   it("keeps the library, add and settings navigation", async () => {

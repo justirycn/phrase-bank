@@ -63,7 +63,8 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
   const dailySummary = summarizeDailyTraining(today, trainingEvents, trainingSessions);
   const trainingDays = [...new Set(trainingEvents.map((event) => shanghaiTimestampDate(event.occurredAt)))].map((date) => summarizeDailyTraining(date, trainingEvents, trainingSessions));
   const weeklySummary = summarizeWeek(trainingEvents, trainingSessions, mondayOf(today));
-  const weeklyFocus = weeklySummary.weakPhraseIds.flatMap((id) => { const phrase = phrases.find((item) => item.id === id); return phrase ? [{ id, english: phrase.english, chinese: phrase.chinese }] : []; });
+  const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
+  const weeklyFocus = weeklySummary.weakPhraseIds.flatMap((id) => { const phrase = phrases.find((item) => item.id === id); return phrase ? [{ id, english: phrase.english, chinese: phrase.chinese, categoryName: categoryNames.get(phrase.categoryId) ?? "未分类" }] : []; });
   const newIntroducedToday = new Set(trainingEvents.filter((event) => event.source === "new" && shanghaiTimestampDate(event.occurredAt) === today).map((event) => event.phraseId)).size;
 
   return <div className="app-shell">
