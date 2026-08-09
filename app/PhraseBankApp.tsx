@@ -2,16 +2,26 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppIcon } from "./components/AppIcon";
-import { Brand } from "./components/Brand";
-import type { Category, Phrase, PhraseInput, ReviewResult } from "./domain/types";
+import { SpeakingPractice } from "./components/SpeakingPractice";
+import { TrainingHome } from "./components/TrainingHome";
+import type { Category, Phrase, PhraseInput, ReviewResult, TrainingEvent, TrainingMode, TrainingSessionRecord } from "./domain/types";
 import { createNewPhrase } from "./domain/review";
+import { calculateStreak, summarizeDailyTraining, summarizeWeek } from "./domain/trainingStats";
 import { validateCategoryName, validatePhraseInput, type PhraseErrors } from "./domain/validation";
+import { useTrainingSession } from "./hooks/useTrainingSession";
+import { TemporaryRecorder } from "./services/recorder";
+import { BrowserSpeechService } from "./services/speech";
 import { backupFileName, parseBackup } from "./storage/backup";
 import { LocalPhraseRepository } from "./storage/indexedDbRepository";
+import type { PhraseRepository } from "./storage/repository";
 
-type Screen = "home" | "library" | "add" | "review" | "settings";
-type Repository = LocalPhraseRepository;
+type Screen = "home" | "library" | "add" | "review" | "practice" | "settings";
+type Repository = PhraseRepository;
 const defaultRepository = typeof window === "undefined" ? undefined : new LocalPhraseRepository();
+const defaultSpeech = typeof window === "undefined" ? undefined : new BrowserSpeechService();
+const defaultRecorder = typeof window === "undefined" ? undefined : new TemporaryRecorder();
+const shanghaiDate = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const mondayOf = (date: string) => { const value = new Date(`${date}T00:00:00.000Z`); value.setUTCDate(value.getUTCDate() - ((value.getUTCDay() + 6) % 7)); return value.toISOString().slice(0, 10); };
 
 const masteryText = ["未掌握", "有印象", "可以使用", "已自动化"];
 const formatDate = (iso: string) => new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(iso));
@@ -26,14 +36,18 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
   const [phrases, setPhrases] = useState<Phrase[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [due, setDue] = useState<Phrase[]>([]);
+  const [trainingEvents, setTrainingEvents] = useState<TrainingEvent[]>([]);
+  const [trainingSessions, setTrainingSessions] = useState<TrainingSessionRecord[]>([]);
+  const [trainingMode, setTrainingMode] = useState<TrainingMode>("standard");
+  const [trainingRun, setTrainingRun] = useState(0);
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
   const refresh = useCallback(async () => {
     if (!repo) return;
-    const [nextPhrases, nextCategories, nextDue] = await Promise.all([repo.listPhrases(), repo.listCategories(), repo.listDuePhrases()]);
-    setPhrases(nextPhrases); setCategories(nextCategories); setDue(nextDue);
+    const [nextPhrases, nextCategories, nextDue, nextEvents, snapshot] = await Promise.all([repo.listPhrases(), repo.listCategories(), repo.listDuePhrases(), repo.listTrainingEvents(), repo.exportSnapshot()]);
+    setPhrases(nextPhrases); setCategories(nextCategories); setDue(nextDue); setTrainingEvents(nextEvents); setTrainingSessions(snapshot.trainingSessions);
   }, [repo]);
 
   useEffect(() => {
@@ -42,19 +56,21 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
   }, [repo, refresh]);
 
   const go = (next: Screen) => { setNotice(""); setError(""); setScreen(next); window.scrollTo?.(0, 0); };
+  const startTraining = (mode: TrainingMode) => { setTrainingMode(mode); setTrainingRun((run) => run + 1); go("practice"); };
   if (loading) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
 
   return <div className="app-shell">
     <main className="app-main">
       {error && <div className="toast error" role="alert">{error}</div>}
       {notice && <div className="toast" role="status">{notice}</div>}
-      {screen === "home" && <Home phrases={phrases} dueCount={due.length} categories={categories} onReview={() => go("review")} onAdd={() => go("add")} />}
+      {screen === "home" && <TrainingHome dailySummary={summarizeDailyTraining(shanghaiDate(), trainingEvents, trainingSessions)} streak={calculateStreak([...new Set(trainingEvents.map((event) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date(event.occurredAt))))].map((date) => summarizeDailyTraining(date, trainingEvents, trainingSessions)), shanghaiDate())} weeklySummary={summarizeWeek(trainingEvents, trainingSessions, mondayOf(shanghaiDate()))} onStartStandard={() => startTraining("standard")} onStartQuick={() => startTraining("quick")} />}
       {screen === "library" && <Library phrases={phrases} categories={categories} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={async (input) => { if (!repo) return; await repo.savePhrase(createNewPhrase(input)); await refresh(); setNotice("已收入你的句库"); setScreen("library"); }} />}
       {screen === "review" && <Review phrases={due} onBack={() => go("home")} onGrade={async (id, result) => { if (!repo) return; await repo.submitReview(id, result); await refresh(); }} />}
+      {screen === "practice" && repo && defaultSpeech && defaultRecorder && <PracticeSession key={`${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} speech={defaultSpeech} recorder={defaultRecorder} onHome={async () => { await refresh(); go("home"); }} onAgain={() => setTrainingRun((run) => run + 1)} setError={setError} />}
       {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} refresh={refresh} setNotice={setNotice} setError={setError} />}
     </main>
-    {screen !== "review" && <nav className="bottom-nav" aria-label="主导航">
+    {screen !== "review" && screen !== "practice" && <nav className="bottom-nav" aria-label="主导航">
       <button className={screen === "home" ? "active" : ""} aria-current={screen === "home" ? "page" : undefined} onClick={() => go("home")}><span><AppIcon name="home" size={21} /></span>复习</button>
       <button className={screen === "library" ? "active" : ""} aria-current={screen === "library" ? "page" : undefined} onClick={() => go("library")}><span><AppIcon name="library" size={21} /></span>句库</button>
       <button className={screen === "add" ? "add-nav active" : "add-nav"} aria-label="添加" aria-current={screen === "add" ? "page" : undefined} onClick={() => go("add")}><span><AppIcon name="add" size={25} /></span>添加</button>
@@ -63,27 +79,16 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
   </div>;
 }
 
-function Home({ phrases, dueCount, categories, onReview, onAdd }: { phrases: Phrase[]; dueCount: number; categories: Category[]; onReview: () => void; onAdd: () => void }) {
-  const names = new Map(categories.map((c) => [c.id, c.name]));
-  const today = new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric", weekday: "long" }).formatToParts(new Date());
-  const date = today.filter((part) => part.type !== "weekday").map((part) => part.value).join("");
-  const weekday = today.find((part) => part.type === "weekday")?.value;
-  return <div className="home">
-    <header className="home-header"><Brand /><p className="date"><span>{date}</span><span>{weekday}</span></p></header>
-    <section className="home-practice">
-      <div className="eyebrow">TODAY’S PRACTICE</div>
-      <h1>{dueCount ? <>今天有 <em>{dueCount}</em> 条<br />语言块等你复习</> : <>今天的复习<br />已经完成了</>}</h1>
-      <p className="practice-copy">{dueCount ? "先想意思，再让英文自然浮现。" : "积累一点，明天继续让表达更自然。"}</p>
-      {dueCount ? <>
-        <div className="home-progress"><span>进度 0 / {dueCount}</span><i aria-hidden="true" /></div>
-        <button className="home-cta" aria-label="开始今日复习" onClick={onReview}><AppIcon name="library" size={22} />开始今日复习 <AppIcon name="forward" size={22} /></button>
-      </> : <button className="home-cta" aria-label="收藏新的表达" onClick={onAdd}>收藏新的表达 <AppIcon name="add" size={22} /></button>}
-    </section>
-    <section className="home-recent" aria-labelledby="recent-heading">
-      <div className="home-section-title"><h2 id="recent-heading">最近收藏</h2><button aria-label="添加最近收藏" onClick={onAdd}><AppIcon name="bookmark" size={22} /></button></div>
-      {phrases.length ? <div className="recent-list">{phrases.slice(0, 4).map((phrase) => <article className="phrase-row" key={phrase.id}><div><h3>{phrase.english}</h3><p>{phrase.chinese}</p><small>{names.get(phrase.categoryId)} · {formatDate(phrase.createdAt)}</small></div></article>)}</div> : <Empty title="从第一句话开始" detail="收藏你真正想说、将来会反复使用的英语表达。" action={<button className="secondary" onClick={onAdd}>添加第一条</button>} />}
-    </section>
-  </div>;
+function PracticeSession({ repository, mode, speech, recorder, onHome, onAgain, setError }: {
+  repository: PhraseRepository; mode: TrainingMode; speech: BrowserSpeechService; recorder: TemporaryRecorder;
+  onHome: () => Promise<void>; onAgain: () => void; setError: (message: string) => void;
+}) {
+  const controller = useTrainingSession({ repository, mode, speech, recorder });
+  const { finish, phase } = controller;
+  useEffect(() => {
+    if (phase === "complete") void finish().catch(() => setError("训练进度暂时无法保存，请稍后重试。"));
+  }, [finish, phase, setError]);
+  return <SpeakingPractice controller={controller} onHome={() => void controller.finish().then(onHome).catch(() => setError("训练进度暂时无法保存，请稍后重试。"))} onAgain={() => void controller.finish().then(onAgain).catch(() => setError("训练进度暂时无法保存，请稍后重试。"))} />;
 }
 
 function AddPhrase({ categories, onSave, onCancel }: { categories: Category[]; onSave: (input: PhraseInput) => Promise<void>; onCancel: () => void }) {

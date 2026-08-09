@@ -14,6 +14,7 @@ export interface TrainingSessionController {
   current?: TrainingCandidate;
   index: number;
   total: number;
+  activeSeconds: number;
   usedHint: boolean;
   recordingUrl?: string;
   startRecording(): Promise<void>;
@@ -52,6 +53,7 @@ export function useTrainingSession({
   const [phase, setPhase] = useState<TrainingPhase>("prompt");
   const [queue, setQueue] = useState<TrainingCandidate[]>([]);
   const [index, setIndex] = useState(0);
+  const [activeSeconds, setActiveSeconds] = useState(0);
   const [usedHint, setUsedHint] = useState(false);
   const [recordingUrl, setRecordingUrl] = useState<string>();
   const sessionRef = useRef<TrainingSessionRecord>();
@@ -156,6 +158,7 @@ export function useTrainingSession({
           sources: restored.map((item) => item.source),
         };
         checkpointRef.current = active.activeSeconds;
+        setActiveSeconds(active.activeSeconds);
         eventActiveBaseRef.current = events
           .filter((event) => event.sessionId === active.id)
           .reduce((sum, event) => sum + event.activeSeconds, 0);
@@ -203,6 +206,7 @@ export function useTrainingSession({
       };
       sessionRef.current = session;
       eventActiveBaseRef.current = 0;
+      setActiveSeconds(0);
       replaceQueue(selected);
       replaceIndex(0);
       if (selected.length === 0) setPhase("complete");
@@ -231,6 +235,7 @@ export function useTrainingSession({
         || tick - lastInteractionRef.current > IDLE_LIMIT_MS
       ) return;
       session.activeSeconds += delta / 1000;
+      setActiveSeconds(session.activeSeconds);
       if (session.activeSeconds - checkpointRef.current >= CHECKPOINT_SECONDS) {
         checkpointRef.current = session.activeSeconds;
         void persistSession().catch(() => {
@@ -418,6 +423,7 @@ export function useTrainingSession({
     current: queue[index],
     index,
     total: queue.length,
+    activeSeconds,
     usedHint,
     recordingUrl,
     startRecording,
