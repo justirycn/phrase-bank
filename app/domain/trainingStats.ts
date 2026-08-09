@@ -142,6 +142,10 @@ export function calculateStreak(
     secondsByDate.set(summary.date, (secondsByDate.get(summary.date) ?? 0) + summary.activeSeconds);
   }
 
+  const currentWeekStart = isoWeekKey(todayDate);
+  const lightDaysUsedThisWeek = [...secondsByDate.entries()].some(([date, activeSeconds]) =>
+    date >= currentWeekStart && activeSeconds >= 300 && activeSeconds < 1200) ? 1 : 0;
+
   const lightWeeks = new Set<string>();
   let current = 0;
   for (let cursor = todayDate; ; cursor = addCalendarDays(cursor, -1)) {
@@ -156,7 +160,7 @@ export function calculateStreak(
   }
   return {
     current,
-    lightDaysUsedThisWeek: lightWeeks.has(isoWeekKey(todayDate)) ? 1 : 0,
+    lightDaysUsedThisWeek,
   };
 }
 

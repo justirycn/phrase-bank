@@ -151,6 +151,13 @@ describe("calculateStreak", () => {
       day("2026-08-08", 1200),
     ], "2026-08-09")).toEqual({ current: 2, lightDaysUsedThisWeek: 0 });
   });
+
+  it("reports a current-week light day even when a later gap broke the streak", () => {
+    expect(calculateStreak([
+      day("2026-08-12", 1200),
+      day("2026-08-10", 300),
+    ], "2026-08-12")).toEqual({ current: 1, lightDaysUsedThisWeek: 1 });
+  });
 });
 
 describe("summarizeWeek", () => {
