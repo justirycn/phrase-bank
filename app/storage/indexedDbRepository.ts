@@ -51,6 +51,20 @@ function assertMonotonicLearningSession(current: LearningSessionRecord, next: Le
   }
 }
 
+function assertLearningSessionSave(current: LearningSessionRecord | undefined, next: LearningSessionRecord) {
+  if (!current) {
+    if (next.phase !== "study" || next.studyIndex !== 0 || next.testIndex !== 0 || next.completedAt !== undefined) {
+      throw new Error("新学习会话必须从学习阶段开始");
+    }
+    return;
+  }
+  assertMonotonicLearningSession(current, next);
+  if ((current.phase === "study" && next.phase === "test" && next.testIndex !== 0)
+    || (current.phase === "test" && next.testIndex > current.testIndex)) {
+    throw new Error("测试游标只能通过首次评价推进");
+  }
+}
+
 function unseenState(phraseId: string, updatedAt: string, unlockedAt?: string): PhraseLearningState {
   return { phraseId, stage: "unseen", consecutiveGood: 0, masteredDates: [], unlockedAt, updatedAt };
 }
@@ -231,12 +245,18 @@ export class LocalPhraseRepository implements PhraseRepository {
           await learningStore.delete(session.id);
           continue;
         }
-        await learningStore.put({
+        const studyIndex = cursorAfterDeletion(session.phraseIds, session.studyIndex, deletedIds);
+        const testIndex = cursorAfterDeletion(session.phraseIds, session.testIndex, deletedIds);
+        const reachesTestBoundary = session.phase === "study" && studyIndex === phraseIds.length;
+        const remapped: LearningSessionRecord = {
           ...session,
           phraseIds,
-          studyIndex: cursorAfterDeletion(session.phraseIds, session.studyIndex, deletedIds),
-          testIndex: cursorAfterDeletion(session.phraseIds, session.testIndex, deletedIds),
-        });
+          studyIndex,
+          testIndex: reachesTestBoundary ? 0 : testIndex,
+          phase: reachesTestBoundary ? "test" : session.phase,
+        };
+        assertValidLearningSession(remapped);
+        await learningStore.put(remapped);
       }
       await tx.done;
     } catch (error) {
@@ -278,11 +298,26 @@ export class LocalPhraseRepository implements PhraseRepository {
   async deleteCategoryAndMigrate(id: string, targetId: string) {
     if (id === targetId) throw new Error("请选择其他分类");
     const db = await this.db();
-    const tx = db.transaction(["phrases", "categories"], "readwrite");
-    const phrases = await tx.objectStore("phrases").index("by-category").getAll(id);
-    for (const phrase of phrases) await tx.objectStore("phrases").put({ ...phrase, categoryId: targetId, updatedAt: new Date().toISOString() });
-    await tx.objectStore("categories").delete(id);
-    await tx.done;
+    const tx = db.transaction(["phrases", "categories", "learningSessions"], "readwrite");
+    try {
+      if (!await tx.objectStore("categories").get(targetId)) throw new Error("找不到目标分类");
+      const timestamp = new Date().toISOString();
+      const phrases = await tx.objectStore("phrases").index("by-category").getAll(id);
+      for (const phrase of phrases) await tx.objectStore("phrases").put({ ...phrase, categoryId: targetId, updatedAt: timestamp });
+      const sessionStore = tx.objectStore("learningSessions");
+      for (const session of await sessionStore.getAll()) {
+        if (session.themeCategoryId !== id) continue;
+        const migrated = { ...session, themeCategoryId: targetId, updatedAt: timestamp };
+        assertValidLearningSession(migrated);
+        await sessionStore.put(migrated);
+      }
+      await tx.objectStore("categories").delete(id);
+      await tx.done;
+    } catch (error) {
+      try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }
+      try { await tx.done; } catch { /* Preserve the original error. */ }
+      throw error;
+    }
   }
   async saveTrainingEvent(event: TrainingEvent) { await (await this.db()).put("trainingEvents", event); }
   async listTrainingEvents(from?: Date, to?: Date) {
@@ -376,7 +411,7 @@ export class LocalPhraseRepository implements PhraseRepository {
         categoryIds: new Set(categoryKeys.map(String)),
       });
       const current = sessions.find(({ id }) => id === session.id);
-      if (current) assertMonotonicLearningSession(current, session);
+      assertLearningSessionSave(current, session);
       const otherActive = sessions.filter((existing) => existing.id !== session.id && !existing.completedAt);
       const resultingActiveCount = otherActive.length + (session.completedAt ? 0 : 1);
       if (resultingActiveCount > 1) throw new Error("已有进行中的学习会话");

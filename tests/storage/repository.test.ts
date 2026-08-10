@@ -28,6 +28,18 @@ describe("LocalPhraseRepository", () => {
     ...overrides,
   });
 
+  const beginTestingSession = async (session: LearningSessionRecord) => {
+    const initial: LearningSessionRecord = {
+      ...session,
+      phase: "study",
+      studyIndex: 0,
+      testIndex: 0,
+      completedAt: undefined,
+    };
+    await repo.saveLearningSession(initial);
+    await repo.saveLearningSession({ ...session, testIndex: 0, completedAt: undefined });
+  };
+
   it("installs, updates, retires, and rolls back validated system packages", async () => {
     await repo.installSystemContentPackage(contentPackage("v1"));
     expect(await repo.getActiveSystemContentVersion()).toBe("v1");
@@ -307,9 +319,13 @@ describe("LocalPhraseRepository", () => {
     await repo.savePhraseLearningState(state);
     expect(await repo.getPhraseLearningState(state.phraseId)).toEqual(state);
 
-    await repo.saveLearningSession(learningSession({ id: "older", testIndex: 1, completedAt: "2026-08-10T08:00:00.000Z" }));
-    await repo.saveLearningSession(learningSession({ id: "completed-newer", testIndex: 1, updatedAt: "2026-08-10T10:00:00.000Z", completedAt: "2026-08-10T10:00:00.000Z" }));
-    await repo.saveLearningSession(learningSession({ id: "newest", testIndex: 1, updatedAt: "2026-08-10T09:00:00.000Z" }));
+    const sessions = [
+      learningSession({ id: "older", testIndex: 1, completedAt: "2026-08-10T08:00:00.000Z" }),
+      learningSession({ id: "completed-newer", testIndex: 1, updatedAt: "2026-08-10T10:00:00.000Z", completedAt: "2026-08-10T10:00:00.000Z" }),
+      learningSession({ id: "newest", testIndex: 1, updatedAt: "2026-08-10T09:00:00.000Z" }),
+    ];
+    const beforeSessionImport = await repo.exportSnapshot();
+    await repo.importSnapshot({ ...beforeSessionImport, learningSessions: sessions }, "overwrite");
     expect((await repo.getActiveLearningSession())?.id).toBe("newest");
 
     const completedAt = new Date("2026-08-10T11:00:00.000Z");
@@ -331,7 +347,7 @@ describe("LocalPhraseRepository", () => {
   it("atomically submits the first learning review and advances the matching cursor once", async () => {
     const phraseId = "starter-daily-not-sure";
     const session = learningSession({ phraseIds: [phraseId] });
-    await repo.saveLearningSession(session);
+    await beginTestingSession(session);
     await repo.savePhraseLearningState({
       phraseId, stage: "learning", firstSeenAt: "2026-08-10T07:30:00.000Z",
       consecutiveGood: 0, masteredDates: [], unlockedAt: "2026-08-09T00:00:00.000Z",
@@ -364,7 +380,7 @@ describe("LocalPhraseRepository", () => {
   it("rejects missing phrases, missing sessions, and mismatched first-review cursors without progress", async () => {
     const phraseId = "starter-daily-not-sure";
     const session = learningSession({ phraseIds: [phraseId] });
-    await repo.saveLearningSession(session);
+    await beginTestingSession(session);
     const event: TrainingEvent = {
       id: "invalid-first-review", sessionId: session.id, phraseId, source: "new", result: "hard",
       usedPronunciationHint: false, recorded: false, activeSeconds: 1,
@@ -384,7 +400,7 @@ describe("LocalPhraseRepository", () => {
   it("rolls back review writes when persisting the proposed cursor fails", async () => {
     const phraseId = "starter-daily-not-sure";
     const session = learningSession({ phraseIds: [phraseId] });
-    await repo.saveLearningSession(session);
+    await beginTestingSession(session);
     const event: TrainingEvent = {
       id: "uncloneable-cursor", sessionId: session.id, phraseId, source: "new", result: "again",
       usedPronunciationHint: false, recorded: false, activeSeconds: 1,
@@ -457,7 +473,7 @@ describe("LocalPhraseRepository", () => {
   });
 
   it("includes learning sessions in v4 snapshots and preserves them across legacy imports", async () => {
-    const existing = learningSession({ id: "existing", updatedAt: "2026-08-10T08:00:00.000Z" });
+    const existing = learningSession({ id: "existing", phase: "study", studyIndex: 0, updatedAt: "2026-08-10T08:00:00.000Z" });
     await repo.saveLearningSession(existing);
     const exported = await repo.exportSnapshot();
     expect(exported).toMatchObject({ version: 4, learningSessions: [existing] });
@@ -469,7 +485,7 @@ describe("LocalPhraseRepository", () => {
     await repo.importSnapshot(legacy, "overwrite");
     expect((await repo.exportSnapshot()).learningSessions).toEqual([existing]);
 
-    const incoming = { ...existing, updatedAt: "2026-08-10T09:00:00.000Z", testIndex: 1 };
+    const incoming = { ...existing, updatedAt: "2026-08-10T09:00:00.000Z" };
     await repo.importSnapshot({ ...exported, learningSessions: [incoming] }, "skip");
     expect((await repo.getActiveLearningSession())?.updatedAt).toBe(existing.updatedAt);
     await repo.importSnapshot({ ...exported, learningSessions: [incoming] }, "overwrite");
@@ -489,16 +505,18 @@ describe("LocalPhraseRepository", () => {
       id: "delete-empty-training", mode: "quick", startedAt: occurredAt, updatedAt: occurredAt,
       phraseIds: [removed.id], sources: ["new"], currentIndex: 1, activeSeconds: 1,
     });
-    await repo.saveLearningSession({
+    const deleteLearning: LearningSessionRecord = {
       id: "delete-learning", date: "2026-08-10", themeCategoryId: "daily",
       phraseIds: [removed.id, kept.id], studyIndex: 2, testIndex: 1, phase: "test",
       startedAt: occurredAt, updatedAt: occurredAt,
-    });
-    await repo.saveLearningSession({
+    };
+    const deleteEmptyLearning: LearningSessionRecord = {
       id: "delete-empty-learning", date: "2026-08-10", themeCategoryId: "daily",
       phraseIds: [removed.id], studyIndex: 1, testIndex: 1, phase: "test",
       startedAt: occurredAt, updatedAt: occurredAt, completedAt: occurredAt,
-    });
+    };
+    const beforeLearningImport = await repo.exportSnapshot();
+    await repo.importSnapshot({ ...beforeLearningImport, learningSessions: [deleteLearning, deleteEmptyLearning] }, "overwrite");
     await repo.submitTrainingReview({
       id: "delete-event", sessionId: "delete-training", phraseId: removed.id, source: "new", result: "good",
       usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt,
@@ -522,10 +540,142 @@ describe("LocalPhraseRepository", () => {
     expect(parseBackup(JSON.stringify(snapshot))).toEqual(snapshot);
   });
 
+  it("moves a study session to the test boundary when deletion exhausts its remaining phrases", async () => {
+    const timestamp = "2026-08-10T08:00:00.000Z";
+    const first = { ...createNewPhrase({ english: "First", chinese: "第一个", categoryId: "daily" }, new Date(timestamp)), id: "delete-study-first" };
+    const current = { ...createNewPhrase({ english: "Current", chinese: "当前", categoryId: "daily" }, new Date(timestamp)), id: "delete-study-current" };
+    await repo.savePhrase(first);
+    await repo.savePhrase(current);
+    const initial: LearningSessionRecord = {
+      id: "delete-study-boundary", date: "2026-08-10", themeCategoryId: "daily",
+      phraseIds: [first.id, current.id], studyIndex: 0, testIndex: 0, phase: "study",
+      startedAt: timestamp, updatedAt: timestamp,
+    };
+    await repo.saveLearningSession(initial);
+    await repo.saveLearningSession({ ...initial, studyIndex: 1, updatedAt: "2026-08-10T08:01:00.000Z" });
+
+    await repo.deletePhrase(current.id);
+
+    const snapshot = await repo.exportSnapshot();
+    expect(snapshot.learningSessions).toContainEqual({
+      ...initial,
+      phraseIds: [first.id],
+      studyIndex: 1,
+      phase: "test",
+      updatedAt: "2026-08-10T08:01:00.000Z",
+    });
+    expect(parseBackup(JSON.stringify(snapshot))).toEqual(snapshot);
+  });
+
+  it("maps study and test cursors by the retained original prefix when deleting before, at, or after them", async () => {
+    const runStudyCase = async (name: string, deletedIndex: number, expectedIndex: number) => {
+      const isolated = new LocalPhraseRepository(`delete-study-${name}-${crypto.randomUUID()}`);
+      await isolated.initialize();
+      const timestamp = "2026-08-10T08:00:00.000Z";
+      const phrases = ["a", "b", "c"].map((suffix) => ({
+        ...createNewPhrase({ english: `${name}-${suffix}`, chinese: suffix, categoryId: "daily" }, new Date(timestamp)),
+        id: `${name}-${suffix}`,
+      }));
+      for (const phrase of phrases) await isolated.savePhrase(phrase);
+      const initial: LearningSessionRecord = {
+        id: `study-${name}`, date: "2026-08-10", themeCategoryId: "daily",
+        phraseIds: phrases.map(({ id }) => id), studyIndex: 0, testIndex: 0, phase: "study",
+        startedAt: timestamp, updatedAt: timestamp,
+      };
+      await isolated.saveLearningSession(initial);
+      await isolated.saveLearningSession({ ...initial, studyIndex: 1, updatedAt: "2026-08-10T08:01:00.000Z" });
+      await isolated.deletePhrase(phrases[deletedIndex].id);
+      const snapshot = await isolated.exportSnapshot();
+      expect(snapshot.learningSessions[0]).toMatchObject({
+        phraseIds: phrases.filter((_phrase, index) => index !== deletedIndex).map(({ id }) => id),
+        phase: "study", studyIndex: expectedIndex, testIndex: 0,
+      });
+      expect(parseBackup(JSON.stringify(snapshot))).toEqual(snapshot);
+    };
+    await runStudyCase("before", 0, 0);
+    await runStudyCase("current", 1, 1);
+    await runStudyCase("after", 2, 1);
+
+    const timestamp = "2026-08-10T08:00:00.000Z";
+    const phraseIds = ["starter-daily-not-sure", "starter-daily-take-time", "starter-daily-sounds-good"];
+    const testSession: LearningSessionRecord = {
+      id: "delete-test-cursor", date: "2026-08-10", themeCategoryId: "daily",
+      phraseIds, studyIndex: phraseIds.length, testIndex: 2, phase: "test",
+      startedAt: timestamp, updatedAt: timestamp,
+    };
+    const base = await repo.exportSnapshot();
+    await repo.importSnapshot({ ...base, learningSessions: [testSession] }, "overwrite");
+    await repo.deletePhrase(phraseIds[0]);
+    const snapshot = await repo.exportSnapshot();
+    expect(snapshot.learningSessions).toContainEqual({
+      ...testSession,
+      phraseIds: phraseIds.slice(1), studyIndex: 2, testIndex: 1,
+    });
+    expect(parseBackup(JSON.stringify(snapshot))).toEqual(snapshot);
+  });
+
+  it("migrates active and completed learning-session themes when deleting a category", async () => {
+    const timestamp = "2026-08-10T08:00:00.000Z";
+    const active: LearningSessionRecord = {
+      id: "category-active", date: "2026-08-10", themeCategoryId: "daily",
+      phraseIds: ["starter-daily-not-sure"], studyIndex: 0, testIndex: 0, phase: "study",
+      startedAt: timestamp, updatedAt: timestamp,
+    };
+    const completed: LearningSessionRecord = {
+      id: "category-completed", date: "2026-08-09", themeCategoryId: "daily",
+      phraseIds: ["starter-daily-take-time"], studyIndex: 1, testIndex: 1, phase: "test",
+      startedAt: "2026-08-09T08:00:00.000Z", updatedAt: "2026-08-09T09:00:00.000Z",
+      completedAt: "2026-08-09T09:00:00.000Z",
+    };
+    const base = await repo.exportSnapshot();
+    await repo.importSnapshot({ ...base, learningSessions: [active, completed] }, "overwrite");
+
+    await repo.deleteCategoryAndMigrate("daily", "travel");
+
+    const snapshot = await repo.exportSnapshot();
+    const migratedActive = snapshot.learningSessions.find(({ id }) => id === active.id);
+    const migratedCompleted = snapshot.learningSessions.find(({ id }) => id === completed.id);
+    expect(migratedActive).toMatchObject({ themeCategoryId: "travel" });
+    expect(migratedCompleted).toMatchObject({ themeCategoryId: "travel", completedAt: completed.completedAt });
+    expect(migratedActive?.updatedAt).toBe(migratedCompleted?.updatedAt);
+    expect(migratedActive?.updatedAt).not.toBe(timestamp);
+    expect(snapshot.categories.some(({ id }) => id === "daily")).toBe(false);
+    expect(snapshot.phrases.every(({ categoryId }) => snapshot.categories.some(({ id }) => id === categoryId))).toBe(true);
+    expect(parseBackup(JSON.stringify(snapshot))).toEqual(snapshot);
+  });
+
+  it("rolls back category migration when a stored learning session is invalid", async () => {
+    const dbName = `invalid-category-session-${crypto.randomUUID()}`;
+    const corruptRepo = new LocalPhraseRepository(dbName);
+    await corruptRepo.initialize();
+    const request = indexedDB.open(dbName, 4);
+    const rawDb = await new Promise<IDBDatabase>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const write = rawDb.transaction("learningSessions", "readwrite");
+    write.objectStore("learningSessions").put({
+      id: "invalid-category-session", date: "2026-08-10", themeCategoryId: "daily",
+      phraseIds: [], studyIndex: 0, testIndex: 0, phase: "study",
+      startedAt: "2026-08-10T08:00:00.000Z", updatedAt: "2026-08-10T08:00:00.000Z",
+    });
+    await new Promise<void>((resolve, reject) => {
+      write.oncomplete = () => resolve();
+      write.onerror = () => reject(write.error);
+      write.onabort = () => reject(write.error);
+    });
+    rawDb.close();
+
+    await expect(corruptRepo.deleteCategoryAndMigrate("daily", "travel")).rejects.toThrow("学习会话无效");
+
+    expect((await corruptRepo.getPhrase("starter-daily-not-sure"))?.categoryId).toBe("daily");
+    expect((await corruptRepo.listCategories()).map(({ id }) => id)).toContain("daily");
+  });
+
   it("rejects conflicting or incomplete pre-existing first-review events without changing data", async () => {
     const phraseId = "starter-daily-not-sure";
     const session = learningSession({ id: "preexisting-session", phraseIds: [phraseId] });
-    await repo.saveLearningSession(session);
+    await beginTestingSession(session);
     const event: TrainingEvent = {
       id: "preexisting-event", sessionId: session.id, phraseId, source: "new", result: "good",
       usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-10T08:05:00.000Z",
@@ -568,12 +718,17 @@ describe("LocalPhraseRepository", () => {
   });
 
   it("allows only one active learning session, including concurrent creates", async () => {
-    const first = learningSession({ id: "only-active" });
+    const first = learningSession({ id: "only-active", phase: "study", studyIndex: 0 });
     await repo.saveLearningSession(first);
-    await expect(repo.saveLearningSession(learningSession({ id: "rejected-active", updatedAt: "2026-08-10T09:00:00.000Z" }))).rejects.toThrow("已有进行中的学习会话");
+    await expect(repo.saveLearningSession(learningSession({ id: "rejected-active", phase: "study", studyIndex: 0, updatedAt: "2026-08-10T09:00:00.000Z" }))).rejects.toThrow("已有进行中的学习会话");
     expect(await repo.getActiveLearningSession()).toEqual(first);
-    await repo.saveLearningSession({ ...first, testIndex: 1, updatedAt: "2026-08-10T09:00:00.000Z" });
-    await repo.saveLearningSession(learningSession({ id: "completed-history", testIndex: 1, completedAt: "2026-08-10T08:00:00.000Z" }));
+    const checkpoint = { ...first, updatedAt: "2026-08-10T09:00:00.000Z" };
+    await repo.saveLearningSession(checkpoint);
+    const withActive = await repo.exportSnapshot();
+    await repo.importSnapshot({
+      ...withActive,
+      learningSessions: [checkpoint, learningSession({ id: "completed-history", testIndex: 1, completedAt: "2026-08-10T08:00:00.000Z" })],
+    }, "overwrite");
     const firstSnapshot = await repo.exportSnapshot();
     expect(firstSnapshot.learningSessions).toHaveLength(2);
     expect(parseBackup(JSON.stringify(firstSnapshot))).toEqual(firstSnapshot);
@@ -581,8 +736,8 @@ describe("LocalPhraseRepository", () => {
     const concurrent = new LocalPhraseRepository(`concurrent-${crypto.randomUUID()}`);
     await concurrent.initialize();
     const settled = await Promise.allSettled([
-      concurrent.saveLearningSession(learningSession({ id: "concurrent-a" })),
-      concurrent.saveLearningSession(learningSession({ id: "concurrent-b" })),
+      concurrent.saveLearningSession(learningSession({ id: "concurrent-a", phase: "study", studyIndex: 0 })),
+      concurrent.saveLearningSession(learningSession({ id: "concurrent-b", phase: "study", studyIndex: 0 })),
     ]);
     expect(settled.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
     const snapshot = await concurrent.exportSnapshot();
@@ -607,7 +762,7 @@ describe("LocalPhraseRepository", () => {
   });
 
   it("rejects skip and overwrite imports that would create a second active learning session", async () => {
-    const active = learningSession({ id: "existing-active" });
+    const active = learningSession({ id: "existing-active", phase: "study", studyIndex: 0 });
     await repo.saveLearningSession(active);
     const base = await repo.exportSnapshot();
     const incoming = { ...base, learningSessions: [learningSession({ id: "incoming-active", updatedAt: "2026-08-10T09:00:00.000Z" })] };
@@ -627,28 +782,71 @@ describe("LocalPhraseRepository", () => {
     await expect(repo.saveLearningSession({ ...learningSession({ id: "bad-phase" }), phase: "invalid" } as unknown as LearningSessionRecord)).rejects.toThrow("学习会话");
     await expect(repo.saveLearningSession(learningSession({ id: "missing-phrase", phraseIds: ["missing"] }))).rejects.toThrow("学习会话");
 
-    const active = learningSession({ id: "completion-boundary", testIndex: 0 });
+    const active = learningSession({ id: "completion-boundary", phase: "study", studyIndex: 0, testIndex: 0 });
     await repo.saveLearningSession(active);
     await expect(repo.completeLearningSession(active.id, new Date("2026-08-10T09:00:00.000Z"))).rejects.toThrow("学习会话尚未完成");
     expect((await repo.getActiveLearningSession())?.completedAt).toBeUndefined();
-    await repo.saveLearningSession({ ...active, testIndex: 1, updatedAt: "2026-08-10T08:30:00.000Z" });
+    const testing = { ...active, phase: "test" as const, studyIndex: 1, updatedAt: "2026-08-10T08:15:00.000Z" };
+    await repo.saveLearningSession(testing);
+    const event: TrainingEvent = {
+      id: "completion-boundary-review", sessionId: active.id, phraseId: active.phraseIds[0], source: "new", result: "good",
+      usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-10T08:30:00.000Z",
+    };
+    await repo.submitFirstLearningReview(event, { ...testing, testIndex: 1, updatedAt: event.occurredAt });
     await repo.completeLearningSession(active.id, new Date("2026-08-10T09:00:00.000Z"));
     const snapshot = await repo.exportSnapshot();
     expect(snapshot.learningSessions.find(({ id }) => id === active.id)?.completedAt).toBe("2026-08-10T09:00:00.000Z");
     expect(parseBackup(JSON.stringify(snapshot))).toEqual(snapshot);
   });
 
-  it("enforces monotonic same-id session updates and overwrite imports", async () => {
-    const initial = learningSession({ id: "monotonic", testIndex: 0 });
+  it("allows study checkpoints but reserves test cursor advancement for atomic first reviews", async () => {
+    const phraseId = "starter-daily-not-sure";
+    const initial: LearningSessionRecord = {
+      id: "guarded-test-progress", date: "2026-08-10", themeCategoryId: "daily",
+      phraseIds: [phraseId], studyIndex: 0, testIndex: 0, phase: "study",
+      startedAt: "2026-08-10T08:00:00.000Z", updatedAt: "2026-08-10T08:00:00.000Z",
+    };
     await repo.saveLearningSession(initial);
-    const advanced = { ...initial, testIndex: 1, updatedAt: "2026-08-10T09:00:00.000Z" };
+    const checkpoint = { ...initial, updatedAt: "2026-08-10T08:01:00.000Z" };
+    await repo.saveLearningSession(checkpoint);
+    const testing = { ...checkpoint, phase: "test" as const, studyIndex: 1, updatedAt: "2026-08-10T08:02:00.000Z" };
+    await repo.saveLearningSession(testing);
+
+    const beforeRejectedAdvance = await repo.exportSnapshot();
+    await expect(repo.saveLearningSession({ ...testing, testIndex: 1, updatedAt: "2026-08-10T08:03:00.000Z" }))
+      .rejects.toThrow("测试游标只能通过首次评价推进");
+    const afterRejectedAdvance = await repo.exportSnapshot();
+    expect({ ...afterRejectedAdvance, exportedAt: beforeRejectedAdvance.exportedAt }).toEqual(beforeRejectedAdvance);
+
+    const event: TrainingEvent = {
+      id: "guarded-first-review", sessionId: testing.id, phraseId, source: "new", result: "good",
+      usedPronunciationHint: false, recorded: false, activeSeconds: 2, occurredAt: "2026-08-10T08:04:00.000Z",
+    };
+    const reviewed = { ...testing, testIndex: 1, updatedAt: event.occurredAt };
+    await repo.submitFirstLearningReview(event, reviewed);
+    await repo.completeLearningSession(testing.id, new Date("2026-08-10T08:05:00.000Z"));
+    expect((await repo.exportSnapshot()).learningSessions.find(({ id }) => id === testing.id)).toMatchObject({
+      testIndex: 1, completedAt: "2026-08-10T08:05:00.000Z",
+    });
+
+    await expect(repo.saveLearningSession(learningSession({ id: "new-progressed-session" })))
+      .rejects.toThrow("新学习会话必须从学习阶段开始");
+    await expect(repo.saveLearningSession({
+      ...initial, id: "new-advanced-study", phraseIds: [phraseId, "starter-daily-take-time"], studyIndex: 1,
+    })).rejects.toThrow("新学习会话必须从学习阶段开始");
+  });
+
+  it("enforces monotonic same-id session updates and overwrite imports", async () => {
+    const phraseIds = ["starter-daily-not-sure", "starter-daily-take-time"];
+    const initial = learningSession({ id: "monotonic", phraseIds, phase: "study", studyIndex: 0, testIndex: 0 });
+    await repo.saveLearningSession(initial);
+    const advanced = { ...initial, studyIndex: 1, updatedAt: "2026-08-10T09:00:00.000Z" };
     await repo.saveLearningSession(advanced);
     const invalidUpdates: LearningSessionRecord[] = [
-      { ...advanced, testIndex: 0, updatedAt: "2026-08-10T10:00:00.000Z" },
-      { ...advanced, phraseIds: ["starter-daily-take-time"], updatedAt: "2026-08-10T10:00:00.000Z" },
+      { ...advanced, studyIndex: 0, updatedAt: "2026-08-10T10:00:00.000Z" },
+      { ...advanced, phraseIds: ["starter-daily-sounds-good", "starter-daily-take-time"], updatedAt: "2026-08-10T10:00:00.000Z" },
       { ...advanced, themeCategoryId: "travel", updatedAt: "2026-08-10T10:00:00.000Z" },
       { ...advanced, date: "2026-08-11", updatedAt: "2026-08-10T10:00:00.000Z" },
-      { ...advanced, phase: "study", studyIndex: 0, testIndex: 0, updatedAt: "2026-08-10T10:00:00.000Z" },
       { ...advanced, updatedAt: "2026-08-10T08:30:00.000Z" },
     ];
     for (const update of invalidUpdates) await expect(repo.saveLearningSession(update)).rejects.toThrow("学习会话进度不能回退");
@@ -657,14 +855,19 @@ describe("LocalPhraseRepository", () => {
     await expect(repo.importSnapshot({ ...exported, learningSessions: [initial] }, "overwrite")).rejects.toThrow("学习会话进度不能回退");
     expect(await repo.getActiveLearningSession()).toEqual(advanced);
 
-    await repo.saveLearningSession({ ...advanced, completedAt: "2026-08-10T10:00:00.000Z", updatedAt: "2026-08-10T10:00:00.000Z" });
-    await expect(repo.saveLearningSession({ ...advanced, updatedAt: "2026-08-10T11:00:00.000Z" })).rejects.toThrow("学习会话进度不能回退");
+    const testing = { ...advanced, phase: "test" as const, studyIndex: phraseIds.length, testIndex: 0, updatedAt: "2026-08-10T10:00:00.000Z" };
+    await repo.saveLearningSession(testing);
+    await expect(repo.saveLearningSession({ ...testing, phase: "study", studyIndex: 1, updatedAt: "2026-08-10T10:30:00.000Z" })).rejects.toThrow("学习会话进度不能回退");
+    const beforeCompletionImport = await repo.exportSnapshot();
+    const completed = { ...testing, testIndex: phraseIds.length, completedAt: "2026-08-10T11:00:00.000Z", updatedAt: "2026-08-10T11:00:00.000Z" };
+    await repo.importSnapshot({ ...beforeCompletionImport, learningSessions: [completed] }, "overwrite");
+    await expect(repo.saveLearningSession({ ...completed, completedAt: undefined, updatedAt: "2026-08-10T12:00:00.000Z" })).rejects.toThrow("学习会话进度不能回退");
   });
 
   it("catches up exactly one stale cursor when duplicate review evidence is complete", async () => {
     const phraseId = "starter-daily-not-sure";
     const session = learningSession({ id: "catch-up", phraseIds: [phraseId], testIndex: 0 });
-    await repo.saveLearningSession(session);
+    await beginTestingSession(session);
     const event: TrainingEvent = {
       id: "catch-up-event", sessionId: session.id, phraseId, source: "new", result: "good",
       usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-10T08:05:00.000Z",
