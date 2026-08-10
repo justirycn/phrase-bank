@@ -369,6 +369,41 @@ describe("useNewPhraseLearning", () => {
     await waitFor(() => expect(second.result.current.phase).toBe("study"));
   });
 
+  it("serializes retry behind an in-flight initial session creation", async () => {
+    const items = [phrase("first"), phrase("second")];
+    const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
+    const save = store.repository.saveLearningSession as ReturnType<typeof vi.fn>;
+    const persist = save.getMockImplementation()!;
+    let releaseCreation!: () => void;
+    const deferredCreation = new Promise<void>((resolve) => { releaseCreation = resolve; });
+    save.mockImplementationOnce(async (session: LearningSessionRecord) => {
+      await deferredCreation;
+      await persist(session);
+    });
+    const ids = vi.fn()
+      .mockReturnValueOnce("first-session")
+      .mockReturnValueOnce("second-session");
+    const voice = speech();
+    const hook = renderHook(() => useNewPhraseLearning({
+      repository: store.repository,
+      speech: voice,
+      now: () => new Date(timestamp),
+      idFactory: ids,
+    }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    act(() => hook.result.current.retry());
+    await waitFor(() => expect(store.repository.getActiveLearningSession).toHaveBeenCalledTimes(2));
+    releaseCreation();
+    await waitFor(() => expect(hook.result.current.phase).toBe("study"));
+    await act(async () => { await Promise.resolve(); });
+
+    expect(store.sessions).toHaveLength(1);
+    expect(store.sessions[0].id).toBe("first-session");
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(ids).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps speech failures non-blocking and replay reports a Chinese error", async () => {
     const items = [phrase("first"), phrase("second")];
     const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
@@ -449,6 +484,52 @@ describe("useNewPhraseLearning", () => {
     await act(async () => { rejectReplay(new Error("old speech failed")); await replaying; });
     expect(hook.result.current.error).toBeUndefined();
     expect(hook.result.current.busy).toBe(false);
+  });
+
+  it("keeps stale learning-state writes from contaminating a replacement repository", async () => {
+    const items = [phrase("first"), phrase("second")];
+    const oldStore = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
+    const newStore = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
+    const oldSave = oldStore.repository.savePhraseLearningState as ReturnType<typeof vi.fn>;
+    let rejectOld!: (reason: Error) => void;
+    const deferredOld = new Promise<void>((_resolve, reject) => { rejectOld = reject; });
+    oldSave.mockImplementationOnce(() => deferredOld);
+    const newSave = newStore.repository.savePhraseLearningState as ReturnType<typeof vi.fn>;
+    const persistNew = newSave.getMockImplementation()!;
+    let releaseNew!: () => void;
+    const deferredNew = new Promise<void>((resolve) => { releaseNew = resolve; });
+    newSave.mockImplementationOnce(async (state: PhraseLearningState) => {
+      await deferredNew;
+      await persistNew(state);
+    });
+    const voice = speech();
+    const { result, rerender } = renderHook(
+      ({ repository }) => useNewPhraseLearning({
+        repository,
+        speech: voice,
+        now: () => new Date(timestamp),
+        idFactory: () => "session",
+      }),
+      { initialProps: { repository: oldStore.repository } },
+    );
+    await waitFor(() => expect(oldSave).toHaveBeenCalledTimes(1));
+
+    rerender({ repository: newStore.repository });
+    await waitFor(() => expect(newSave).toHaveBeenCalledTimes(1));
+    await act(async () => { rejectOld(new Error("old repository failed")); await Promise.resolve(); });
+    const staleError = result.current.error;
+
+    let advancing!: Promise<void>;
+    act(() => { advancing = result.current.nextStudyPhrase(); });
+    releaseNew();
+    await act(() => advancing);
+
+    expect(staleError).toBeUndefined();
+    expect(newSave.mock.calls.filter(([state]) => state.phraseId === "first")).toHaveLength(1);
+    expect(newStore.states.find((state) => state.phraseId === "first")).toMatchObject({
+      stage: "learning", firstSeenAt: timestamp,
+    });
+    expect(result.current).toMatchObject({ phase: "study", studyIndex: 1, error: undefined });
   });
 
   it("does not reinitialize for an inline clock and actions use the latest clock", async () => {

@@ -44,6 +44,18 @@ interface PendingReview {
   nextSession: LearningSessionRecord;
 }
 
+interface LearningStateWrite {
+  repository: PhraseRepository;
+  generation: number;
+  state: PhraseLearningState;
+  promise: Promise<void>;
+}
+
+interface SessionCreation {
+  repository: PhraseRepository;
+  promise: Promise<LearningSessionRecord>;
+}
+
 const systemNow = () => new Date();
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const defaultPreferences: SpeechPreferences = { accent: "en-US", autoSpeak: true };
@@ -98,7 +110,8 @@ export function useNewPhraseLearning({
   const revealedRef = useRef(false);
   const sessionRef = useRef<LearningSessionRecord | undefined>(undefined);
   const learningStatesRef = useRef(new Map<string, PhraseLearningState>());
-  const stateWritesRef = useRef(new Map<string, Promise<void>>());
+  const stateWritesRef = useRef(new Map<string, LearningStateWrite>());
+  const sessionCreationRef = useRef<SessionCreation | undefined>(undefined);
   const preferencesRef = useRef<SpeechPreferences>(defaultPreferences);
   const pendingReviewRef = useRef<PendingReview | undefined>(undefined);
   const operationRef = useRef(false);
@@ -106,11 +119,13 @@ export function useNewPhraseLearning({
   const generationRef = useRef(0);
   const nowRef = useRef(now);
   const idFactoryRef = useRef(idFactory);
+  const repositoryRef = useRef(repository);
 
   useEffect(() => {
     nowRef.current = now;
     idFactoryRef.current = idFactory;
-  }, [idFactory, now]);
+    repositoryRef.current = repository;
+  }, [idFactory, now, repository]);
 
   const readNow = useCallback(() => nowRef.current(), []);
   const readId = useCallback(() => idFactoryRef.current(), []);
@@ -150,10 +165,31 @@ export function useNewPhraseLearning({
   }, []);
 
   const ensureLearningState = useCallback((item: Phrase): Promise<void> => {
-    const existingWrite = stateWritesRef.current.get(item.id);
-    if (existingWrite) return existingWrite;
+    const generation = generationRef.current;
     const current = learningStatesRef.current.get(item.id);
     if (current && current.stage !== "unseen") return Promise.resolve();
+
+    const trackWrite = (state: PhraseLearningState, source: Promise<void>): Promise<void> => {
+      const entry = {} as LearningStateWrite;
+      const promise = source.then(() => {
+        if (generation === generationRef.current && repositoryRef.current === repository) {
+          learningStatesRef.current.set(item.id, state);
+          if (stateWritesRef.current.get(item.id) === entry) stateWritesRef.current.delete(item.id);
+        }
+      }).catch((cause) => {
+        if (stateWritesRef.current.get(item.id) === entry) stateWritesRef.current.delete(item.id);
+        throw cause;
+      });
+      Object.assign(entry, { repository, generation, state, promise });
+      stateWritesRef.current.set(item.id, entry);
+      return promise;
+    };
+
+    const existingWrite = stateWritesRef.current.get(item.id);
+    if (existingWrite?.repository === repository) {
+      if (existingWrite.generation === generation) return existingWrite.promise;
+      return trackWrite(existingWrite.state, existingWrite.promise);
+    }
 
     const updatedAt = readNow().toISOString();
     const next: PhraseLearningState = {
@@ -165,14 +201,7 @@ export function useNewPhraseLearning({
       unlockedAt: current?.unlockedAt,
       updatedAt,
     };
-    const write = repository.savePhraseLearningState(next).then(() => {
-      learningStatesRef.current.set(item.id, next);
-    }).catch((cause) => {
-      stateWritesRef.current.delete(item.id);
-      throw cause;
-    });
-    stateWritesRef.current.set(item.id, write);
-    return write;
+    return trackWrite(next, repository.savePhraseLearningState(next));
   }, [readNow, repository]);
 
   const initialize = useCallback(() => {
@@ -188,7 +217,7 @@ export function useNewPhraseLearning({
     replaceRevealed(false);
 
     void (async () => {
-      const [phrases, states, active, categories, preferences] = await Promise.all([
+      const [phrases, states, initialActive, categories, preferences] = await Promise.all([
         repository.listPhrases(),
         repository.listPhraseLearningStates(),
         repository.getActiveLearningSession(),
@@ -198,8 +227,19 @@ export function useNewPhraseLearning({
       if (!mountedRef.current || generation !== generationRef.current) return;
       setAllPhrases(phrases);
       learningStatesRef.current = new Map(states.map((state) => [state.phraseId, state]));
-      stateWritesRef.current.clear();
       preferencesRef.current = preferences;
+
+      let active = initialActive;
+      const pendingCreation = sessionCreationRef.current;
+      if (!active && pendingCreation?.repository === repository) {
+        try {
+          active = await pendingCreation.promise;
+        } catch {
+          if (!mountedRef.current || generation !== generationRef.current) return;
+          active = await repository.getActiveLearningSession();
+        }
+        if (!mountedRef.current || generation !== generationRef.current) return;
+      }
 
       if (active) {
         const byId = new Map(phrases.map((item) => [item.id, item]));
@@ -293,7 +333,12 @@ export function useNewPhraseLearning({
         startedAt: started.toISOString(),
         updatedAt: started.toISOString(),
       };
-      await repository.saveLearningSession(session);
+      const creation: SessionCreation = {
+        repository,
+        promise: repository.saveLearningSession(session).then(() => session),
+      };
+      sessionCreationRef.current = creation;
+      await creation.promise;
       if (!mountedRef.current || generation !== generationRef.current) return;
       sessionRef.current = session;
       replaceQueue(selected);
@@ -323,13 +368,16 @@ export function useNewPhraseLearning({
   useEffect(() => {
     if (!current || (phase !== "study" && phase !== "test")) return;
     if (phase !== "study") return;
+    const generation = generationRef.current;
+    const targetRepository = repository;
     void ensureLearningState(current).catch(() => {
+      if (generation !== generationRef.current || repositoryRef.current !== targetRepository) return;
       setVisibleError("学习进度保存失败，请重试。");
     });
     if (preferencesRef.current.autoSpeak) {
       void speech.speak(current.english, preferencesRef.current.accent).catch(() => undefined);
     }
-  }, [current, ensureLearningState, phase, speech, setVisibleError]);
+  }, [current, ensureLearningState, phase, repository, speech, setVisibleError]);
 
   const replay = useCallback(async () => {
     const generation = generationRef.current;
