@@ -103,6 +103,34 @@ export function normalizeLegacyBackup(backup: BackupEnvelope): BackupEnvelopeV4 
   };
 }
 
+export function validateLearningSession(
+  session: LearningSessionRecord,
+  references?: { categoryIds: ReadonlySet<string>; phraseIds: ReadonlySet<string> },
+) {
+  return Boolean(session.id?.trim())
+    && validDay(session.date)
+    && Boolean(session.themeCategoryId?.trim())
+    && (!references || references.categoryIds.has(session.themeCategoryId))
+    && Array.isArray(session.phraseIds) && session.phraseIds.length > 0
+    && session.phraseIds.every((id) => Boolean(id?.trim()) && (!references || references.phraseIds.has(id)))
+    && new Set(session.phraseIds).size === session.phraseIds.length
+    && validIndex(session.studyIndex) && session.studyIndex <= session.phraseIds.length
+    && validIndex(session.testIndex) && session.testIndex <= session.phraseIds.length
+    && (session.phase === "study" || session.phase === "test")
+    && validDate(session.startedAt) && validDate(session.updatedAt)
+    && (session.completedAt === undefined || validDate(session.completedAt))
+    && (session.phase !== "study" || (session.completedAt === undefined && session.testIndex === 0 && session.studyIndex < session.phraseIds.length))
+    && (session.phase !== "test" || session.studyIndex === session.phraseIds.length)
+    && (session.completedAt === undefined || (session.phase === "test" && session.studyIndex === session.phraseIds.length && session.testIndex === session.phraseIds.length));
+}
+
+export function assertValidLearningSession(
+  session: LearningSessionRecord,
+  references?: { categoryIds: ReadonlySet<string>; phraseIds: ReadonlySet<string> },
+) {
+  if (!validateLearningSession(session, references)) throw new Error("学习会话无效");
+}
+
 function invalidLearningState(state: LegacyLearningState, phraseIds: Set<string>) {
   if (!phraseIds.has(state.phraseId) || !stages.has(state.stage as string)
     || !validIndex(state.consecutiveGood)
@@ -159,19 +187,8 @@ export function parseBackup(raw: string): BackupEnvelopeV4 {
 
   const learningSessions = backup.version === 4 ? backup.learningSessions : [];
   if (!Array.isArray(learningSessions)) throw new Error("备份缺少学习会话");
-  const invalidLearningSession = (session: LearningSessionRecord) => !session.id?.trim()
-    || !validDay(session.date) || !categoryIds.has(session.themeCategoryId)
-    || !Array.isArray(session.phraseIds) || session.phraseIds.length === 0 || session.phraseIds.some((id) => !phraseIds.has(id))
-    || new Set(session.phraseIds).size !== session.phraseIds.length
-    || !validIndex(session.studyIndex) || session.studyIndex > session.phraseIds.length
-    || !validIndex(session.testIndex) || session.testIndex > session.phraseIds.length
-    || (session.phase !== "study" && session.phase !== "test")
-    || !validDate(session.startedAt) || !validDate(session.updatedAt)
-    || (session.completedAt !== undefined && !validDate(session.completedAt))
-    || (session.phase === "study" && (session.completedAt !== undefined || session.testIndex !== 0 || session.studyIndex >= session.phraseIds.length))
-    || (session.phase === "test" && session.studyIndex !== session.phraseIds.length)
-    || (session.completedAt !== undefined && (session.phase !== "test" || session.studyIndex !== session.phraseIds.length || session.testIndex !== session.phraseIds.length));
-  if (learningSessions.some(invalidLearningSession) || new Set(learningSessions.map(({ id }) => id)).size !== learningSessions.length) throw new Error("备份包含无效的学习会话");
+  const references = { categoryIds, phraseIds };
+  if (learningSessions.some((session) => !validateLearningSession(session, references)) || new Set(learningSessions.map(({ id }) => id)).size !== learningSessions.length) throw new Error("备份包含无效的学习会话");
   if (learningSessions.filter(({ completedAt }) => completedAt === undefined).length > 1) throw new Error("备份包含多个进行中的学习会话");
 
   const sessionIds = new Set([...trainingSessions.map(({ id }) => id), ...learningSessions.map(({ id }) => id)]);

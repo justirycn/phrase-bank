@@ -5,7 +5,7 @@ import { personalPhraseDefaults, validateSystemContentPackage } from "../domain/
 import { applyLearningResult, nextExampleToUnlock } from "../domain/learningProgress";
 import { defaultCategories } from "./seed";
 import { STARTER_PHRASES } from "./starterPhrases";
-import { normalizeLegacyBackup, normalizeLegacyLearningState } from "./backup";
+import { assertValidLearningSession, normalizeLegacyBackup, normalizeLegacyLearningState } from "./backup";
 import type { PhraseRepository } from "./repository";
 
 interface PhraseBankDb extends DBSchema {
@@ -33,6 +33,22 @@ function sameTrainingEvent(left: TrainingEvent, right: TrainingEvent) {
 
 function samePhraseIds(left: string[], right: string[]) {
   return left.length === right.length && left.every((id, index) => id === right[index]);
+}
+
+function assertSameLearningSessionIdentity(current: LearningSessionRecord, next: LearningSessionRecord) {
+  if (current.id !== next.id || current.date !== next.date || current.themeCategoryId !== next.themeCategoryId
+    || current.startedAt !== next.startedAt || !samePhraseIds(current.phraseIds, next.phraseIds)) {
+    throw new Error("学习会话进度不能回退");
+  }
+}
+
+function assertMonotonicLearningSession(current: LearningSessionRecord, next: LearningSessionRecord) {
+  assertSameLearningSessionIdentity(current, next);
+  if ((current.phase === "test" && next.phase === "study")
+    || next.studyIndex < current.studyIndex || next.testIndex < current.testIndex
+    || next.updatedAt < current.updatedAt || (current.completedAt !== undefined && next.completedAt === undefined)) {
+    throw new Error("学习会话进度不能回退");
+  }
 }
 
 function unseenState(phraseId: string, updatedAt: string, unlockedAt?: string): PhraseLearningState {
@@ -347,10 +363,21 @@ export class LocalPhraseRepository implements PhraseRepository {
   async savePhraseLearningState(state: PhraseLearningState) { await (await this.db()).put("phraseLearningState", state); }
   async saveLearningSession(session: LearningSessionRecord) {
     const db = await this.db();
-    const tx = db.transaction("learningSessions", "readwrite");
+    const tx = db.transaction(["learningSessions", "phrases", "categories"], "readwrite");
     try {
       const store = tx.objectStore("learningSessions");
-      const otherActive = (await store.getAll()).filter((existing) => existing.id !== session.id && !existing.completedAt);
+      const [sessions, phraseKeys, categoryKeys] = await Promise.all([
+        store.getAll(),
+        tx.objectStore("phrases").getAllKeys(),
+        tx.objectStore("categories").getAllKeys(),
+      ]);
+      assertValidLearningSession(session, {
+        phraseIds: new Set(phraseKeys.map(String)),
+        categoryIds: new Set(categoryKeys.map(String)),
+      });
+      const current = sessions.find(({ id }) => id === session.id);
+      if (current) assertMonotonicLearningSession(current, session);
+      const otherActive = sessions.filter((existing) => existing.id !== session.id && !existing.completedAt);
       const resultingActiveCount = otherActive.length + (session.completedAt ? 0 : 1);
       if (resultingActiveCount > 1) throw new Error("已有进行中的学习会话");
       await store.put(session);
@@ -371,14 +398,21 @@ export class LocalPhraseRepository implements PhraseRepository {
     const store = tx.objectStore("learningSessions");
     const session = await store.get(id);
     if (!session) throw new Error("找不到学习会话");
+    if (session.phase !== "test" || session.studyIndex !== session.phraseIds.length || session.testIndex !== session.phraseIds.length) {
+      throw new Error("学习会话尚未完成");
+    }
     const timestamp = completedAt.toISOString();
-    await store.put({ ...session, completedAt: timestamp, updatedAt: timestamp });
+    const completed = { ...session, completedAt: timestamp, updatedAt: timestamp };
+    assertValidLearningSession(completed);
+    assertMonotonicLearningSession(session, completed);
+    await store.put(completed);
     await tx.done;
   }
   async submitFirstLearningReview(event: TrainingEvent, nextSession: LearningSessionRecord) {
     const db = await this.db();
     const tx = db.transaction(["trainingEvents", "phrases", "reviewLogs", "phraseLearningState", "learningSessions"], "readwrite");
     try {
+      assertValidLearningSession(nextSession);
       const eventStore = tx.objectStore("trainingEvents");
       const phraseStore = tx.objectStore("phrases");
       const sessionStore = tx.objectStore("learningSessions");
@@ -392,19 +426,29 @@ export class LocalPhraseRepository implements PhraseRepository {
           stateStore.get(event.phraseId),
           tx.objectStore("reviewLogs").index("by-phrase").getAll(event.phraseId),
         ]);
-        const cursorRecorded = session?.phase === "test" && samePhraseIds(session.phraseIds, nextSession.phraseIds)
-          && nextSession.testIndex > 0 && nextSession.phraseIds[nextSession.testIndex - 1] === event.phraseId
-          && session.testIndex >= nextSession.testIndex;
+        if (session) assertSameLearningSessionIdentity(session, nextSession);
+        const nextPositionMatches = nextSession.phase === "test" && nextSession.testIndex > 0
+          && nextSession.phraseIds[nextSession.testIndex - 1] === event.phraseId;
         const stateRecorded = (state?.stage === "learned" || state?.stage === "mastered")
           && state.firstTestedAt === event.occurredAt && state.firstResult === event.result;
         const scheduleRecorded = phrase?.lastReviewedAt !== undefined && phrase.lastReviewedAt >= event.occurredAt
           && logs.some((log) => log.reviewedAt === event.occurredAt && log.result === event.result);
-        if (!cursorRecorded || !stateRecorded || !scheduleRecorded) throw new Error("首次测试记录状态不一致");
+        if (!session || !nextPositionMatches || !stateRecorded || !scheduleRecorded) throw new Error("首次测试记录状态不一致");
+        if (session.phase === "test" && session.testIndex >= nextSession.testIndex) {
+          await tx.done;
+          return;
+        }
+        const canCatchUp = session.phase === "test" && session.testIndex + 1 === nextSession.testIndex
+          && session.phraseIds[session.testIndex] === event.phraseId;
+        if (!canCatchUp) throw new Error("首次测试记录状态不一致");
+        assertMonotonicLearningSession(session, nextSession);
+        await sessionStore.put(nextSession);
         await tx.done;
         return;
       }
       const phrase = await phraseStore.get(event.phraseId);
       const session = await sessionStore.get(event.sessionId);
+      if (session) assertMonotonicLearningSession(session, nextSession);
       const cursorMatches = phrase && session
         && nextSession.id === event.sessionId
         && session.id === event.sessionId
@@ -508,21 +552,49 @@ export class LocalPhraseRepository implements PhraseRepository {
     const normalized = normalizeLegacyBackup(snapshot);
     const stores = ["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions", "phraseLearningState", "learningSessions", "metadata"] as const;
     const tx = db.transaction(stores, "readwrite");
-    const put = async <S extends typeof stores[number]>(store: S, records: PhraseBankDb[S]["value"][]) => {
-      for (const record of records) {
-        const recordKey = "phraseId" in record && store === "phraseLearningState" ? record.phraseId : "id" in record ? record.id : undefined;
-        if (policy === "skip" && recordKey !== undefined && await tx.objectStore(store).get(recordKey)) continue;
-        await tx.objectStore(store).put(record as never);
+    try {
+      const [existingCategories, existingPhrases, existingLearningSessions] = await Promise.all([
+        tx.objectStore("categories").getAllKeys(),
+        tx.objectStore("phrases").getAllKeys(),
+        tx.objectStore("learningSessions").getAll(),
+      ]);
+      const references = {
+        categoryIds: new Set([...existingCategories.map(String), ...normalized.categories.map(({ id }) => id)]),
+        phraseIds: new Set([...existingPhrases.map(String), ...normalized.phrases.map(({ id }) => id)]),
+      };
+      const finalLearningSessions = new Map(existingLearningSessions.map((session) => [session.id, session]));
+      for (const incoming of normalized.learningSessions) {
+        assertValidLearningSession(incoming, references);
+        const current = finalLearningSessions.get(incoming.id);
+        if (current && policy === "skip") continue;
+        if (current) assertMonotonicLearningSession(current, incoming);
+        finalLearningSessions.set(incoming.id, incoming);
       }
-    };
-    await put("categories", normalized.categories);
-    await put("phrases", normalized.phrases);
-    await put("reviewLogs", normalized.reviewLogs);
-    await put("trainingEvents", normalized.trainingEvents);
-    await put("trainingSessions", normalized.trainingSessions);
-    await put("phraseLearningState", normalized.phraseLearningStates);
-    await put("learningSessions", normalized.learningSessions);
-    if (normalized.activeSystemContentVersion) await tx.objectStore("metadata").put({ key: "activeSystemContentVersion", value: normalized.activeSystemContentVersion });
-    await tx.done;
+      for (const session of finalLearningSessions.values()) assertValidLearningSession(session, references);
+      if ([...finalLearningSessions.values()].filter(({ completedAt }) => completedAt === undefined).length > 1) {
+        throw new Error("已有进行中的学习会话，无法导入");
+      }
+
+      const put = async <S extends typeof stores[number]>(store: S, records: PhraseBankDb[S]["value"][]) => {
+        for (const record of records) {
+          const recordKey = "phraseId" in record && store === "phraseLearningState" ? record.phraseId : "id" in record ? record.id : undefined;
+          if (policy === "skip" && recordKey !== undefined && await tx.objectStore(store).get(recordKey)) continue;
+          await tx.objectStore(store).put(record as never);
+        }
+      };
+      await put("categories", normalized.categories);
+      await put("phrases", normalized.phrases);
+      await put("reviewLogs", normalized.reviewLogs);
+      await put("trainingEvents", normalized.trainingEvents);
+      await put("trainingSessions", normalized.trainingSessions);
+      await put("phraseLearningState", normalized.phraseLearningStates);
+      await put("learningSessions", normalized.learningSessions);
+      if (normalized.activeSystemContentVersion) await tx.objectStore("metadata").put({ key: "activeSystemContentVersion", value: normalized.activeSystemContentVersion });
+      await tx.done;
+    } catch (error) {
+      try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }
+      try { await tx.done; } catch { /* Preserve the original error. */ }
+      throw error;
+    }
   }
 }
