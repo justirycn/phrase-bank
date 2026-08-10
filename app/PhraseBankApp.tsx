@@ -73,6 +73,25 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
 
   const go = (next: Screen) => { setNotice(""); setError(""); setScreen(next); window.scrollTo?.(0, 0); };
   const startTraining = (mode: TrainingMode) => { setTrainingMode(mode); setTrainingRun((run) => run + 1); go("practice"); };
+  const saveAddedPhrase = useCallback(async (input: PhraseInput, learnFirst: boolean): Promise<AddSaveResult> => {
+    if (!repo) throw new Error("repository unavailable");
+    const phrase = createNewPhrase(input);
+    await repo.savePhrase(phrase);
+    if (learnFirst) return { status: "saved" };
+    const savedAt = new Date().toISOString();
+    const state: PhraseLearningState = { phraseId: phrase.id, stage: "learned", firstSeenAt: savedAt, firstTestedAt: savedAt, consecutiveGood: 0, masteredDates: [], updatedAt: savedAt };
+    try { await repo.savePhraseLearningState(state); return { status: "saved" }; }
+    catch { return { status: "partial", state }; }
+  }, [repo]);
+  const retryAddedPhraseState = useCallback(async (state: PhraseLearningState) => {
+    if (!repo) throw new Error("repository unavailable");
+    await repo.savePhraseLearningState(state);
+  }, [repo]);
+  const completeAddedPhrase = useCallback(async () => {
+    try { await refresh(); } catch { setError("句子已保存，但列表暂时无法刷新。"); }
+    setNotice("已收入你的句库");
+    setScreen("library");
+  }, [refresh]);
   if (loading) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
   const today = shanghaiDate();
   const dailySummary = summarizeDailyTraining(today, trainingEvents, trainingSessions);
@@ -98,7 +117,7 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
       {notice && <div className="toast" role="status">{notice}</div>}
       {screen === "home" && <TrainingHome dailySummary={dailySummary} streak={calculateStreak(trainingDays, today)} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} activeLearning={Boolean(activeLearningSession)} activeRemaining={activeRemaining} dueCount={due.length} practiceCount={learnedEligibleCount} onStartLearning={() => go("learn")} onStartStandard={() => startTraining("standard")} onStartQuick={() => startTraining("quick")} />}
       {screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
-      {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onRetryState={async (state) => { if (!repo) throw new Error("repository unavailable"); await repo.savePhraseLearningState(state); try { await refresh(); } catch { setError("句子已保存，但列表暂时无法刷新。"); } setNotice("已收入你的句库"); setScreen("library"); }} onSave={async (input, learnFirst) => { if (!repo) throw new Error("repository unavailable"); const phrase = createNewPhrase(input); await repo.savePhrase(phrase); const finish = async () => { try { await refresh(); } catch { setError("句子已保存，但列表暂时无法刷新。"); } setNotice("已收入你的句库"); setScreen("library"); }; if (!learnFirst) { const savedAt = new Date().toISOString(); const state: PhraseLearningState = { phraseId: phrase.id, stage: "learned", firstSeenAt: savedAt, firstTestedAt: savedAt, consecutiveGood: 0, masteredDates: [], updatedAt: savedAt }; try { await repo.savePhraseLearningState(state); } catch { void refresh().catch(() => undefined); return { status: "partial" as const, state }; } } await finish(); return { status: "saved" as const }; }} />}
+      {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={saveAddedPhrase} onRetryState={retryAddedPhraseState} onComplete={completeAddedPhrase} />}
       {screen === "learn" && repo && defaultSpeech && <LearningSession repository={repo} speech={defaultSpeech} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}
       {screen === "review" && <Review phrases={due} onBack={() => go("home")} onGrade={async (id, result) => { if (!repo) return; await repo.submitReview(id, result); await refresh(); }} />}
       {screen === "practice" && repo && defaultSpeech && defaultRecorder && <PracticeSession key={`${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} speech={defaultSpeech} recorder={defaultRecorder} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => { setTrainingRun((run) => run + 1); void refresh().catch(() => setError("本地数据暂时无法刷新，请稍后再试。")); }} setError={setError} />}
@@ -132,7 +151,7 @@ function PracticeSession({ repository, mode, newIntroducedToday, speech, recorde
 
 type AddSaveResult = { status: "saved" } | { status: "partial"; state: PhraseLearningState };
 
-function AddPhrase({ categories, onSave, onRetryState, onCancel }: { categories: Category[]; onSave: (input: PhraseInput, learnFirst: boolean) => Promise<AddSaveResult>; onRetryState: (state: PhraseLearningState) => Promise<void>; onCancel: () => void }) {
+function AddPhrase({ categories, onSave, onRetryState, onComplete, onCancel }: { categories: Category[]; onSave: (input: PhraseInput, learnFirst: boolean) => Promise<AddSaveResult>; onRetryState: (state: PhraseLearningState) => Promise<void>; onComplete: () => Promise<void>; onCancel: () => void }) {
   const [input, setInput] = useState<PhraseInput>({ english: "", chinese: "", categoryId: categories[0]?.id ?? "daily", personalExample: "", sourceNote: "" });
   const [errors, setErrors] = useState<PhraseErrors>({});
   const [more, setMore] = useState(false);
@@ -143,10 +162,27 @@ function AddPhrase({ categories, onSave, onRetryState, onCancel }: { categories:
   const operationRef = useRef<symbol>();
   const partialRef = useRef<PhraseLearningState>();
   const mountedRef = useRef(true);
+  /* eslint-disable react-hooks/refs -- Handler scope must invalidate pending work synchronously during render, before effects run. */
+  const scopeRef = useRef({ onSave, onRetryState, onComplete });
+  const scopeGenerationRef = useRef(0);
+  if (scopeRef.current.onSave !== onSave || scopeRef.current.onRetryState !== onRetryState || scopeRef.current.onComplete !== onComplete) {
+    scopeRef.current = { onSave, onRetryState, onComplete };
+    scopeGenerationRef.current += 1;
+    operationRef.current = undefined;
+  }
+  /* eslint-enable react-hooks/refs */
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+  useEffect(() => {
+    const scope = scopeGenerationRef.current;
+    queueMicrotask(() => {
+      if (!mountedRef.current || scopeGenerationRef.current !== scope || operationRef.current) return;
+      setSaving(false);
+      setSaveError(partialRef.current ? "句子已保存，但设置为已学习失败，目前按未学习处理。" : "");
+    });
+  }, [onComplete, onRetryState, onSave]);
   const field = (key: keyof PhraseInput, value: string) => setInput((old) => ({ ...old, [key]: value }));
-  const submit = async (event: React.FormEvent) => { event.preventDefault(); if (operationRef.current || partialRef.current) return; const token = Symbol("phrase-save"); operationRef.current = token; setSaving(true); const next = validatePhraseInput(input); setErrors(next); if (Object.keys(next).length) { operationRef.current = undefined; setSaving(false); return; } setSaveError(""); try { const result = await onSave(input, learnFirst); if (result.status === "partial" && mountedRef.current && operationRef.current === token) { partialRef.current = result.state; setPartialState(result.state); setSaveError("句子已保存，但设置为已学习失败，目前按未学习处理。"); } } catch { if (mountedRef.current && operationRef.current === token) setSaveError("句子保存失败，请检查本地存储后重试。"); } finally { if (operationRef.current === token) { operationRef.current = undefined; if (mountedRef.current) setSaving(false); } } };
-  const retryState = async () => { if (operationRef.current || !partialRef.current) return; const token = Symbol("state-retry"); const state = partialRef.current; operationRef.current = token; setSaving(true); setSaveError(""); try { await onRetryState(state); } catch { if (mountedRef.current && operationRef.current === token) setSaveError("已保存句子，但设置为已学习仍然失败，请重试。"); } finally { if (operationRef.current === token) { operationRef.current = undefined; if (mountedRef.current) setSaving(false); } } };
+  const submit = async (event: React.FormEvent) => { event.preventDefault(); if (operationRef.current || partialRef.current) return; const token = Symbol("phrase-save"); const scope = scopeGenerationRef.current; operationRef.current = token; setSaving(true); const next = validatePhraseInput(input); setErrors(next); if (Object.keys(next).length) { operationRef.current = undefined; setSaving(false); return; } setSaveError(""); try { const result = await onSave(input, learnFirst); if (!mountedRef.current || operationRef.current !== token || scopeGenerationRef.current !== scope) return; if (result.status === "partial") { partialRef.current = result.state; setPartialState(result.state); setSaveError("句子已保存，但设置为已学习失败，目前按未学习处理。"); } else { await onComplete(); } } catch { if (mountedRef.current && operationRef.current === token && scopeGenerationRef.current === scope) setSaveError("句子保存失败，请检查本地存储后重试。"); } finally { if (operationRef.current === token) { operationRef.current = undefined; if (mountedRef.current) setSaving(false); } } };
+  const retryState = async () => { if (operationRef.current || !partialRef.current) return; const token = Symbol("state-retry"); const scope = scopeGenerationRef.current; const state = partialRef.current; operationRef.current = token; setSaving(true); setSaveError(""); try { await onRetryState(state); if (!mountedRef.current || operationRef.current !== token || scopeGenerationRef.current !== scope) return; await onComplete(); } catch { if (mountedRef.current && operationRef.current === token && scopeGenerationRef.current === scope) setSaveError("已保存句子，但设置为已学习仍然失败，请重试。"); } finally { if (operationRef.current === token) { operationRef.current = undefined; if (mountedRef.current) setSaving(false); } } };
   return <><header className="screen-head"><button className="icon-button" onClick={onCancel} aria-label="返回"><AppIcon name="back" size={24} /></button><div><h1>收藏语言块</h1><p>Save a phrase you’ll actually use.</p></div></header>
     <form className="phrase-form" onSubmit={submit}>
       <label>英文表达<textarea aria-label="英文表达" value={input.english} onChange={(e) => field("english", e.target.value)} placeholder="e.g. I haven't decided yet." rows={3} />{errors.english && <small className="field-error">{errors.english}</small>}</label>

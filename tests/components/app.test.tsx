@@ -223,6 +223,25 @@ describe("PhraseBankApp", () => {
     expect(repo.phrases.filter(({ english }) => english === "Only once")).toHaveLength(1);
   });
 
+  it("does not complete or navigate when an initial save from an old repository resolves", async () => {
+    const user = userEvent.setup(); const repoA = new MemoryRepository(); const repoB = new MemoryRepository();
+    let resolveA!: () => void; let pendingPhrase!: Phrase;
+    repoA.savePhraseImpl = (phrase) => new Promise<void>((resolve) => { pendingPhrase = phrase; resolveA = () => { repoA.phrases.push(phrase); resolve(); }; });
+    const view = render(<PhraseBankApp repository={repoA as never} />);
+    await user.click(await screen.findByRole("button", { name: "添加" }));
+    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Old pending save");
+    await user.type(screen.getByRole("textbox", { name: "中文含义" }), "旧仓库等待保存");
+    await user.click(screen.getByRole("button", { name: "保存语言块" }));
+    const readsA = repoA.phraseReadAttempts;
+    view.rerender(<PhraseBankApp repository={repoB as never} />);
+    resolveA();
+    await vi.waitFor(() => expect(repoA.phrases).toContain(pendingPhrase));
+    expect(screen.getByRole("heading", { name: "收藏语言块" })).toBeVisible();
+    expect(repoA.phraseReadAttempts).toBe(readsA);
+    expect(repoB.phrases).toHaveLength(0);
+    expect(screen.queryByText("已收入你的句库")).not.toBeInTheDocument();
+  });
+
   it("retries only the learned-state write after a partial save even when refresh also failed", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     render(<PhraseBankApp repository={repo as never} />);
@@ -250,6 +269,7 @@ describe("PhraseBankApp", () => {
     await user.click(screen.getByRole("checkbox", { name: /先在.*学习新句.*认识/ }));
     await user.click(screen.getByRole("button", { name: "保存语言块" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("目前按未学习处理");
+    repoB.phrases = [{ ...repoA.phrases[0] }];
     view.rerender(<PhraseBankApp repository={repoB as never} />);
     await user.click(screen.getByRole("button", { name: "只重试学习状态" }));
     await screen.findByRole("heading", { name: "我的句子" });
@@ -257,6 +277,31 @@ describe("PhraseBankApp", () => {
     expect(repoA.phraseSaveAttempts).toBe(1);
     expect(repoB.learningStates).toContainEqual(expect.objectContaining({ stage: "learned", firstTestedAt: expect.any(String) }));
     expect(repoB.phraseSaveAttempts).toBe(0);
+  });
+
+  it("ignores completion from an old repository's pending partial retry and can retry on the new repository", async () => {
+    const user = userEvent.setup(); const repoA = new MemoryRepository(); const repoB = new MemoryRepository(); repoA.failLearningStateSave = true;
+    const view = render(<PhraseBankApp repository={repoA as never} />);
+    await user.click(await screen.findByRole("button", { name: "添加" }));
+    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Pending portable retry");
+    await user.type(screen.getByRole("textbox", { name: "中文含义" }), "等待迁移重试");
+    await user.click(screen.getByRole("checkbox", { name: /先在.*学习新句.*认识/ }));
+    await user.click(screen.getByRole("button", { name: "保存语言块" }));
+    await screen.findByRole("button", { name: "只重试学习状态" });
+    repoA.failLearningStateSave = false;
+    let resolveRetryA!: () => void;
+    const originalStateSave = repoA.savePhraseLearningState.bind(repoA);
+    repoA.savePhraseLearningState = (state) => new Promise<void>((resolve) => { resolveRetryA = () => { void originalStateSave(state).then(resolve); }; });
+    await user.click(screen.getByRole("button", { name: "只重试学习状态" }));
+    repoB.phrases = [{ ...repoA.phrases[0] }];
+    view.rerender(<PhraseBankApp repository={repoB as never} />);
+    resolveRetryA();
+    await vi.waitFor(() => expect(repoA.learningStates).toHaveLength(1));
+    expect(screen.getByRole("heading", { name: "收藏语言块" })).toBeVisible();
+    expect(repoB.learningStates).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "只重试学习状态" }));
+    await screen.findByRole("heading", { name: "我的句子" });
+    expect(repoB.learningStates).toContainEqual(expect.objectContaining({ phraseId: repoB.phrases[0].id, stage: "learned" }));
   });
 
   it("filters only system content by all four learning stages and treats missing as unseen", async () => {
