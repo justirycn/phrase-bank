@@ -223,8 +223,7 @@ export function useTrainingSession({
         .sort((left, right) => {
           const completionDifference = left.completedAt!.localeCompare(right.completedAt!);
           if (completionDifference) return completionDifference;
-          const updateDifference = left.updatedAt.localeCompare(right.updatedAt);
-          return updateDifference || left.id.localeCompare(right.id);
+          return left.id.localeCompare(right.id);
         });
       const previousGroupIds = new Set(completedToday.at(-1)?.phraseIds ?? []);
       const phrasesById = new Map(phrases.map((phrase) => [phrase.id, phrase]));

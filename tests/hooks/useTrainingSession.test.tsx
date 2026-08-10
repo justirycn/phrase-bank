@@ -169,13 +169,13 @@ describe("useTrainingSession", () => {
   it("excludes the most recent completed Shanghai-day group with a stable session-id tie break", async () => {
     const items = Array.from({ length: 3 }, (_, index) => phrase(`recent-${index}`));
     const completedAt = "2026-08-09T02:00:00.000Z";
-    const session = (id: string, phraseIds: string[]): TrainingSessionRecord => ({
-      id, mode: "quick", startedAt: "2026-08-09T01:00:00.000Z", updatedAt: completedAt,
+    const session = (id: string, updatedAt: string, phraseIds: string[]): TrainingSessionRecord => ({
+      id, mode: "quick", startedAt: "2026-08-09T01:00:00.000Z", updatedAt,
       completedAt, phraseIds, sources: phraseIds.map(() => "due"), currentIndex: phraseIds.length, activeSeconds: 10,
     });
     const store = memoryRepository(items, undefined, [
-      session("completed-a", []),
-      session("completed-z", items.map(({ id }) => id)),
+      session("completed-a", "2026-08-09T04:00:00.000Z", []),
+      session("completed-z", "2026-08-09T03:00:00.000Z", items.map(({ id }) => id)),
     ]);
 
     renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...services(), seed: "recent-session" }));
