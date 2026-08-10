@@ -23,48 +23,59 @@ type LegacyLearningState = Partial<PhraseLearningState> & Pick<PhraseLearningSta
 
 const validDate = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value));
 
-function reviewEvidence(logs: ReviewLog[], events: TrainingEvent[]) {
+function resultEvidence(logs: ReviewLog[], events: TrainingEvent[]) {
   const unique = new Map<string, { occurredAt: string; result: ReviewResult }>();
   for (const item of logs) unique.set(`${item.reviewedAt}|${item.result}`, { occurredAt: item.reviewedAt, result: item.result });
   for (const item of events) unique.set(`${item.occurredAt}|${item.result}`, { occurredAt: item.occurredAt, result: item.result });
   return [...unique.values()].filter(({ occurredAt }) => validDate(occurredAt)).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
 }
 
-function consecutiveGoodFrom(evidence: Array<{ result: ReviewResult }>) {
+function consecutiveGoodFrom(events: TrainingEvent[]) {
+  const evidence = events.filter(({ occurredAt }) => validDate(occurredAt)).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
   let count = 0;
   for (let index = evidence.length - 1; index >= 0 && evidence[index].result === "good"; index -= 1) count += 1;
   return count;
 }
 
 function migrateLearningState(phrase: Phrase, legacy: LegacyLearningState | undefined, logs: ReviewLog[], events: TrainingEvent[]): PhraseLearningState {
-  const evidence = reviewEvidence(logs, events);
+  const evidence = resultEvidence(logs, events);
   const earliest = evidence[0];
-  const reviewedAt = earliest?.occurredAt ?? (validDate(phrase.lastReviewedAt) ? phrase.lastReviewedAt : undefined);
-  const firstSeenAt = reviewedAt ?? (validDate(legacy?.firstSeenAt) ? legacy.firstSeenAt : undefined);
-  const firstTestedAt = reviewedAt ?? (validDate(legacy?.firstTestedAt) ? legacy.firstTestedAt : undefined);
-  const firstResult = earliest?.result ?? (legacy?.firstResult === "again" || legacy?.firstResult === "hard" || legacy?.firstResult === "good" ? legacy.firstResult : undefined);
+  const lastReviewedAt = validDate(phrase.lastReviewedAt) ? phrase.lastReviewedAt : undefined;
   const masteredDates = Array.isArray(legacy?.masteredDates) ? legacy.masteredDates.filter((day): day is string => typeof day === "string") : [];
-  const hasCompleteStage = (legacy?.stage === "learned" || legacy?.stage === "mastered") && firstSeenAt && firstTestedAt && firstResult;
-  const stage: PhraseLearningState["stage"] = hasCompleteStage
-    ? legacy.stage as "learned" | "mastered"
-    : reviewedAt
-      ? phrase.masteryLevel === 3 || masteredDates.length >= 2 ? "mastered" : "learned"
-      : firstSeenAt ? "learning" : "unseen";
+  const priorLearning = lastReviewedAt !== undefined || phrase.reviewStep > 0 || phrase.masteryLevel > 0 || masteredDates.length > 0
+    || legacy?.stage === "learning" || legacy?.stage === "learned" || legacy?.stage === "mastered";
+  const firstSeenAt = earliest?.occurredAt ?? lastReviewedAt ?? (validDate(legacy?.firstSeenAt)
+    ? legacy.firstSeenAt
+    : priorLearning ? validDate(legacy?.updatedAt) ? legacy.updatedAt : validDate(phrase.updatedAt) ? phrase.updatedAt : undefined : undefined);
+  const firstTestedAt = earliest?.occurredAt;
+  const firstResult = earliest?.result;
+  const stage: PhraseLearningState["stage"] = earliest
+    ? phrase.masteryLevel === 3 || masteredDates.length >= 2 ? "mastered" : "learned"
+    : firstSeenAt ? "learning" : "unseen";
   const updatedAt = validDate(legacy?.updatedAt)
     ? legacy.updatedAt
-    : validDate(phrase.updatedAt) ? phrase.updatedAt : reviewedAt ?? phrase.createdAt;
-  return {
+    : validDate(phrase.updatedAt) ? phrase.updatedAt : earliest?.occurredAt ?? lastReviewedAt ?? phrase.createdAt;
+  const migrated: PhraseLearningState = {
     ...legacy,
     phraseId: phrase.id,
     stage,
-    firstSeenAt: stage === "unseen" ? undefined : firstSeenAt,
-    firstTestedAt: stage === "learned" || stage === "mastered" ? firstTestedAt : undefined,
-    firstResult: stage === "learned" || stage === "mastered" ? firstResult : undefined,
-    consecutiveGood: consecutiveGoodFrom(evidence),
+    consecutiveGood: consecutiveGoodFrom(events),
     masteredDates,
-    unlockedAt: validDate(legacy?.unlockedAt) ? legacy.unlockedAt : undefined,
     updatedAt,
   };
+  delete migrated.firstSeenAt;
+  delete migrated.firstTestedAt;
+  delete migrated.firstResult;
+  delete migrated.unlockedAt;
+  if (firstSeenAt) migrated.firstSeenAt = firstSeenAt;
+  if (firstTestedAt) migrated.firstTestedAt = firstTestedAt;
+  if (firstResult) migrated.firstResult = firstResult;
+  if (validDate(legacy?.unlockedAt)) migrated.unlockedAt = legacy.unlockedAt;
+  return migrated;
+}
+
+function cursorAfterDeletion(phraseIds: string[], cursor: number, deletedIds: Set<string>) {
+  return phraseIds.slice(0, Math.min(cursor, phraseIds.length)).filter((id) => !deletedIds.has(id)).length;
 }
 
 function unseenState(phraseId: string, updatedAt: string, unlockedAt?: string): PhraseLearningState {
@@ -199,7 +210,71 @@ export class LocalPhraseRepository implements PhraseRepository {
   }
   async getPhrase(id: string) { return (await this.db()).get("phrases", id); }
   async savePhrase(phrase: Phrase) { await (await this.db()).put("phrases", phrase); }
-  async deletePhrase(id: string) { await (await this.db()).delete("phrases", id); }
+  async deletePhrase(id: string) {
+    const db = await this.db();
+    const tx = db.transaction(["phrases", "phraseLearningState", "reviewLogs", "trainingEvents", "trainingSessions", "learningSessions"], "readwrite");
+    try {
+      const phraseStore = tx.objectStore("phrases");
+      const deletedIds = new Set([id]);
+      const pendingParents = [id];
+      while (pendingParents.length > 0) {
+        const parentId = pendingParents.shift()!;
+        for (const child of await phraseStore.index("by-parent").getAll(parentId)) {
+          if (deletedIds.has(child.id)) continue;
+          deletedIds.add(child.id);
+          pendingParents.push(child.id);
+        }
+      }
+
+      const logStore = tx.objectStore("reviewLogs");
+      const eventStore = tx.objectStore("trainingEvents");
+      for (const phraseId of deletedIds) {
+        await phraseStore.delete(phraseId);
+        await tx.objectStore("phraseLearningState").delete(phraseId);
+        for (const key of await logStore.index("by-phrase").getAllKeys(phraseId)) await logStore.delete(key);
+        for (const key of await eventStore.index("by-phrase").getAllKeys(phraseId)) await eventStore.delete(key);
+      }
+
+      const trainingStore = tx.objectStore("trainingSessions");
+      for (const session of await trainingStore.getAll()) {
+        if (!session.phraseIds.some((phraseId) => deletedIds.has(phraseId))) continue;
+        const retained = session.phraseIds.map((phraseId) => !deletedIds.has(phraseId));
+        const phraseIds = session.phraseIds.filter((_phraseId, index) => retained[index]);
+        if (phraseIds.length === 0) {
+          await trainingStore.delete(session.id);
+          continue;
+        }
+        const { sources, ...preserved } = session;
+        await trainingStore.put({
+          ...preserved,
+          phraseIds,
+          ...(sources ? { sources: sources.filter((_source, index) => retained[index]) } : {}),
+          currentIndex: cursorAfterDeletion(session.phraseIds, session.currentIndex, deletedIds),
+        });
+      }
+
+      const learningStore = tx.objectStore("learningSessions");
+      for (const session of await learningStore.getAll()) {
+        if (!session.phraseIds.some((phraseId) => deletedIds.has(phraseId))) continue;
+        const phraseIds = session.phraseIds.filter((phraseId) => !deletedIds.has(phraseId));
+        if (phraseIds.length === 0) {
+          await learningStore.delete(session.id);
+          continue;
+        }
+        await learningStore.put({
+          ...session,
+          phraseIds,
+          studyIndex: cursorAfterDeletion(session.phraseIds, session.studyIndex, deletedIds),
+          testIndex: cursorAfterDeletion(session.phraseIds, session.testIndex, deletedIds),
+        });
+      }
+      await tx.done;
+    } catch (error) {
+      try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }
+      try { await tx.done; } catch { /* Preserve the original error. */ }
+      throw error;
+    }
+  }
   async listDuePhrases(now = new Date()) {
     const items = await (await this.db()).getAllFromIndex("phrases", "by-due", IDBKeyRange.upperBound(now.toISOString()));
     return items.sort((a, b) => a.nextReviewAt.localeCompare(b.nextReviewAt));

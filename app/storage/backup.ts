@@ -20,7 +20,7 @@ const validDay = (value: unknown): value is string => typeof value === "string" 
 const stages = new Set(["unseen", "learning", "learned", "mastered"]);
 const results = new Set(["again", "hard", "good"]);
 
-function reviewEvidence(phraseId: string, logs: ReviewLog[], events: TrainingEvent[]) {
+function resultEvidence(phraseId: string, logs: ReviewLog[], events: TrainingEvent[]) {
   const unique = new Map<string, { occurredAt: string; result: ReviewResult }>();
   for (const item of logs) if (item.phraseId === phraseId) unique.set(`${item.reviewedAt}|${item.result}`, { occurredAt: item.reviewedAt, result: item.result });
   for (const item of events) if (item.phraseId === phraseId) unique.set(`${item.occurredAt}|${item.result}`, { occurredAt: item.occurredAt, result: item.result });
@@ -28,33 +28,40 @@ function reviewEvidence(phraseId: string, logs: ReviewLog[], events: TrainingEve
 }
 
 function migrateLegacyState(phrase: Phrase, legacy: LegacyLearningState | undefined, logs: ReviewLog[], events: TrainingEvent[]): PhraseLearningState {
-  const evidence = reviewEvidence(phrase.id, logs, events);
+  const evidence = resultEvidence(phrase.id, logs, events);
   const earliest = evidence[0];
-  const reviewedAt = earliest?.occurredAt ?? (validDate(phrase.lastReviewedAt) ? phrase.lastReviewedAt : undefined);
-  const firstSeenAt = reviewedAt ?? (validDate(legacy?.firstSeenAt) ? legacy.firstSeenAt : undefined);
-  const firstTestedAt = reviewedAt ?? (validDate(legacy?.firstTestedAt) ? legacy.firstTestedAt : undefined);
-  const firstResult = earliest?.result ?? (results.has(legacy?.firstResult as string) ? legacy?.firstResult : undefined);
+  const lastReviewedAt = validDate(phrase.lastReviewedAt) ? phrase.lastReviewedAt : undefined;
   const masteredDates = Array.isArray(legacy?.masteredDates) ? legacy.masteredDates.filter((day): day is string => typeof day === "string") : [];
-  const hasCompleteStage = (legacy?.stage === "learned" || legacy?.stage === "mastered") && firstSeenAt && firstTestedAt && firstResult;
-  const stage: PhraseLearningState["stage"] = hasCompleteStage
-    ? legacy.stage as "learned" | "mastered"
-    : reviewedAt
-      ? phrase.masteryLevel === 3 || masteredDates.length >= 2 ? "mastered" : "learned"
-      : firstSeenAt ? "learning" : "unseen";
+  const priorLearning = lastReviewedAt !== undefined || phrase.reviewStep > 0 || phrase.masteryLevel > 0 || masteredDates.length > 0
+    || legacy?.stage === "learning" || legacy?.stage === "learned" || legacy?.stage === "mastered";
+  const firstSeenAt = earliest?.occurredAt ?? lastReviewedAt ?? (validDate(legacy?.firstSeenAt)
+    ? legacy.firstSeenAt
+    : priorLearning ? validDate(legacy?.updatedAt) ? legacy.updatedAt : validDate(phrase.updatedAt) ? phrase.updatedAt : undefined : undefined);
+  const firstTestedAt = earliest?.occurredAt;
+  const firstResult = earliest?.result;
+  const stage: PhraseLearningState["stage"] = earliest
+    ? phrase.masteryLevel === 3 || masteredDates.length >= 2 ? "mastered" : "learned"
+    : firstSeenAt ? "learning" : "unseen";
+  const phraseEvents = events.filter((event) => event.phraseId === phrase.id && validDate(event.occurredAt)).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
   let consecutiveGood = 0;
-  for (let index = evidence.length - 1; index >= 0 && evidence[index].result === "good"; index -= 1) consecutiveGood += 1;
-  return {
+  for (let index = phraseEvents.length - 1; index >= 0 && phraseEvents[index].result === "good"; index -= 1) consecutiveGood += 1;
+  const migrated: PhraseLearningState = {
     ...legacy,
     phraseId: phrase.id,
     stage,
-    firstSeenAt: stage === "unseen" ? undefined : firstSeenAt,
-    firstTestedAt: stage === "learned" || stage === "mastered" ? firstTestedAt : undefined,
-    firstResult: stage === "learned" || stage === "mastered" ? firstResult : undefined,
     consecutiveGood,
     masteredDates,
-    unlockedAt: validDate(legacy?.unlockedAt) ? legacy.unlockedAt : undefined,
-    updatedAt: validDate(legacy?.updatedAt) ? legacy.updatedAt : validDate(phrase.updatedAt) ? phrase.updatedAt : reviewedAt ?? phrase.createdAt,
+    updatedAt: validDate(legacy?.updatedAt) ? legacy.updatedAt : validDate(phrase.updatedAt) ? phrase.updatedAt : earliest?.occurredAt ?? lastReviewedAt ?? phrase.createdAt,
   };
+  delete migrated.firstSeenAt;
+  delete migrated.firstTestedAt;
+  delete migrated.firstResult;
+  delete migrated.unlockedAt;
+  if (firstSeenAt) migrated.firstSeenAt = firstSeenAt;
+  if (firstTestedAt) migrated.firstTestedAt = firstTestedAt;
+  if (firstResult) migrated.firstResult = firstResult;
+  if (validDate(legacy?.unlockedAt)) migrated.unlockedAt = legacy.unlockedAt;
+  return migrated;
 }
 
 function invalidLearningState(state: LegacyLearningState, phraseIds: Set<string>) {

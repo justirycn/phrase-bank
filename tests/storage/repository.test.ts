@@ -92,7 +92,10 @@ describe("LocalPhraseRepository", () => {
     await repo.deletePhrase("starter-daily-not-sure");
     await repo.initialize();
     expect(await repo.getPhrase("starter-daily-not-sure")).toBeUndefined();
+    expect(await repo.getPhraseLearningState("starter-daily-not-sure")).toBeUndefined();
     expect(await repo.listPhrases()).toHaveLength(39);
+    const snapshot = await repo.exportSnapshot();
+    expect(() => parseBackup(JSON.stringify(snapshot))).not.toThrow();
   });
 
   it("does not overwrite an existing phrase with a starter id", async () => {
@@ -424,11 +427,13 @@ describe("LocalPhraseRepository", () => {
     const tx = oldDb.transaction(Array.from(oldDb.objectStoreNames), "readwrite");
     tx.objectStore("categories").put({ id: "daily", name: "日常", isDefault: true, createdAt: timestamp, updatedAt: timestamp });
     tx.objectStore("metadata").put({ key: "initialized", value: "1" }); tx.objectStore("metadata").put({ key: "starterPhrasesVersion", value: "1" });
-    for (const item of [phrase("reviewed", 1), phrase("mastered", 3), phrase("system-new", 0, "system")]) tx.objectStore("phrases").put(item);
+    for (const item of [phrase("reviewed", 1), phrase("mastered", 3), phrase("last-reviewed-only", 1), phrase("system-new", 0, "system")]) tx.objectStore("phrases").put(item);
+    tx.objectStore("phrases").put({ ...phrase("last-reviewed-only", 1), lastReviewedAt: "2026-08-09T07:00:00.000Z" });
     tx.objectStore("trainingEvents").put({ id: "e1", sessionId: "old", phraseId: "reviewed", source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-08T09:00:00.000Z" });
     tx.objectStore("trainingEvents").put({ id: "e2", sessionId: "old", phraseId: "reviewed", source: "new", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T09:00:00.000Z" });
     tx.objectStore("trainingEvents").put({ id: "e3", sessionId: "old", phraseId: "reviewed", source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-10T09:00:00.000Z" });
     tx.objectStore("reviewLogs").put({ id: "master-log", phraseId: "mastered", result: "good", reviewedAt: "2026-08-09T10:00:00.000Z", previousStep: 2, nextReviewAt: timestamp });
+    tx.objectStore("reviewLogs").put({ id: "reviewed-late-log", phraseId: "reviewed", result: "hard", reviewedAt: "2026-08-11T10:00:00.000Z", previousStep: 1, nextReviewAt: timestamp });
     tx.objectStore("phraseLearningState").put({ phraseId: "reviewed", masteredDates: ["2026-08-08"], unlockedAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-10T09:00:00.000Z", legacyNote: "keep" });
     tx.objectStore("phraseLearningState").put({ phraseId: "system-new", masteredDates: [], unlockedAt: timestamp, updatedAt: timestamp });
     await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); }); oldDb.close();
@@ -439,7 +444,11 @@ describe("LocalPhraseRepository", () => {
       stage: "learned", firstSeenAt: "2026-08-08T09:00:00.000Z", firstTestedAt: "2026-08-08T09:00:00.000Z",
       firstResult: "good", consecutiveGood: 1, masteredDates: ["2026-08-08"], unlockedAt: "2026-08-07T00:00:00.000Z", legacyNote: "keep",
     });
-    expect(await migrated.getPhraseLearningState("mastered")).toMatchObject({ stage: "mastered", consecutiveGood: 1, firstResult: "good" });
+    expect(await migrated.getPhraseLearningState("mastered")).toMatchObject({ stage: "mastered", consecutiveGood: 0, firstResult: "good" });
+    expect(await migrated.getPhraseLearningState("last-reviewed-only")).toEqual({
+      phraseId: "last-reviewed-only", stage: "learning", firstSeenAt: "2026-08-09T07:00:00.000Z",
+      consecutiveGood: 0, masteredDates: [], updatedAt: timestamp,
+    });
     expect(await migrated.getPhraseLearningState("system-new")).toMatchObject({ stage: "unseen", consecutiveGood: 0, unlockedAt: timestamp });
     const reopened = indexedDB.open(dbName, 4);
     const upgraded = await new Promise<IDBDatabase>((resolve, reject) => { reopened.onsuccess = () => resolve(reopened.result); reopened.onerror = () => reject(reopened.error); });
@@ -465,5 +474,51 @@ describe("LocalPhraseRepository", () => {
     expect((await repo.getActiveLearningSession())?.updatedAt).toBe(existing.updatedAt);
     await repo.importSnapshot({ ...exported, learningSessions: [incoming] }, "overwrite");
     expect((await repo.getActiveLearningSession())?.updatedAt).toBe(incoming.updatedAt);
+  });
+
+  it("cascades reviewed phrase deletion and remaps training and learning session cursors", async () => {
+    const occurredAt = "2026-08-10T08:00:00.000Z";
+    const removed = { ...createNewPhrase({ english: "Remove", chinese: "删除", categoryId: "daily" }, new Date(occurredAt)), id: "remove-me" };
+    const kept = { ...createNewPhrase({ english: "Keep", chinese: "保留", categoryId: "daily" }, new Date(occurredAt)), id: "keep-me" };
+    await repo.savePhrase(removed); await repo.savePhrase(kept);
+    await repo.saveTrainingSession({
+      id: "delete-training", mode: "quick", startedAt: occurredAt, updatedAt: occurredAt,
+      phraseIds: [removed.id, kept.id], sources: ["new", "weak"], currentIndex: 1, activeSeconds: 3,
+    });
+    await repo.saveTrainingSession({
+      id: "delete-empty-training", mode: "quick", startedAt: occurredAt, updatedAt: occurredAt,
+      phraseIds: [removed.id], sources: ["new"], currentIndex: 1, activeSeconds: 1,
+    });
+    await repo.saveLearningSession({
+      id: "delete-learning", date: "2026-08-10", themeCategoryId: "daily",
+      phraseIds: [removed.id, kept.id], studyIndex: 2, testIndex: 1, phase: "test",
+      startedAt: occurredAt, updatedAt: occurredAt,
+    });
+    await repo.saveLearningSession({
+      id: "delete-empty-learning", date: "2026-08-10", themeCategoryId: "daily",
+      phraseIds: [removed.id], studyIndex: 1, testIndex: 1, phase: "test",
+      startedAt: occurredAt, updatedAt: occurredAt, completedAt: occurredAt,
+    });
+    await repo.submitTrainingReview({
+      id: "delete-event", sessionId: "delete-training", phraseId: removed.id, source: "new", result: "good",
+      usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt,
+    });
+
+    await repo.deletePhrase(removed.id);
+
+    const snapshot = await repo.exportSnapshot();
+    expect(snapshot.phrases.find(({ id }) => id === removed.id)).toBeUndefined();
+    expect(snapshot.phraseLearningStates.find(({ phraseId }) => phraseId === removed.id)).toBeUndefined();
+    expect(snapshot.reviewLogs.find(({ phraseId }) => phraseId === removed.id)).toBeUndefined();
+    expect(snapshot.trainingEvents.find(({ phraseId }) => phraseId === removed.id)).toBeUndefined();
+    expect(snapshot.trainingSessions.find(({ id }) => id === "delete-training")).toMatchObject({
+      phraseIds: [kept.id], sources: ["weak"], currentIndex: 0, updatedAt: occurredAt,
+    });
+    expect(snapshot.trainingSessions.find(({ id }) => id === "delete-empty-training")).toBeUndefined();
+    expect(snapshot.learningSessions.find(({ id }) => id === "delete-learning")).toMatchObject({
+      phraseIds: [kept.id], studyIndex: 1, testIndex: 0, updatedAt: occurredAt,
+    });
+    expect(snapshot.learningSessions.find(({ id }) => id === "delete-empty-learning")).toBeUndefined();
+    expect(parseBackup(JSON.stringify(snapshot))).toEqual(snapshot);
   });
 });
