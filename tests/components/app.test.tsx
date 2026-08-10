@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { PhraseBankApp } from "../../app/PhraseBankApp";
@@ -10,13 +10,14 @@ class MemoryRepository {
   failPhraseSave = false;
   phraseSaveAttempts = 0;
   failLearningStateSave = false;
+  savePhraseImpl?: (phrase: Phrase) => Promise<void>;
   phraseReadAttempts = 0;
   categories: Category[] = [{ id: "daily", name: "日常", isDefault: true, createdAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-07T00:00:00.000Z" }];
   async initialize() {}
   async listPhrases() { this.phraseReadAttempts += 1; if (this.failPhraseReads) throw new Error("db failed"); return [...this.phrases]; }
   async listCategories() { return [...this.categories]; }
   async listDuePhrases() { return [...this.phrases]; }
-  async savePhrase(phrase: Phrase) { this.phraseSaveAttempts += 1; if (this.failPhraseSave) throw new Error("save failed"); this.phrases = [...this.phrases.filter((p) => p.id !== phrase.id), phrase]; }
+  async savePhrase(phrase: Phrase) { this.phraseSaveAttempts += 1; if (this.savePhraseImpl) return this.savePhraseImpl(phrase); if (this.failPhraseSave) throw new Error("save failed"); this.phrases = [...this.phrases.filter((p) => p.id !== phrase.id), phrase]; }
   async deletePhrase(id: string) { this.phrases = this.phrases.filter((p) => p.id !== id); }
   async submitReview(id: string, result: ReviewResult) { void id; void result; }
   events: TrainingEvent[] = [];
@@ -200,6 +201,28 @@ describe("PhraseBankApp", () => {
     expect(screen.getByRole("heading", { name: "收藏语言块" })).toBeVisible();
   });
 
+  it("atomically blocks duplicate initial saves and allows retry after a failed save settles", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    let rejectSave!: (error: Error) => void;
+    repo.savePhraseImpl = () => new Promise<void>((_resolve, reject) => { rejectSave = reject; });
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: "添加" }));
+    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Only once");
+    await user.type(screen.getByRole("textbox", { name: "中文含义" }), "只保存一次");
+    const form = screen.getByRole("button", { name: "保存语言块" }).closest("form")!;
+    fireEvent.submit(form); fireEvent.submit(form);
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "英文表达" }), { key: "Enter", code: "Enter" });
+    expect(repo.phraseSaveAttempts).toBe(1);
+    expect(screen.getByRole("button", { name: "保存语言块" })).toBeDisabled();
+    rejectSave(new Error("first failed"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("句子保存失败");
+    repo.savePhraseImpl = undefined;
+    await user.click(screen.getByRole("button", { name: "保存语言块" }));
+    await screen.findByRole("heading", { name: "我的句子" });
+    expect(repo.phraseSaveAttempts).toBe(2);
+    expect(repo.phrases.filter(({ english }) => english === "Only once")).toHaveLength(1);
+  });
+
   it("retries only the learned-state write after a partial save even when refresh also failed", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     render(<PhraseBankApp repository={repo as never} />);
@@ -216,6 +239,24 @@ describe("PhraseBankApp", () => {
     await screen.findByRole("heading", { name: "我的句子" });
     expect(repo.phraseSaveAttempts).toBe(1);
     expect(repo.learningStates.at(-1)).toMatchObject({ stage: "learned", firstTestedAt: expect.any(String) });
+  });
+
+  it("retries a portable partial-state intent against the current repository after rerender", async () => {
+    const user = userEvent.setup(); const repoA = new MemoryRepository(); const repoB = new MemoryRepository(); repoA.failLearningStateSave = true;
+    const view = render(<PhraseBankApp repository={repoA as never} />);
+    await user.click(await screen.findByRole("button", { name: "添加" }));
+    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Portable retry");
+    await user.type(screen.getByRole("textbox", { name: "中文含义" }), "可迁移重试");
+    await user.click(screen.getByRole("checkbox", { name: /先在.*学习新句.*认识/ }));
+    await user.click(screen.getByRole("button", { name: "保存语言块" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("目前按未学习处理");
+    view.rerender(<PhraseBankApp repository={repoB as never} />);
+    await user.click(screen.getByRole("button", { name: "只重试学习状态" }));
+    await screen.findByRole("heading", { name: "我的句子" });
+    expect(repoA.learningStates).toHaveLength(0);
+    expect(repoA.phraseSaveAttempts).toBe(1);
+    expect(repoB.learningStates).toContainEqual(expect.objectContaining({ stage: "learned", firstTestedAt: expect.any(String) }));
+    expect(repoB.phraseSaveAttempts).toBe(0);
   });
 
   it("filters only system content by all four learning stages and treats missing as unseen", async () => {
