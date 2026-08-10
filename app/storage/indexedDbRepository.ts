@@ -1,17 +1,20 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import type { BackupEnvelope, BackupEnvelopeV2, Category, Phrase, ReviewLog, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+import type { BackupEnvelope, BackupEnvelopeV2, Category, Phrase, PhraseLearningState, ReviewLog, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
 import { scheduleReview } from "../domain/review";
+import { personalPhraseDefaults, validateSystemContentPackage } from "../domain/systemContent";
 import { defaultCategories } from "./seed";
 import { STARTER_PHRASES } from "./starterPhrases";
 import type { PhraseRepository } from "./repository";
 
 interface PhraseBankDb extends DBSchema {
-  phrases: { key: string; value: Phrase; indexes: { "by-due": string; "by-created": string; "by-category": string } };
+  phrases: { key: string; value: Phrase; indexes: { "by-due": string; "by-created": string; "by-category": string; "by-origin": string; "by-parent": string } };
   categories: { key: string; value: Category };
   reviewLogs: { key: string; value: ReviewLog; indexes: { "by-phrase": string } };
   metadata: { key: string; value: { key: string; value: string } };
   trainingEvents: { key: string; value: TrainingEvent; indexes: { "by-occurred": string; "by-session": string; "by-phrase": string } };
   trainingSessions: { key: string; value: TrainingSessionRecord; indexes: { "by-updated": string } };
+  phraseLearningState: { key: string; value: PhraseLearningState };
+  systemContentPackages: { key: string; value: SystemContentPackage };
 }
 
 export class LocalPhraseRepository implements PhraseRepository {
@@ -20,13 +23,15 @@ export class LocalPhraseRepository implements PhraseRepository {
 
   private db() {
     if (!this.dbPromise) {
-      this.dbPromise = openDB<PhraseBankDb>(this.dbName, 2, {
-        upgrade(db, oldVersion) {
+      this.dbPromise = openDB<PhraseBankDb>(this.dbName, 3, {
+        async upgrade(db, oldVersion, _newVersion, transaction) {
           if (oldVersion < 1) {
             const phrases = db.createObjectStore("phrases", { keyPath: "id" });
             phrases.createIndex("by-due", "nextReviewAt");
             phrases.createIndex("by-created", "createdAt");
             phrases.createIndex("by-category", "categoryId");
+            phrases.createIndex("by-origin", "origin");
+            phrases.createIndex("by-parent", "parentPhraseId");
             db.createObjectStore("categories", { keyPath: "id" });
             const logs = db.createObjectStore("reviewLogs", { keyPath: "id" });
             logs.createIndex("by-phrase", "phraseId");
@@ -39,6 +44,19 @@ export class LocalPhraseRepository implements PhraseRepository {
             events.createIndex("by-phrase", "phraseId");
             const sessions = db.createObjectStore("trainingSessions", { keyPath: "id" });
             sessions.createIndex("by-updated", "updatedAt");
+          }
+          if (oldVersion < 3) {
+            const phrases = transaction.objectStore("phrases");
+            if (!phrases.indexNames.contains("by-origin")) phrases.createIndex("by-origin", "origin");
+            if (!phrases.indexNames.contains("by-parent")) phrases.createIndex("by-parent", "parentPhraseId");
+            let cursor = await phrases.openCursor();
+            while (cursor) {
+              const phrase = cursor.value;
+              if (!phrase.origin || !phrase.kind) await cursor.update({ ...personalPhraseDefaults(), ...phrase });
+              cursor = await cursor.continue();
+            }
+            db.createObjectStore("phraseLearningState", { keyPath: "phraseId" });
+            db.createObjectStore("systemContentPackages", { keyPath: "version" });
           }
         },
       });
@@ -64,6 +82,7 @@ export class LocalPhraseRepository implements PhraseRepository {
         if (await phraseStore.get(starter.id)) continue;
         await phraseStore.put({
           ...starter,
+          ...personalPhraseDefaults(),
           sourceNote: "",
           reviewStep: 0,
           masteryLevel: 0,
@@ -166,6 +185,51 @@ export class LocalPhraseRepository implements PhraseRepository {
   }
   async saveSpeechPreferences(preferences: SpeechPreferences) {
     await (await this.db()).put("metadata", { key: "speechPreferences", value: JSON.stringify(preferences) });
+  }
+  async listPhraseLearningStates() { return (await this.db()).getAll("phraseLearningState"); }
+  async getActiveSystemContentVersion() {
+    return (await (await this.db()).get("metadata", "activeSystemContentVersion"))?.value;
+  }
+  async installSystemContentPackage(content: SystemContentPackage) {
+    const validated = validateSystemContentPackage(content);
+    const db = await this.db();
+    const tx = db.transaction(["categories", "phrases", "phraseLearningState", "systemContentPackages", "metadata"], "readwrite");
+    const categories = new Set((await tx.objectStore("categories").getAllKeys()).map(String));
+    if (validated.phrases.some(({ categoryId }) => !categories.has(categoryId))) {
+      tx.abort();
+      try { await tx.done; } catch { /* validation abort */ }
+      throw new Error("系统内容包无效：分类不存在");
+    }
+    const phraseStore = tx.objectStore("phrases");
+    const stateStore = tx.objectStore("phraseLearningState");
+    const incomingIds = new Set(validated.phrases.map(({ id }) => id));
+    const timestamp = validated.generatedAt;
+    for (const existing of await phraseStore.index("by-origin").getAll("system")) {
+      if (!incomingIds.has(existing.id) && !existing.retiredAt) await phraseStore.put({ ...existing, retiredAt: timestamp, updatedAt: timestamp });
+    }
+    for (const item of validated.phrases) {
+      const existing = await phraseStore.get(item.id);
+      if (existing?.origin === "personal" || (existing && !existing.origin)) {
+        tx.abort();
+        try { await tx.done; } catch { /* collision abort */ }
+        throw new Error("系统内容不能覆盖个人句子");
+      }
+      const scheduled = existing ?? {
+        reviewStep: 0, masteryLevel: 0, nextReviewAt: timestamp, createdAt: timestamp, updatedAt: timestamp,
+      };
+      await phraseStore.put({ ...scheduled, ...item, personalExample: item.personalExample ?? "", sourceNote: item.sourceNote ?? "", retiredAt: undefined, updatedAt: timestamp });
+      if (!await stateStore.get(item.id)) {
+        await stateStore.put({ phraseId: item.id, masteredDates: [], unlockedAt: item.kind === "core" ? timestamp : undefined, updatedAt: timestamp });
+      }
+    }
+    await tx.objectStore("systemContentPackages").put(validated);
+    await tx.objectStore("metadata").put({ key: "activeSystemContentVersion", value: validated.version });
+    await tx.done;
+  }
+  async rollbackSystemContentPackage(version: string) {
+    const content = await (await this.db()).get("systemContentPackages", version);
+    if (!content) throw new Error("找不到可回滚的系统内容版本");
+    await this.installSystemContentPackage(content);
   }
   async exportSnapshot(): Promise<BackupEnvelopeV2> {
     const db = await this.db();

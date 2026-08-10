@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { LocalPhraseRepository } from "../../app/storage/indexedDbRepository";
 import { createNewPhrase } from "../../app/domain/review";
-import type { BackupEnvelopeV1, BackupEnvelopeV2, Category, Phrase, ReviewLog, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import type { BackupEnvelopeV1, BackupEnvelopeV2, Category, Phrase, ReviewLog, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 import { parseBackup } from "../../app/storage/backup";
 
 describe("LocalPhraseRepository", () => {
@@ -11,6 +11,41 @@ describe("LocalPhraseRepository", () => {
     globalThis.indexedDB = new IDBFactory();
     repo = new LocalPhraseRepository(`phrase-bank-${crypto.randomUUID()}`);
     await repo.initialize();
+  });
+
+  const contentPackage = (version: string, english = "System core"): SystemContentPackage => ({
+    format: "phrase-bank-system-content", version, generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "q1",
+    phrases: [
+      { id: "sys-core", english, chinese: "系统核心句", categoryId: "daily", origin: "system", kind: "core", subcategory: "routine", cefrLevel: "A2", intent: "state", contentVersion: version, qualityVersion: "q1" },
+      { id: "sys-example", english: "System example", chinese: "系统案例句", categoryId: "daily", origin: "system", kind: "example", parentPhraseId: "sys-core", unlockOrder: 1, subcategory: "routine", cefrLevel: "A2", intent: "state", contentVersion: version, qualityVersion: "q1" },
+    ],
+  });
+
+  it("installs, updates, retires, and rolls back validated system packages", async () => {
+    await repo.installSystemContentPackage(contentPackage("v1"));
+    expect(await repo.getActiveSystemContentVersion()).toBe("v1");
+    expect(await repo.getPhrase("sys-core")).toMatchObject({ english: "System core", origin: "system", kind: "core" });
+    expect(await repo.listPhraseLearningStates()).toContainEqual(expect.objectContaining({ phraseId: "sys-core", masteredDates: [] }));
+
+    const v2 = contentPackage("v2", "Updated system core");
+    v2.phrases = v2.phrases.slice(0, 1);
+    await repo.installSystemContentPackage(v2);
+    await repo.installSystemContentPackage(v2);
+    expect(await repo.getPhrase("sys-core")).toMatchObject({ english: "Updated system core", contentVersion: "v2" });
+    expect((await repo.getPhrase("sys-example"))?.retiredAt).toBeDefined();
+
+    await repo.rollbackSystemContentPackage("v1");
+    expect(await repo.getActiveSystemContentVersion()).toBe("v1");
+    expect(await repo.getPhrase("sys-core")).toMatchObject({ english: "System core", contentVersion: "v1" });
+    expect((await repo.getPhrase("sys-example"))?.retiredAt).toBeUndefined();
+  });
+
+  it("rejects a system package that collides with personal content without partial writes", async () => {
+    await repo.savePhrase({ ...createNewPhrase({ english: "Mine", chinese: "我的", categoryId: "daily" }), id: "sys-core" });
+    await expect(repo.installSystemContentPackage(contentPackage("v1"))).rejects.toThrow("个人句子");
+    expect(await repo.getActiveSystemContentVersion()).toBeUndefined();
+    expect(await repo.getPhrase("sys-core")).toMatchObject({ english: "Mine", origin: "personal" });
+    expect(await repo.getPhrase("sys-example")).toBeUndefined();
   });
 
   it("seeds the eight default categories once", async () => {
@@ -134,7 +169,7 @@ describe("LocalPhraseRepository", () => {
     const dbName = `phrase-bank-${crypto.randomUUID()}`;
     const corruptRepo = new LocalPhraseRepository(dbName);
     await corruptRepo.initialize();
-    const request = indexedDB.open(dbName, 2);
+    const request = indexedDB.open(dbName, 3);
     const db = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
     const tx = db.transaction("metadata", "readwrite");
     tx.objectStore("metadata").put({ key: "speechPreferences", value: "{" });
@@ -197,15 +232,17 @@ describe("LocalPhraseRepository", () => {
     tx.objectStore("categories").put(category); tx.objectStore("phrases").put(phrase); tx.objectStore("reviewLogs").put(log); for (const entry of originalMetadata) tx.objectStore("metadata").put(entry);
     await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); }); oldDb.close();
     const migrated = new LocalPhraseRepository(dbName); await migrated.initialize();
-    expect(await migrated.getPhrase(phrase.id)).toEqual(phrase);
+    expect(await migrated.getPhrase(phrase.id)).toEqual({ ...phrase, origin: "personal", kind: "standalone" });
     expect(await migrated.listCategories()).toContainEqual(category);
     expect((await migrated.exportSnapshot()).reviewLogs).toContainEqual(log);
-    const reopened = indexedDB.open(dbName, 2);
+    const reopened = indexedDB.open(dbName, 3);
     const upgradedDb = await new Promise<IDBDatabase>((resolve, reject) => { reopened.onsuccess = () => resolve(reopened.result); reopened.onerror = () => reject(reopened.error); });
     const metadata = await new Promise<Array<{ key: string; value: string }>>((resolve, reject) => { const read = upgradedDb.transaction("metadata").objectStore("metadata").getAll(); read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error); });
     expect(metadata).toEqual([...originalMetadata].sort((a, b) => a.key.localeCompare(b.key)));
     expect(upgradedDb.objectStoreNames.contains("trainingEvents")).toBe(true);
     expect(upgradedDb.objectStoreNames.contains("trainingSessions")).toBe(true);
+    expect(upgradedDb.objectStoreNames.contains("phraseLearningState")).toBe(true);
+    expect(upgradedDb.objectStoreNames.contains("systemContentPackages")).toBe(true);
     const schemaTx = upgradedDb.transaction(["trainingEvents", "trainingSessions"]);
     expect(Array.from(schemaTx.objectStore("trainingEvents").indexNames)).toEqual(expect.arrayContaining(["by-occurred", "by-session", "by-phrase"]));
     expect(Array.from(schemaTx.objectStore("trainingSessions").indexNames)).toContain("by-updated");
