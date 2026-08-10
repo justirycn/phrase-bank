@@ -203,14 +203,16 @@ export function useTrainingSession({
 
       const started = now();
       const startedDay = shanghaiDay(started);
-      const persistedNewCount = new Set(events.filter((event) =>
-        event.source === "new" && shanghaiDay(event.occurredAt) === startedDay)
+      const todayEvents = events.filter((event) => shanghaiDay(event.occurredAt) === startedDay);
+      const practicedTodayIds = new Set(todayEvents.map((event) => event.phraseId));
+      const persistedNewCount = new Set(todayEvents.filter((event) => event.source === "new")
         .map((event) => event.phraseId)).size;
       const selected = selectTrainingGroup(phrases, {
         mode,
         now: started,
         seed: seed ?? started.toISOString().slice(0, 10),
         newIntroducedToday: Math.max(newIntroducedToday, persistedNewCount),
+        practicedTodayIds,
       });
       const session: TrainingSessionRecord = {
         id: createId(),
