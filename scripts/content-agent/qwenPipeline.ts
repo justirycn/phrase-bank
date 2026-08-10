@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SystemContentPackage, SystemContentPhrase } from "../../app/domain/types";
 import { inspectSystemContent } from "./qualityGate";
@@ -10,7 +10,7 @@ const CATEGORY_QUOTAS = [
 ] as const;
 
 interface PipelineProgress { category: string; stage: "generate" | "review"; completed: number; total: number; }
-interface PipelineOptions { client: QwenClient; version: string; generatedAt: string; qualityVersion: string; sourceContent?: SystemContentPackage; onProgress?: (progress: PipelineProgress) => void; }
+interface PipelineOptions { client: QwenClient; version: string; generatedAt: string; qualityVersion: string; sourceContent?: SystemContentPackage; resumePhrases?: SystemContentPhrase[]; onProgress?: (progress: PipelineProgress) => void; onBatchCompleted?: (phrases: SystemContentPhrase[]) => Promise<void>; }
 interface AgentOptions extends PipelineOptions { outputDir: string; }
 interface BatchResponse { phrases: SystemContentPhrase[]; }
 interface ReviewCorrection { id: string; english: string; chinese: string; }
@@ -110,6 +110,7 @@ async function reviewValidBatch(options: PipelineOptions, category: string, core
 
 export async function buildQwenCandidate(options: PipelineOptions): Promise<SystemContentPackage> {
   const phrases: SystemContentPhrase[] = [];
+  const resumedById = new Map((options.resumePhrases ?? []).map((phrase) => [phrase.id, phrase]));
   let completedRequests = 0;
   const sourceContent = options.sourceContent ?? generateSystemContent();
   for (const [category, coreQuota] of CATEGORY_QUOTAS) {
@@ -123,6 +124,15 @@ export async function buildQwenCandidate(options: PipelineOptions): Promise<Syst
       const chunkCores = sourceCores.slice(chunkIndex * MAX_CORES_PER_REQUEST, chunkIndex * MAX_CORES_PER_REQUEST + coreCount);
       const coreIds = new Set(chunkCores.map(({ id }) => id));
       const source: BatchResponse = { phrases: sourcePhrases.filter((phrase) => phrase.kind === "core" ? coreIds.has(phrase.id) : coreIds.has(phrase.parentPhraseId ?? "")) };
+      const resumed = source.phrases.map(({ id }) => resumedById.get(id));
+      if (resumed.every((phrase): phrase is SystemContentPhrase => Boolean(phrase))) {
+        const resumedBatch = { phrases: resumed };
+        assertBatch(category, coreCount, resumedBatch, source);
+        categoryPhrases.push(...resumedBatch.phrases);
+        options.onProgress?.({ category, stage: "generate", completed: ++completedRequests, total: TOTAL_REQUESTS });
+        options.onProgress?.({ category, stage: "review", completed: ++completedRequests, total: TOTAL_REQUESTS });
+        continue;
+      }
       const exampleCount = source.phrases.filter(({ kind }) => kind === "example").length / coreCount;
       if (!Number.isInteger(exampleCount)) throw new Error(`${category} 输入模板案例数量不一致`);
       const generated = await generateValidBatch(options, category, coreCount, exampleCount, chunkIndex, chunkCount, source);
@@ -131,6 +141,7 @@ export async function buildQwenCandidate(options: PipelineOptions): Promise<Syst
       assertBatch(category, coreCount, reviewed, source);
       options.onProgress?.({ category, stage: "review", completed: ++completedRequests, total: TOTAL_REQUESTS });
       categoryPhrases.push(...reviewed.phrases);
+      await options.onBatchCompleted?.([...phrases, ...categoryPhrases]);
     }
     if (categoryPhrases.filter(({ kind }) => kind === "core").length !== coreQuota) throw new Error(`${category} 总配额不完整`);
     phrases.push(...categoryPhrases);
@@ -142,12 +153,29 @@ export async function buildQwenCandidate(options: PipelineOptions): Promise<Syst
 }
 
 export async function runQwenAgent(options: AgentOptions) {
-  const content = await buildQwenCandidate(options);
-  const report = inspectSystemContent(content);
   await mkdir(options.outputDir, { recursive: true });
+  const checkpointPath = join(options.outputDir, `checkpoint-${options.version}.json`);
+  let resumePhrases: SystemContentPhrase[] = [];
+  try {
+    const checkpoint = JSON.parse(await readFile(checkpointPath, "utf8")) as { version?: string; phrases?: SystemContentPhrase[] };
+    if (checkpoint.version !== options.version || !Array.isArray(checkpoint.phrases)) throw new Error("Qwen 断点文件无效");
+    resumePhrases = checkpoint.phrases;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const content = await buildQwenCandidate({
+    ...options,
+    resumePhrases,
+    onBatchCompleted: async (phrases) => {
+      await writeFile(checkpointPath, `${JSON.stringify({ version: options.version, phrases })}\n`, "utf8");
+      await options.onBatchCompleted?.(phrases);
+    },
+  });
+  const report = inspectSystemContent(content);
   const candidatePath = join(options.outputDir, `candidate-${options.version}.json`);
   const reportPath = join(options.outputDir, `report-${options.version}.json`);
   await writeFile(candidatePath, `${JSON.stringify(content, null, 2)}\n`, "utf8");
   await writeFile(reportPath, `${JSON.stringify({ status: "pass", version: options.version, ...report }, null, 2)}\n`, "utf8");
+  await rm(checkpointPath, { force: true });
   return { candidatePath, reportPath };
 }
