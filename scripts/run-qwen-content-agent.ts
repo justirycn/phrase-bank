@@ -13,6 +13,14 @@ const client = createQwenClient({
   apiKey: process.env.DASHSCOPE_API_KEY ?? "",
   baseUrl: process.env.DASHSCOPE_BASE_URL ?? "https://dashscope.aliyuncs.com/compatible-mode/v1",
   model: process.env.DASHSCOPE_MODEL ?? "qwen-plus",
+  timeoutMs: 120_000,
 });
-const result = await runQwenAgent({ client, version, generatedAt: new Date().toISOString(), qualityVersion: "qwen-plus-review-v1", outputDir: resolve(".content-agent") });
+const result = await runQwenAgent({
+  client,
+  version,
+  generatedAt: new Date().toISOString(),
+  qualityVersion: "qwen-plus-review-v1",
+  outputDir: resolve(".content-agent"),
+  onProgress: ({ category, stage, completed, total }) => process.stdout.write(`进度 ${completed}/${total} · ${category} · ${stage}\n`),
+});
 process.stdout.write(`候选内容已通过：${result.candidatePath}\n质检报告：${result.reportPath}\n`);

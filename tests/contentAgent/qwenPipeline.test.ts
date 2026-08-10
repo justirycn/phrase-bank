@@ -18,8 +18,8 @@ function responseQueue(reviewStatus: "pass" | "fail" = "pass") {
       qualityVersion: "qwen-plus-review-v1",
     }));
     const cores = phrases.filter(({ kind }) => kind === "core");
-    return Array.from({ length: Math.ceil(cores.length / 20) }, (_, chunkIndex) => {
-      const chunkCores = cores.slice(chunkIndex * 20, chunkIndex * 20 + 20);
+    return Array.from({ length: Math.ceil(cores.length / 10) }, (_, chunkIndex) => {
+      const chunkCores = cores.slice(chunkIndex * 10, chunkIndex * 10 + 10);
       const ids = new Set(chunkCores.map(({ id }) => id));
       const chunk = phrases.filter((phrase) => phrase.kind === "core" ? ids.has(phrase.id) : ids.has(phrase.parentPhraseId ?? ""));
       return [JSON.stringify({ phrases: chunk }), JSON.stringify({ status: reviewStatus, issues: reviewStatus === "pass" ? [] : ["unnatural"], phrases: chunk })];
@@ -38,21 +38,24 @@ function fakeClient(outputs: string[]): QwenClient {
 describe("Qwen content pipeline", () => {
   it("generates and independently reviews all six exact category batches", async () => {
     const client = fakeClient(responseQueue());
-    const result = await buildQwenCandidate({ client, version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1" });
+    const onProgress = vi.fn();
+    const result = await buildQwenCandidate({ client, version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1", onProgress });
 
     expect(result.phrases.filter(({ kind }) => kind === "core")).toHaveLength(600);
     expect(result.phrases).toHaveLength(2000);
     for (const category of categories) expect(result.phrases.filter((phrase) => phrase.categoryId === category && phrase.kind === "core")).toHaveLength(quotas[category]);
-    expect(client.complete).toHaveBeenCalledTimes(62);
+    expect(client.complete).toHaveBeenCalledTimes(120);
     const calls = vi.mocked(client.complete).mock.calls;
     expect(calls[0][0].map(({ content }) => content).join(" ")).toContain("daily");
     expect(calls[0][0].map(({ content }) => content).join(" ")).toContain("每个核心恰好 3 个案例");
     expect(calls[0][0].map(({ content }) => content).join(" ")).toContain("sys-daily-01-1-1");
     expect(calls[1][0][0].content).toContain("独立审校");
     expect(calls[1][0]).not.toBe(calls[0][0]);
-    const firstTravelCall = 18;
+    const firstTravelCall = 36;
     expect(calls[firstTravelCall][0].map(({ content }) => content).join(" ")).toContain("每个核心恰好 3 个案例");
-    expect(calls[firstTravelCall + 2][0].map(({ content }) => content).join(" ")).toContain("每个核心恰好 2 个案例");
+    expect(calls[firstTravelCall + 4][0].map(({ content }) => content).join(" ")).toContain("每个核心恰好 2 个案例");
+    expect(onProgress).toHaveBeenCalledTimes(120);
+    expect(onProgress).toHaveBeenLastCalledWith({ category: "social", completed: 120, total: 120, stage: "review" });
   });
 
   it("accepts a single JSON markdown fence but rejects review failures", async () => {

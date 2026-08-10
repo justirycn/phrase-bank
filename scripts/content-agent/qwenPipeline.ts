@@ -9,7 +9,8 @@ const CATEGORY_QUOTAS = [
   ["daily", 180], ["travel", 100], ["work", 120], ["business", 100], ["supply-chain", 70], ["social", 30],
 ] as const;
 
-interface PipelineOptions { client: QwenClient; version: string; generatedAt: string; qualityVersion: string; sourceContent?: SystemContentPackage; }
+interface PipelineProgress { category: string; stage: "generate" | "review"; completed: number; total: number; }
+interface PipelineOptions { client: QwenClient; version: string; generatedAt: string; qualityVersion: string; sourceContent?: SystemContentPackage; onProgress?: (progress: PipelineProgress) => void; }
 interface AgentOptions extends PipelineOptions { outputDir: string; }
 interface BatchResponse { phrases: SystemContentPhrase[]; }
 interface ReviewResponse extends BatchResponse { status: "pass" | "fail"; issues: string[]; }
@@ -23,7 +24,8 @@ function parseJson<T>(value: string): T {
   catch { throw new Error("Qwen 返回的 JSON 无法解析"); }
 }
 
-const MAX_CORES_PER_REQUEST = 20;
+const MAX_CORES_PER_REQUEST = 10;
+const TOTAL_REQUESTS = CATEGORY_QUOTAS.reduce((total, [, quota]) => total + Math.ceil(quota / MAX_CORES_PER_REQUEST) * 2, 0);
 
 function generationMessages(category: string, coreCount: number, exampleCount: number, chunkIndex: number, chunkCount: number, source: BatchResponse, options: PipelineOptions): QwenMessage[] {
   return [
@@ -53,6 +55,7 @@ function assertBatch(category: string, coreCount: number, batch: BatchResponse, 
 
 export async function buildQwenCandidate(options: PipelineOptions): Promise<SystemContentPackage> {
   const phrases: SystemContentPhrase[] = [];
+  let completedRequests = 0;
   const sourceContent = options.sourceContent ?? generateSystemContent();
   for (const [category, coreQuota] of CATEGORY_QUOTAS) {
     const sourcePhrases = sourceContent.phrases.filter((phrase) => phrase.categoryId === category);
@@ -69,9 +72,11 @@ export async function buildQwenCandidate(options: PipelineOptions): Promise<Syst
       if (!Number.isInteger(exampleCount)) throw new Error(`${category} 输入模板案例数量不一致`);
       const generated = parseJson<BatchResponse>(await options.client.complete(generationMessages(category, coreCount, exampleCount, chunkIndex, chunkCount, source, options)));
       assertBatch(category, coreCount, generated, source);
+      options.onProgress?.({ category, stage: "generate", completed: ++completedRequests, total: TOTAL_REQUESTS });
       const reviewed = parseJson<ReviewResponse>(await options.client.complete(reviewMessages(category, coreCount, generated)));
       if (reviewed.status !== "pass") throw new Error(`${category} 审校未通过`);
       assertBatch(category, coreCount, reviewed, source);
+      options.onProgress?.({ category, stage: "review", completed: ++completedRequests, total: TOTAL_REQUESTS });
       categoryPhrases.push(...reviewed.phrases);
     }
     if (categoryPhrases.filter(({ kind }) => kind === "core").length !== coreQuota) throw new Error(`${category} 总配额不完整`);
