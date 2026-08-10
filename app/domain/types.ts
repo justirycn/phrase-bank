@@ -4,6 +4,8 @@ export type TrainingSource = "due" | "weak" | "mature" | "new" | "requeue";
 export type PhraseOrigin = "personal" | "system";
 export type PhraseKind = "standalone" | "core" | "example";
 export type CefrLevel = "A2" | "B1" | "B2";
+export type LearningStage = "unseen" | "learning" | "learned" | "mastered";
+export type LearningPhase = "study" | "test";
 
 export interface TrainingEvent {
   id: string;
@@ -74,9 +76,27 @@ export interface Phrase extends PhraseInput {
 
 export interface PhraseLearningState {
   phraseId: string;
+  stage: LearningStage;
+  firstSeenAt?: string;
+  firstTestedAt?: string;
+  firstResult?: ReviewResult;
+  consecutiveGood: number;
   masteredDates: string[];
   unlockedAt?: string;
   updatedAt: string;
+}
+
+export interface LearningSessionRecord {
+  id: string;
+  date: string;
+  themeCategoryId: string;
+  phraseIds: string[];
+  studyIndex: number;
+  testIndex: number;
+  phase: LearningPhase;
+  startedAt: string;
+  updatedAt: string;
+  completedAt?: string;
 }
 
 export interface SystemContentPhrase extends PhraseInput {
@@ -150,4 +170,18 @@ export interface BackupEnvelopeV3 {
   activeSystemContentVersion?: string;
 }
 
-export type BackupEnvelope = BackupEnvelopeV1 | BackupEnvelopeV2 | BackupEnvelopeV3;
+export interface BackupEnvelopeV4 {
+  format: "personal-phrase-bank";
+  version: 4;
+  exportedAt: string;
+  categories: Category[];
+  phrases: Phrase[];
+  reviewLogs: ReviewLog[];
+  trainingEvents: TrainingEvent[];
+  trainingSessions: TrainingSessionRecord[];
+  phraseLearningStates: PhraseLearningState[];
+  activeSystemContentVersion?: string;
+  learningSessions: LearningSessionRecord[];
+}
+
+export type BackupEnvelope = BackupEnvelopeV1 | BackupEnvelopeV2 | BackupEnvelopeV3 | BackupEnvelopeV4;
