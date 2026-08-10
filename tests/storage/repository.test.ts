@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { LocalPhraseRepository } from "../../app/storage/indexedDbRepository";
 import { createNewPhrase } from "../../app/domain/review";
-import type { BackupEnvelopeV1, BackupEnvelopeV2, Category, Phrase, ReviewLog, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import type { BackupEnvelopeV1, BackupEnvelopeV2, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewLog, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 import { parseBackup } from "../../app/storage/backup";
 
 describe("LocalPhraseRepository", () => {
@@ -19,6 +19,13 @@ describe("LocalPhraseRepository", () => {
       { id: "sys-core", english, chinese: "系统核心句", categoryId: "daily", origin: "system", kind: "core", subcategory: "routine", cefrLevel: "A2", intent: "state", contentVersion: version, qualityVersion: "q1" },
       { id: "sys-example", english: "System example", chinese: "系统案例句", categoryId: "daily", origin: "system", kind: "example", parentPhraseId: "sys-core", unlockOrder: 1, subcategory: "routine", cefrLevel: "A2", intent: "state", contentVersion: version, qualityVersion: "q1" },
     ],
+  });
+
+  const learningSession = (overrides: Partial<LearningSessionRecord> = {}): LearningSessionRecord => ({
+    id: "learning-session", date: "2026-08-10", themeCategoryId: "daily",
+    phraseIds: ["starter-daily-not-sure"], studyIndex: 1, testIndex: 0, phase: "test",
+    startedAt: "2026-08-10T08:00:00.000Z", updatedAt: "2026-08-10T08:00:00.000Z",
+    ...overrides,
   });
 
   it("installs, updates, retires, and rolls back validated system packages", async () => {
@@ -123,6 +130,10 @@ describe("LocalPhraseRepository", () => {
     await repo.submitReview(phrase.id, "good", now);
     expect((await repo.getPhrase(phrase.id))?.reviewStep).toBe(1);
     expect((await repo.exportSnapshot()).reviewLogs).toHaveLength(1);
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({
+      stage: "learned", firstSeenAt: now.toISOString(), firstTestedAt: now.toISOString(),
+      firstResult: "good", consecutiveGood: 1,
+    });
   });
 
   it("deduplicates events and lists inclusive time ranges in chronological order", async () => {
@@ -152,6 +163,9 @@ describe("LocalPhraseRepository", () => {
     expect((await repo.listTrainingEvents()).filter((item) => item.id === event.id)).toHaveLength(1);
     expect((await repo.getPhrase(phrase.id))?.reviewStep).toBe(1);
     expect((await repo.exportSnapshot()).reviewLogs.filter((log) => log.phraseId === phrase.id)).toHaveLength(1);
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({
+      stage: "learned", firstResult: "good", consecutiveGood: 1,
+    });
   });
 
   it("does not store a training event when its atomic review cannot be applied", async () => {
@@ -190,11 +204,11 @@ describe("LocalPhraseRepository", () => {
     await persistedRepo.saveSpeechPreferences({ accent: "en-GB", autoSpeak: false });
     expect(await new LocalPhraseRepository(persistedName).getSpeechPreferences()).toEqual({ accent: "en-GB", autoSpeak: false });
     const snapshot = await repo.exportSnapshot();
-    expect(snapshot.version).toBe(3);
+    expect(snapshot.version).toBe(4);
     const dbName = `phrase-bank-${crypto.randomUUID()}`;
     const corruptRepo = new LocalPhraseRepository(dbName);
     await corruptRepo.initialize();
-    const request = indexedDB.open(dbName, 3);
+    const request = indexedDB.open(dbName, 4);
     const db = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
     const tx = db.transaction("metadata", "readwrite");
     tx.objectStore("metadata").put({ key: "speechPreferences", value: "{" });
@@ -210,14 +224,14 @@ describe("LocalPhraseRepository", () => {
 
   it("exports v2 and imports v1/v2 training data with skip and overwrite policies", async () => {
     const base = await repo.exportSnapshot();
-    expect(base).toMatchObject({ version: 3, trainingEvents: [], trainingSessions: [], phraseLearningStates: [] });
+    expect(base).toMatchObject({ version: 4, trainingEvents: [], trainingSessions: [], learningSessions: [] });
     const v1: BackupEnvelopeV1 = { format: base.format, version: 1, exportedAt: base.exportedAt, categories: [], phrases: [], reviewLogs: [] };
     const event: TrainingEvent = { id: "event", sessionId: "session", phraseId: "starter-daily-not-sure", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: base.exportedAt };
     const session: TrainingSessionRecord = { id: "session", mode: "quick", startedAt: base.exportedAt, updatedAt: base.exportedAt, phraseIds: [event.phraseId], sources: ["due"], currentIndex: 0, activeSeconds: 1 };
     await repo.saveTrainingEvent(event);
     await repo.saveTrainingSession(session);
     const normalizedV1 = parseBackup(JSON.stringify(v1));
-    expect(normalizedV1).toMatchObject({ version: 3, trainingEvents: [], trainingSessions: [], phraseLearningStates: [] });
+    expect(normalizedV1).toMatchObject({ version: 4, trainingEvents: [], trainingSessions: [], phraseLearningStates: [], learningSessions: [] });
     await repo.importSnapshot(normalizedV1, "overwrite");
     expect((await repo.exportSnapshot()).trainingEvents).toEqual([event]);
     expect((await repo.exportSnapshot()).trainingSessions).toEqual([session]);
@@ -260,7 +274,7 @@ describe("LocalPhraseRepository", () => {
     expect(await migrated.getPhrase(phrase.id)).toEqual({ ...phrase, origin: "personal", kind: "standalone" });
     expect(await migrated.listCategories()).toContainEqual(category);
     expect((await migrated.exportSnapshot()).reviewLogs).toContainEqual(log);
-    const reopened = indexedDB.open(dbName, 3);
+    const reopened = indexedDB.open(dbName, 4);
     const upgradedDb = await new Promise<IDBDatabase>((resolve, reject) => { reopened.onsuccess = () => resolve(reopened.result); reopened.onerror = () => reject(reopened.error); });
     const metadata = await new Promise<Array<{ key: string; value: string }>>((resolve, reject) => { const read = upgradedDb.transaction("metadata").objectStore("metadata").getAll(); read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error); });
     expect(metadata).toEqual([...originalMetadata].sort((a, b) => a.key.localeCompare(b.key)));
@@ -268,14 +282,188 @@ describe("LocalPhraseRepository", () => {
     expect(upgradedDb.objectStoreNames.contains("trainingSessions")).toBe(true);
     expect(upgradedDb.objectStoreNames.contains("phraseLearningState")).toBe(true);
     expect(upgradedDb.objectStoreNames.contains("systemContentPackages")).toBe(true);
-    const schemaTx = upgradedDb.transaction(["trainingEvents", "trainingSessions"]);
+    expect(upgradedDb.objectStoreNames.contains("learningSessions")).toBe(true);
+    const schemaTx = upgradedDb.transaction(["trainingEvents", "trainingSessions", "learningSessions"]);
     expect(Array.from(schemaTx.objectStore("trainingEvents").indexNames)).toEqual(expect.arrayContaining(["by-occurred", "by-session", "by-phrase"]));
     expect(Array.from(schemaTx.objectStore("trainingSessions").indexNames)).toContain("by-updated");
+    expect(Array.from(schemaTx.objectStore("learningSessions").indexNames)).toContain("by-updated");
     await migrated.saveTrainingSession({ id: "new-session", mode: "quick", startedAt: timestamp, updatedAt: timestamp, phraseIds: [phrase.id], currentIndex: 0, activeSeconds: 0 });
     expect((await migrated.getActiveTrainingSession())?.id).toBe("new-session");
     await migrated.saveTrainingEvent({ id: "new-event", sessionId: "new-session", phraseId: phrase.id, source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: timestamp });
     expect((await migrated.listTrainingEvents()).map(({ id }) => id)).toContain("new-event");
     await migrated.saveSpeechPreferences({ accent: "en-GB", autoSpeak: false });
     expect(await migrated.getSpeechPreferences()).toEqual({ accent: "en-GB", autoSpeak: false });
+  });
+
+  it("persists legal phrase states and learning-session CRUD in updated order", async () => {
+    const state: PhraseLearningState = {
+      phraseId: "starter-daily-not-sure", stage: "learning",
+      firstSeenAt: "2026-08-10T08:00:00.000Z", consecutiveGood: 0,
+      masteredDates: [], updatedAt: "2026-08-10T08:00:00.000Z",
+    };
+    await repo.savePhraseLearningState(state);
+    expect(await repo.getPhraseLearningState(state.phraseId)).toEqual(state);
+
+    await repo.saveLearningSession(learningSession({ id: "older" }));
+    await repo.saveLearningSession(learningSession({ id: "completed-newer", updatedAt: "2026-08-10T10:00:00.000Z", completedAt: "2026-08-10T10:00:00.000Z" }));
+    await repo.saveLearningSession(learningSession({ id: "newest", updatedAt: "2026-08-10T09:00:00.000Z" }));
+    expect((await repo.getActiveLearningSession())?.id).toBe("newest");
+
+    const completedAt = new Date("2026-08-10T11:00:00.000Z");
+    await repo.completeLearningSession("newest", completedAt);
+    expect((await repo.exportSnapshot()).learningSessions.find(({ id }) => id === "newest")).toEqual({
+      ...learningSession({ id: "newest", updatedAt: completedAt.toISOString() }),
+      completedAt: completedAt.toISOString(),
+    });
+    await expect(repo.completeLearningSession("missing", completedAt)).rejects.toThrow("找不到学习会话");
+  });
+
+  it("creates legal unseen states for seeded and installed phrases", async () => {
+    expect(await repo.getPhraseLearningState("starter-daily-not-sure")).toMatchObject({ stage: "unseen", consecutiveGood: 0, masteredDates: [] });
+    await repo.installSystemContentPackage(contentPackage("v1"));
+    expect(await repo.getPhraseLearningState("sys-core")).toMatchObject({ stage: "unseen", consecutiveGood: 0, unlockedAt: "2026-08-10T00:00:00.000Z" });
+    expect(await repo.getPhraseLearningState("sys-example")).toMatchObject({ stage: "unseen", consecutiveGood: 0 });
+  });
+
+  it("atomically submits the first learning review and advances the matching cursor once", async () => {
+    const phraseId = "starter-daily-not-sure";
+    const session = learningSession({ phraseIds: [phraseId] });
+    await repo.saveLearningSession(session);
+    await repo.savePhraseLearningState({
+      phraseId, stage: "learning", firstSeenAt: "2026-08-10T07:30:00.000Z",
+      consecutiveGood: 0, masteredDates: [], unlockedAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-10T07:30:00.000Z",
+    });
+    const event: TrainingEvent = {
+      id: "first-review", sessionId: session.id, phraseId, source: "new", result: "good",
+      usedPronunciationHint: false, recorded: true, activeSeconds: 4,
+      occurredAt: "2026-08-10T08:05:00.000Z",
+    };
+    const nextSession = { ...session, testIndex: 1, updatedAt: event.occurredAt };
+
+    await repo.submitFirstLearningReview(event, nextSession);
+    expect(await repo.getPhrase(phraseId)).toMatchObject({ reviewStep: 1, lastReviewedAt: event.occurredAt });
+    expect(await repo.getPhraseLearningState(phraseId)).toEqual({
+      phraseId, stage: "learned", firstSeenAt: "2026-08-10T07:30:00.000Z",
+      firstTestedAt: event.occurredAt, firstResult: "good", consecutiveGood: 1,
+      masteredDates: ["2026-08-10"], unlockedAt: "2026-08-09T00:00:00.000Z", updatedAt: event.occurredAt,
+    });
+    expect(await repo.getActiveLearningSession()).toEqual(nextSession);
+    expect((await repo.exportSnapshot()).reviewLogs.filter(({ phraseId: id }) => id === phraseId)).toHaveLength(1);
+
+    await repo.submitFirstLearningReview(event, { ...nextSession, testIndex: 0 });
+    expect((await repo.listTrainingEvents()).filter(({ id }) => id === event.id)).toHaveLength(1);
+    expect((await repo.exportSnapshot()).reviewLogs.filter(({ phraseId: id }) => id === phraseId)).toHaveLength(1);
+    expect((await repo.getPhrase(phraseId))?.reviewStep).toBe(1);
+    expect(await repo.getActiveLearningSession()).toEqual(nextSession);
+  });
+
+  it("rejects missing phrases, missing sessions, and mismatched first-review cursors without progress", async () => {
+    const phraseId = "starter-daily-not-sure";
+    const session = learningSession({ phraseIds: [phraseId] });
+    await repo.saveLearningSession(session);
+    const event: TrainingEvent = {
+      id: "invalid-first-review", sessionId: session.id, phraseId, source: "new", result: "hard",
+      usedPronunciationHint: false, recorded: false, activeSeconds: 1,
+      occurredAt: "2026-08-10T08:05:00.000Z",
+    };
+    const before = await repo.exportSnapshot();
+    await expect(repo.submitFirstLearningReview({ ...event, id: "missing-phrase", phraseId: "missing" }, { ...session, phraseIds: ["missing"], testIndex: 1 })).rejects.toThrow();
+    await expect(repo.submitFirstLearningReview({ ...event, id: "missing-session", sessionId: "missing" }, { ...session, id: "missing", testIndex: 1 })).rejects.toThrow();
+    await expect(repo.submitFirstLearningReview(event, { ...session, testIndex: 0 })).rejects.toThrow("首次测试进度不一致");
+    const after = await repo.exportSnapshot();
+    expect(after.trainingEvents).toEqual(before.trainingEvents);
+    expect(after.reviewLogs).toEqual(before.reviewLogs);
+    expect(after.phrases).toEqual(before.phrases);
+    expect(after.learningSessions).toEqual(before.learningSessions);
+  });
+
+  it("rolls back review writes when persisting the proposed cursor fails", async () => {
+    const phraseId = "starter-daily-not-sure";
+    const session = learningSession({ phraseIds: [phraseId] });
+    await repo.saveLearningSession(session);
+    const event: TrainingEvent = {
+      id: "uncloneable-cursor", sessionId: session.id, phraseId, source: "new", result: "again",
+      usedPronunciationHint: false, recorded: false, activeSeconds: 1,
+      occurredAt: "2026-08-10T08:05:00.000Z",
+    };
+    const before = await repo.exportSnapshot();
+    const broken = { ...session, testIndex: 1, updatedAt: event.occurredAt, cannotClone: () => undefined } as LearningSessionRecord;
+    await expect(repo.submitFirstLearningReview(event, broken)).rejects.toThrow();
+    const after = await repo.exportSnapshot();
+    expect(after.trainingEvents).toEqual(before.trainingEvents);
+    expect(after.reviewLogs).toEqual(before.reviewLogs);
+    expect(after.phrases).toEqual(before.phrases);
+    expect(after.phraseLearningStates).toEqual(before.phraseLearningStates);
+    expect(after.learningSessions).toEqual(before.learningSessions);
+  });
+
+  it("migrates v3 evidence into complete learning states while preserving metadata", async () => {
+    globalThis.indexedDB = new IDBFactory();
+    const dbName = `phrase-bank-v3-${crypto.randomUUID()}`;
+    const request = indexedDB.open(dbName, 3);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      const phrases = db.createObjectStore("phrases", { keyPath: "id" });
+      phrases.createIndex("by-due", "nextReviewAt"); phrases.createIndex("by-created", "createdAt");
+      phrases.createIndex("by-category", "categoryId"); phrases.createIndex("by-origin", "origin"); phrases.createIndex("by-parent", "parentPhraseId");
+      db.createObjectStore("categories", { keyPath: "id" });
+      const logs = db.createObjectStore("reviewLogs", { keyPath: "id" }); logs.createIndex("by-phrase", "phraseId");
+      db.createObjectStore("metadata", { keyPath: "key" });
+      const events = db.createObjectStore("trainingEvents", { keyPath: "id" }); events.createIndex("by-occurred", "occurredAt"); events.createIndex("by-session", "sessionId"); events.createIndex("by-phrase", "phraseId");
+      const sessions = db.createObjectStore("trainingSessions", { keyPath: "id" }); sessions.createIndex("by-updated", "updatedAt");
+      db.createObjectStore("phraseLearningState", { keyPath: "phraseId" });
+      db.createObjectStore("systemContentPackages", { keyPath: "version" });
+    };
+    const oldDb = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    const timestamp = "2026-08-08T08:00:00.000Z";
+    const phrase = (id: string, masteryLevel: number, origin: "personal" | "system" = "personal"): Phrase => ({
+      id, english: id, chinese: id, categoryId: "daily", origin, kind: origin === "system" ? "core" : "standalone",
+      reviewStep: masteryLevel, masteryLevel, nextReviewAt: timestamp, createdAt: timestamp, updatedAt: timestamp,
+    });
+    const tx = oldDb.transaction(Array.from(oldDb.objectStoreNames), "readwrite");
+    tx.objectStore("categories").put({ id: "daily", name: "日常", isDefault: true, createdAt: timestamp, updatedAt: timestamp });
+    tx.objectStore("metadata").put({ key: "initialized", value: "1" }); tx.objectStore("metadata").put({ key: "starterPhrasesVersion", value: "1" });
+    for (const item of [phrase("reviewed", 1), phrase("mastered", 3), phrase("system-new", 0, "system")]) tx.objectStore("phrases").put(item);
+    tx.objectStore("trainingEvents").put({ id: "e1", sessionId: "old", phraseId: "reviewed", source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-08T09:00:00.000Z" });
+    tx.objectStore("trainingEvents").put({ id: "e2", sessionId: "old", phraseId: "reviewed", source: "new", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T09:00:00.000Z" });
+    tx.objectStore("trainingEvents").put({ id: "e3", sessionId: "old", phraseId: "reviewed", source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-10T09:00:00.000Z" });
+    tx.objectStore("reviewLogs").put({ id: "master-log", phraseId: "mastered", result: "good", reviewedAt: "2026-08-09T10:00:00.000Z", previousStep: 2, nextReviewAt: timestamp });
+    tx.objectStore("phraseLearningState").put({ phraseId: "reviewed", masteredDates: ["2026-08-08"], unlockedAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-10T09:00:00.000Z", legacyNote: "keep" });
+    tx.objectStore("phraseLearningState").put({ phraseId: "system-new", masteredDates: [], unlockedAt: timestamp, updatedAt: timestamp });
+    await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); }); oldDb.close();
+
+    const migrated = new LocalPhraseRepository(dbName);
+    await migrated.initialize();
+    expect(await migrated.getPhraseLearningState("reviewed")).toMatchObject({
+      stage: "learned", firstSeenAt: "2026-08-08T09:00:00.000Z", firstTestedAt: "2026-08-08T09:00:00.000Z",
+      firstResult: "good", consecutiveGood: 1, masteredDates: ["2026-08-08"], unlockedAt: "2026-08-07T00:00:00.000Z", legacyNote: "keep",
+    });
+    expect(await migrated.getPhraseLearningState("mastered")).toMatchObject({ stage: "mastered", consecutiveGood: 1, firstResult: "good" });
+    expect(await migrated.getPhraseLearningState("system-new")).toMatchObject({ stage: "unseen", consecutiveGood: 0, unlockedAt: timestamp });
+    const reopened = indexedDB.open(dbName, 4);
+    const upgraded = await new Promise<IDBDatabase>((resolve, reject) => { reopened.onsuccess = () => resolve(reopened.result); reopened.onerror = () => reject(reopened.error); });
+    expect(upgraded.objectStoreNames.contains("learningSessions")).toBe(true);
+    expect(Array.from(upgraded.transaction("learningSessions").objectStore("learningSessions").indexNames)).toContain("by-updated");
+  });
+
+  it("includes learning sessions in v4 snapshots and preserves them across legacy imports", async () => {
+    const existing = learningSession({ id: "existing", updatedAt: "2026-08-10T08:00:00.000Z" });
+    await repo.saveLearningSession(existing);
+    const exported = await repo.exportSnapshot();
+    expect(exported).toMatchObject({ version: 4, learningSessions: [existing] });
+
+    const legacy: BackupEnvelopeV1 = {
+      format: "personal-phrase-bank", version: 1, exportedAt: exported.exportedAt,
+      categories: [], phrases: [], reviewLogs: [],
+    };
+    await repo.importSnapshot(legacy, "overwrite");
+    expect((await repo.exportSnapshot()).learningSessions).toEqual([existing]);
+
+    const incoming = { ...existing, updatedAt: "2026-08-10T09:00:00.000Z", testIndex: 1 };
+    await repo.importSnapshot({ ...exported, learningSessions: [incoming] }, "skip");
+    expect((await repo.getActiveLearningSession())?.updatedAt).toBe(existing.updatedAt);
+    await repo.importSnapshot({ ...exported, learningSessions: [incoming] }, "overwrite");
+    expect((await repo.getActiveLearningSession())?.updatedAt).toBe(incoming.updatedAt);
   });
 });

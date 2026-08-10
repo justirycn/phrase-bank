@@ -1,24 +1,86 @@
-import type { BackupEnvelopeV1, BackupEnvelopeV3, Phrase, PhraseLearningState, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+import type { BackupEnvelopeV1, BackupEnvelopeV4, LearningSessionRecord, Phrase, PhraseLearningState, ReviewLog, ReviewResult, TrainingEvent, TrainingSessionRecord } from "../domain/types";
 
+type LegacyLearningState = Partial<PhraseLearningState> & Pick<PhraseLearningState, "phraseId">;
 type BackupCandidate = Omit<Partial<BackupEnvelopeV1>, "version"> & {
-  version?: 1 | 2 | 3;
+  version?: 1 | 2 | 3 | 4;
   trainingEvents?: TrainingEvent[];
   trainingSessions?: TrainingSessionRecord[];
-  phraseLearningStates?: PhraseLearningState[];
+  phraseLearningStates?: LegacyLearningState[];
   activeSystemContentVersion?: string;
+  learningSessions?: LearningSessionRecord[];
 };
 
 const validDuration = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const validIndex = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0;
-const validDate = (value: unknown) => typeof value === "string" && value.length > 0 && Number.isFinite(Date.parse(value));
+const validDate = (value: unknown): value is string => typeof value === "string" && value.length > 0 && Number.isFinite(Date.parse(value));
+const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
+const validDay = (value: unknown): value is string => typeof value === "string" && dayPattern.test(value)
+  && Number.isFinite(Date.parse(`${value}T00:00:00.000Z`))
+  && new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value;
+const stages = new Set(["unseen", "learning", "learned", "mastered"]);
+const results = new Set(["again", "hard", "good"]);
 
-export function parseBackup(raw: string): BackupEnvelopeV3 {
+function reviewEvidence(phraseId: string, logs: ReviewLog[], events: TrainingEvent[]) {
+  const unique = new Map<string, { occurredAt: string; result: ReviewResult }>();
+  for (const item of logs) if (item.phraseId === phraseId) unique.set(`${item.reviewedAt}|${item.result}`, { occurredAt: item.reviewedAt, result: item.result });
+  for (const item of events) if (item.phraseId === phraseId) unique.set(`${item.occurredAt}|${item.result}`, { occurredAt: item.occurredAt, result: item.result });
+  return [...unique.values()].filter(({ occurredAt }) => validDate(occurredAt)).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
+}
+
+function migrateLegacyState(phrase: Phrase, legacy: LegacyLearningState | undefined, logs: ReviewLog[], events: TrainingEvent[]): PhraseLearningState {
+  const evidence = reviewEvidence(phrase.id, logs, events);
+  const earliest = evidence[0];
+  const reviewedAt = earliest?.occurredAt ?? (validDate(phrase.lastReviewedAt) ? phrase.lastReviewedAt : undefined);
+  const firstSeenAt = reviewedAt ?? (validDate(legacy?.firstSeenAt) ? legacy.firstSeenAt : undefined);
+  const firstTestedAt = reviewedAt ?? (validDate(legacy?.firstTestedAt) ? legacy.firstTestedAt : undefined);
+  const firstResult = earliest?.result ?? (results.has(legacy?.firstResult as string) ? legacy?.firstResult : undefined);
+  const masteredDates = Array.isArray(legacy?.masteredDates) ? legacy.masteredDates.filter((day): day is string => typeof day === "string") : [];
+  const hasCompleteStage = (legacy?.stage === "learned" || legacy?.stage === "mastered") && firstSeenAt && firstTestedAt && firstResult;
+  const stage: PhraseLearningState["stage"] = hasCompleteStage
+    ? legacy.stage as "learned" | "mastered"
+    : reviewedAt
+      ? phrase.masteryLevel === 3 || masteredDates.length >= 2 ? "mastered" : "learned"
+      : firstSeenAt ? "learning" : "unseen";
+  let consecutiveGood = 0;
+  for (let index = evidence.length - 1; index >= 0 && evidence[index].result === "good"; index -= 1) consecutiveGood += 1;
+  return {
+    ...legacy,
+    phraseId: phrase.id,
+    stage,
+    firstSeenAt: stage === "unseen" ? undefined : firstSeenAt,
+    firstTestedAt: stage === "learned" || stage === "mastered" ? firstTestedAt : undefined,
+    firstResult: stage === "learned" || stage === "mastered" ? firstResult : undefined,
+    consecutiveGood,
+    masteredDates,
+    unlockedAt: validDate(legacy?.unlockedAt) ? legacy.unlockedAt : undefined,
+    updatedAt: validDate(legacy?.updatedAt) ? legacy.updatedAt : validDate(phrase.updatedAt) ? phrase.updatedAt : reviewedAt ?? phrase.createdAt,
+  };
+}
+
+function invalidLearningState(state: LegacyLearningState, phraseIds: Set<string>) {
+  if (!phraseIds.has(state.phraseId) || !stages.has(state.stage as string)
+    || !validIndex(state.consecutiveGood)
+    || !Array.isArray(state.masteredDates) || new Set(state.masteredDates).size !== state.masteredDates.length
+    || state.masteredDates.some((day) => !validDay(day))
+    || !validDate(state.updatedAt) || (state.unlockedAt !== undefined && !validDate(state.unlockedAt))) return true;
+  const hasSeen = validDate(state.firstSeenAt);
+  const hasTested = validDate(state.firstTestedAt);
+  const hasResult = results.has(state.firstResult as string);
+  if (state.firstSeenAt !== undefined && !hasSeen) return true;
+  if (state.firstTestedAt !== undefined && !hasTested) return true;
+  if (state.firstResult !== undefined && !hasResult) return true;
+  if (state.stage === "unseen") return state.firstSeenAt !== undefined || state.firstTestedAt !== undefined || state.firstResult !== undefined;
+  if (state.stage === "learning") return !hasSeen || state.firstTestedAt !== undefined || state.firstResult !== undefined;
+  return !hasSeen || !hasTested || !hasResult;
+}
+
+export function parseBackup(raw: string): BackupEnvelopeV4 {
   let value: unknown;
   try { value = JSON.parse(raw); } catch { throw new Error("备份文件不是有效的 JSON"); }
   if (!value || typeof value !== "object") throw new Error("备份文件格式不正确");
   const backup = value as BackupCandidate;
   if (backup.format !== "personal-phrase-bank") throw new Error("这不是 Phrase Bank 备份文件");
-  if (backup.version !== 1 && backup.version !== 2 && backup.version !== 3) throw new Error("不支持的备份版本");
+  if (backup.version !== 1 && backup.version !== 2 && backup.version !== 3 && backup.version !== 4) throw new Error("不支持的备份版本");
   if (!validDate(backup.exportedAt) || !Array.isArray(backup.categories) || !Array.isArray(backup.phrases) || !Array.isArray(backup.reviewLogs)) throw new Error("备份文件缺少必要数据");
   const categoryIds = new Set(backup.categories.map(({ id }) => id));
   if (backup.categories.some(({ id, name }) => !id || !name)) throw new Error("备份中的分类数据不完整");
@@ -48,27 +110,51 @@ export function parseBackup(raw: string): BackupEnvelopeV3 {
     || !validIndex(session.currentIndex) || session.currentIndex > session.phraseIds.length
     || !validDuration(session.activeSeconds);
   if (trainingSessions.some(invalidSession)) throw new Error("备份包含无效的训练会话");
-  const sessionIds = new Set(trainingSessions.map(({ id }) => id));
-  const results = new Set(["again", "hard", "good"]);
+
+  const learningSessions = backup.version === 4 ? backup.learningSessions : [];
+  if (!Array.isArray(learningSessions)) throw new Error("备份缺少学习会话");
+  const invalidLearningSession = (session: LearningSessionRecord) => !session.id?.trim()
+    || !validDay(session.date) || !categoryIds.has(session.themeCategoryId)
+    || !Array.isArray(session.phraseIds) || session.phraseIds.some((id) => !phraseIds.has(id))
+    || new Set(session.phraseIds).size !== session.phraseIds.length
+    || !validIndex(session.studyIndex) || session.studyIndex > session.phraseIds.length
+    || !validIndex(session.testIndex) || session.testIndex > session.phraseIds.length
+    || (session.phase !== "study" && session.phase !== "test")
+    || !validDate(session.startedAt) || !validDate(session.updatedAt)
+    || (session.completedAt !== undefined && !validDate(session.completedAt));
+  if (learningSessions.some(invalidLearningSession) || new Set(learningSessions.map(({ id }) => id)).size !== learningSessions.length) throw new Error("备份包含无效的学习会话");
+  if (learningSessions.filter(({ completedAt }) => completedAt === undefined).length > 1) throw new Error("备份包含多个进行中的学习会话");
+
+  const sessionIds = new Set([...trainingSessions.map(({ id }) => id), ...learningSessions.map(({ id }) => id)]);
   const invalidEvent = (event: TrainingEvent) => !event.id?.trim() || !event.sessionId?.trim() || !sessionIds.has(event.sessionId)
     || !event.phraseId?.trim() || !phraseIds.has(event.phraseId) || !sources.has(event.source) || !results.has(event.result)
     || typeof event.usedPronunciationHint !== "boolean" || typeof event.recorded !== "boolean"
     || !validDuration(event.activeSeconds) || !validDate(event.occurredAt);
   if (trainingEvents.some(invalidEvent)) throw new Error("备份包含无效的训练记录");
 
-  const phraseLearningStates = backup.version === 3 ? backup.phraseLearningStates : [];
-  if (!Array.isArray(phraseLearningStates)) throw new Error("备份缺少学习状态");
-  const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
-  if (phraseLearningStates.some((state) => !phraseIds.has(state.phraseId)
-    || !Array.isArray(state.masteredDates) || new Set(state.masteredDates).size !== state.masteredDates.length
-    || state.masteredDates.some((day) => !dayPattern.test(day)) || !validDate(state.updatedAt)
-    || (state.unlockedAt !== undefined && !validDate(state.unlockedAt)))) throw new Error("备份包含无效学习状态");
+  let phraseLearningStates: PhraseLearningState[];
+  if (backup.version === 4) {
+    if (!Array.isArray(backup.phraseLearningStates)) throw new Error("备份缺少学习状态");
+    phraseLearningStates = backup.phraseLearningStates as PhraseLearningState[];
+    if (phraseLearningStates.some((state) => invalidLearningState(state, phraseIds))
+      || new Set(phraseLearningStates.map(({ phraseId }) => phraseId)).size !== phraseLearningStates.length) throw new Error("备份包含无效学习状态");
+  } else if (backup.version === 3) {
+    if (!Array.isArray(backup.phraseLearningStates)) throw new Error("备份缺少学习状态");
+    if (backup.phraseLearningStates.some((state) => !phraseIds.has(state.phraseId)
+      || !Array.isArray(state.masteredDates) || new Set(state.masteredDates).size !== state.masteredDates.length
+      || state.masteredDates.some((day) => !validDay(day))
+      || !validDate(state.updatedAt) || (state.unlockedAt !== undefined && !validDate(state.unlockedAt)))) throw new Error("备份包含无效学习状态");
+    const statesByPhrase = new Map(backup.phraseLearningStates.map((state) => [state.phraseId, state]));
+    phraseLearningStates = phrases.map((phrase) => migrateLegacyState(phrase, statesByPhrase.get(phrase.id), backup.reviewLogs!, trainingEvents));
+  } else {
+    phraseLearningStates = [];
+  }
 
   return {
-    format: "personal-phrase-bank", version: 3, exportedAt: backup.exportedAt,
+    format: "personal-phrase-bank", version: 4, exportedAt: backup.exportedAt,
     categories: backup.categories, phrases, reviewLogs: backup.reviewLogs,
-    trainingEvents, trainingSessions, phraseLearningStates,
-    activeSystemContentVersion: backup.version === 3 ? backup.activeSystemContentVersion : undefined,
+    trainingEvents, trainingSessions, phraseLearningStates, learningSessions,
+    ...(backup.version >= 3 && backup.activeSystemContentVersion ? { activeSystemContentVersion: backup.activeSystemContentVersion } : {}),
   };
 }
 
