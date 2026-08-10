@@ -1,14 +1,22 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const root = resolve(import.meta.dirname, "../..");
-const tracked = () => execFileSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" }).split("\0").filter(Boolean);
+const excluded = new Set([".git", ".next", ".superpowers", ".vinext", ".worktrees", "node_modules", "dist"]);
+const textFile = /(?:\.(?:ts|tsx|js|json|md|ya?ml|example)|\.gitignore)$/;
+function sourceFiles(directory = root): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    if (excluded.has(entry.name)) return [];
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) return sourceFiles(path);
+    return textFile.test(entry.name) ? [relative(root, path).replaceAll("\\", "/")] : [];
+  });
+}
 
 describe("Qwen secret boundary", () => {
   it("contains no tracked API-key-shaped credential", () => {
-    const leaked = tracked().filter((file) => /s[k]-[a-z0-9]{20,}/i.test(readFileSync(resolve(root, file), "utf8")));
+    const leaked = sourceFiles().filter((file) => /s[k]-[a-z0-9]{20,}/i.test(readFileSync(resolve(root, file), "utf8")));
     expect(leaked).toEqual([]);
   });
 
@@ -17,8 +25,13 @@ describe("Qwen secret boundary", () => {
     expect(example).toContain("DASHSCOPE_API_KEY=");
     expect(example).toContain("DASHSCOPE_BASE_URL=");
     expect(example).not.toMatch(/DASHSCOPE_API_KEY=.+/);
-    const clientFiles = tracked().filter((file) => file.startsWith("app/"));
+    const clientFiles = sourceFiles().filter((file) => file.startsWith("app/"));
     expect(clientFiles.some((file) => readFileSync(resolve(root, file), "utf8").includes("DASHSCOPE_API_KEY"))).toBe(false);
+    const dockerIgnore = readFileSync(resolve(root, ".dockerignore"), "utf8");
+    expect(dockerIgnore).toContain(".env*");
+    expect(dockerIgnore).toContain("!.env.content.example");
+    expect(dockerIgnore).toContain(".content-agent");
+    expect(dockerIgnore).toContain(".superpowers");
   });
 
   it("requires revocation, private server configuration, validation, and rollback", () => {

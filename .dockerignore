@@ -7,3 +7,7 @@ work
 task_plan.md
 findings.md
 progress.md
+.env*
+!.env.content.example
+.content-agent
+.superpowers
