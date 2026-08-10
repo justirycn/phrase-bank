@@ -10,6 +10,7 @@ export interface TrainingSelectionOptions {
   now: Date;
   seed: string;
   newIntroducedToday: number;
+  practicedTodayIds?: ReadonlySet<string>;
 }
 
 function stableHash(value: string): number {
@@ -46,6 +47,9 @@ export function selectTrainingGroup(
     : { target: 10, due: 6, weak: 2, mature: 2 };
   const selected: TrainingCandidate[] = [];
   const selectedIds = new Set<string>();
+  const practicedTodayIds = options.practicedTodayIds ?? new Set<string>();
+  const fresh = (pool: Phrase[]) => pool.filter((phrase) => !practicedTodayIds.has(phrase.id));
+  const repeated = (pool: Phrase[]) => pool.filter((phrase) => practicedTodayIds.has(phrase.id));
 
   const add = (pool: Phrase[], source: TrainingSource, limit: number) => {
     for (const phrase of seededOrder(pool, options.seed)) {
@@ -57,15 +61,15 @@ export function selectTrainingGroup(
     }
   };
 
-  add(due, "due", allocation.due);
-  add(weak, "weak", allocation.weak);
-  add(mature, "mature", allocation.mature);
+  add(fresh(due), "due", allocation.due);
+  add(fresh(weak), "weak", allocation.weak);
+  add(fresh(mature), "mature", allocation.mature);
 
   const reviewedBackfill = [
-    ...due.map((phrase) => ({ phrase, source: "due" as const })),
-    ...weak.map((phrase) => ({ phrase, source: "weak" as const })),
-    ...levelTwo.map((phrase) => ({ phrase, source: "weak" as const })),
-    ...mature.map((phrase) => ({ phrase, source: "mature" as const })),
+    ...fresh(due).map((phrase) => ({ phrase, source: "due" as const })),
+    ...fresh(weak).map((phrase) => ({ phrase, source: "weak" as const })),
+    ...fresh(levelTwo).map((phrase) => ({ phrase, source: "weak" as const })),
+    ...fresh(mature).map((phrase) => ({ phrase, source: "mature" as const })),
   ].sort((left, right) => {
     const difference = stableHash(`${options.seed}${left.phrase.id}`)
       - stableHash(`${options.seed}${right.phrase.id}`);
@@ -80,7 +84,32 @@ export function selectTrainingGroup(
   }
 
   const newAllowance = Math.max(0, 3 - options.newIntroducedToday);
-  add(newPhrases, "new", Math.min(newAllowance, allocation.target - selected.length));
+  add(fresh(newPhrases), "new", Math.min(newAllowance, allocation.target - selected.length));
+
+  const repeatedBackfill = [
+    ...repeated(due).map((phrase) => ({ phrase, source: "due" as const })),
+    ...repeated(weak).map((phrase) => ({ phrase, source: "weak" as const })),
+    ...repeated(levelTwo).map((phrase) => ({ phrase, source: "weak" as const })),
+    ...repeated(mature).map((phrase) => ({ phrase, source: "mature" as const })),
+  ].sort((left, right) => {
+    const difference = stableHash(`${options.seed}${left.phrase.id}`)
+      - stableHash(`${options.seed}${right.phrase.id}`);
+    return difference || left.phrase.id.localeCompare(right.phrase.id);
+  });
+
+  for (const candidate of repeatedBackfill) {
+    if (selected.length >= allocation.target) break;
+    if (selectedIds.has(candidate.phrase.id)) continue;
+    selected.push(candidate);
+    selectedIds.add(candidate.phrase.id);
+  }
+
+  const selectedNewCount = selected.filter(({ source }) => source === "new").length;
+  add(
+    repeated(newPhrases),
+    "new",
+    Math.min(Math.max(0, newAllowance - selectedNewCount), allocation.target - selected.length),
+  );
 
   return selected;
 }
