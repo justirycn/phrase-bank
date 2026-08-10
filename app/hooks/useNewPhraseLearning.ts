@@ -37,6 +37,7 @@ export interface UseNewPhraseLearningOptions {
   speech: Pick<BrowserSpeechService, "speak" | "cancel">;
   now?: () => Date;
   idFactory?: () => string;
+  dailyLimit?: number;
 }
 
 interface PendingReview {
@@ -65,6 +66,14 @@ const systemNow = () => new Date();
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const defaultPreferences: SpeechPreferences = { accent: "en-US", autoSpeak: true };
 const CREATION_COORDINATION_MS = 200;
+const DEFAULT_DAILY_LIMIT = 15;
+
+function normalizeDailyLimit(value: number | undefined): number {
+  if (value === undefined || Number.isNaN(value)) return DEFAULT_DAILY_LIMIT;
+  if (value === Number.POSITIVE_INFINITY) return Number.MAX_SAFE_INTEGER;
+  if (value === Number.NEGATIVE_INFINITY) return 1;
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, Math.trunc(value)));
+}
 
 function waitForCreationWindow(promise: Promise<LearningSessionRecord>): Promise<CreationWindowResult> {
   return new Promise((resolve) => {
@@ -116,7 +125,9 @@ export function useNewPhraseLearning({
   speech,
   now = systemNow,
   idFactory = createId,
+  dailyLimit = DEFAULT_DAILY_LIMIT,
 }: UseNewPhraseLearningOptions): NewPhraseLearningController {
+  const normalizedDailyLimit = normalizeDailyLimit(dailyLimit);
   const [phase, setPhase] = useState<NewLearningPhase>("loading");
   const [queue, setQueue] = useState<Phrase[]>([]);
   const [allPhrases, setAllPhrases] = useState<Phrase[]>([]);
@@ -318,6 +329,18 @@ export function useNewPhraseLearning({
 
       const started = readNow();
       const date = shanghaiDate(started);
+      const testedToday = new Set(states.flatMap((state) => {
+        if (!state.firstTestedAt) return [];
+        const firstTestedAt = new Date(state.firstTestedAt);
+        if (Number.isNaN(firstTestedAt.getTime()) || shanghaiDate(firstTestedAt) !== date) return [];
+        return [state.phraseId];
+      }));
+      const remaining = Math.max(0, normalizedDailyLimit - testedToday.size);
+      if (remaining === 0) {
+        replacePhase("empty");
+        setOperation(false);
+        return;
+      }
       const stateById = new Map(states.map((state) => [state.phraseId, state]));
       const categoryIds = new Set(categories.map((item) => item.id));
       const eligibleSystemThemes = [...new Set(phrases.filter((item) =>
@@ -342,7 +365,11 @@ export function useNewPhraseLearning({
         setOperation(false);
         return;
       }
-      const selected = selectLearningGroup(phrases, states, { date, themeCategoryId, target: 5 });
+      const selected = selectLearningGroup(phrases, states, {
+        date,
+        themeCategoryId,
+        target: Math.min(5, remaining),
+      });
       if (selected.length === 0) {
         replacePhase("empty");
         setOperation(false);
@@ -397,7 +424,7 @@ export function useNewPhraseLearning({
       setVisibleError("学习内容暂时无法加载或保存，请重试。");
       setOperation(false);
     });
-  }, [readId, readNow, replacePhase, replaceQueue, replaceRevealed, replaceStudyIndex, replaceTestIndex, repository, setOperation, setVisibleError]);
+  }, [normalizedDailyLimit, readId, readNow, replacePhase, replaceQueue, replaceRevealed, replaceStudyIndex, replaceTestIndex, repository, setOperation, setVisibleError]);
 
   useEffect(() => {
     mountedRef.current = true;

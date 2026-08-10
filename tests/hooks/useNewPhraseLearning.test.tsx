@@ -46,6 +46,13 @@ const unseen = (phraseId: string): PhraseLearningState => ({
   updatedAt: timestamp,
 });
 
+const tested = (phraseId: string, firstTestedAt: string): PhraseLearningState => ({
+  ...unseen(phraseId),
+  stage: "learned",
+  firstTestedAt,
+  firstResult: "good",
+});
+
 interface MemoryOptions {
   phrases?: Phrase[];
   states?: PhraseLearningState[];
@@ -157,6 +164,105 @@ describe("useNewPhraseLearning", () => {
     const empty = renderLearning(emptyStore);
     await waitFor(() => expect(empty.result.current.phase).toBe("empty"));
     expect(emptyStore.repository.saveLearningSession).not.toHaveBeenCalled();
+  });
+
+  it("caps a new group at the two remaining daily slots using distinct valid first tests", async () => {
+    const items = Array.from({ length: 5 }, (_, index) => phrase(`new-${index}`));
+    const today = Array.from({ length: 13 }, (_, index) => tested(`learned-${index}`, timestamp));
+    const store = memoryRepository({
+      phrases: items,
+      states: [
+        ...today,
+        tested("learned-0", timestamp),
+        tested("invalid", "not-a-date"),
+        unseen("missing-date"),
+        ...items.map((item) => unseen(item.id)),
+      ],
+    });
+    const hook = renderLearning(store);
+
+    await waitFor(() => expect(hook.result.current.phase).toBe("study"));
+    expect(hook.result.current.total).toBe(2);
+    expect(store.sessions[0].phraseIds).toHaveLength(2);
+  });
+
+  it("returns empty at the daily limit without creating a session", async () => {
+    const items = Array.from({ length: 5 }, (_, index) => phrase(`new-${index}`));
+    const store = memoryRepository({
+      phrases: items,
+      states: [
+        ...Array.from({ length: 15 }, (_, index) => tested(`learned-${index}`, timestamp)),
+        ...items.map((item) => unseen(item.id)),
+      ],
+    });
+    const hook = renderLearning(store);
+
+    await waitFor(() => expect(hook.result.current.phase).toBe("empty"));
+    expect(hook.result.current.total).toBe(0);
+    expect(store.repository.saveLearningSession).not.toHaveBeenCalled();
+  });
+
+  it("counts first tests by the Shanghai day across the UTC boundary", async () => {
+    const items = Array.from({ length: 5 }, (_, index) => phrase(`new-${index}`));
+    const yesterdayStore = memoryRepository({
+      phrases: items,
+      states: [
+        ...Array.from({ length: 15 }, (_, index) => tested(`yesterday-${index}`, "2026-08-09T15:59:59.000Z")),
+        ...items.map((item) => unseen(item.id)),
+      ],
+    });
+    const yesterday = renderLearning(yesterdayStore, speech(), {
+      now: () => new Date("2026-08-10T00:30:00.000Z"),
+    });
+    await waitFor(() => expect(yesterday.result.current.phase).toBe("study"));
+    expect(yesterday.result.current.total).toBe(5);
+
+    const utcYesterdayStore = memoryRepository({
+      phrases: items,
+      states: [
+        ...Array.from({ length: 13 }, (_, index) => tested(`today-${index}`, "2026-08-09T16:00:00.000Z")),
+        ...items.map((item) => unseen(item.id)),
+      ],
+    });
+    const utcYesterday = renderLearning(utcYesterdayStore, speech(), {
+      now: () => new Date("2026-08-10T00:30:00.000Z"),
+    });
+    await waitFor(() => expect(utcYesterday.result.current.phase).toBe("study"));
+    expect(utcYesterday.result.current.total).toBe(2);
+  });
+
+  it("restores an active group even when today's first tests already reached the limit", async () => {
+    const items = [phrase("a"), phrase("b")];
+    const active: LearningSessionRecord = {
+      id: "active", date: "2026-08-10", themeCategoryId: "daily", phraseIds: items.map((item) => item.id),
+      studyIndex: 1, testIndex: 0, phase: "study", startedAt: timestamp, updatedAt: timestamp,
+    };
+    const store = memoryRepository({
+      phrases: items,
+      states: [
+        ...Array.from({ length: 15 }, (_, index) => tested(`learned-${index}`, timestamp)),
+        ...items.map((item) => unseen(item.id)),
+      ],
+      active,
+    });
+    const hook = renderLearning(store);
+
+    await waitFor(() => expect(hook.result.current.current?.id).toBe("b"));
+    expect(hook.result.current).toMatchObject({ phase: "study", studyIndex: 1, total: 2 });
+    expect(store.repository.saveLearningSession).not.toHaveBeenCalled();
+  });
+
+  it("normalizes a configured daily limit to a positive integer", async () => {
+    const items = Array.from({ length: 5 }, (_, index) => phrase(`new-${index}`));
+    const fractionalStore = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
+    const fractional = renderLearning(fractionalStore, speech(), { dailyLimit: 2.9 });
+    await waitFor(() => expect(fractional.result.current.phase).toBe("study"));
+    expect(fractional.result.current.total).toBe(2);
+
+    const zeroStore = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
+    const zero = renderLearning(zeroStore, speech(), { dailyLimit: 0 });
+    await waitFor(() => expect(zero.result.current.phase).toBe("study"));
+    expect(zero.result.current.total).toBe(1);
   });
 
   it("shows two ordered examples, marks unseen study state, and auto-speaks without waiting", async () => {
