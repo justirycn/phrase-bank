@@ -17,7 +17,13 @@ function responseQueue(reviewStatus: "pass" | "fail" = "pass") {
       contentVersion: "2026.08.2",
       qualityVersion: "qwen-plus-review-v1",
     }));
-    return [JSON.stringify({ phrases }), JSON.stringify({ status: reviewStatus, issues: reviewStatus === "pass" ? [] : ["unnatural"], phrases })];
+    const cores = phrases.filter(({ kind }) => kind === "core");
+    return Array.from({ length: Math.ceil(cores.length / 20) }, (_, chunkIndex) => {
+      const chunkCores = cores.slice(chunkIndex * 20, chunkIndex * 20 + 20);
+      const ids = new Set(chunkCores.map(({ id }) => id));
+      const chunk = phrases.filter((phrase) => phrase.kind === "core" ? ids.has(phrase.id) : ids.has(phrase.parentPhraseId ?? ""));
+      return [JSON.stringify({ phrases: chunk }), JSON.stringify({ status: reviewStatus, issues: reviewStatus === "pass" ? [] : ["unnatural"], phrases: chunk })];
+    }).flat();
   });
 }
 
@@ -37,7 +43,7 @@ describe("Qwen content pipeline", () => {
     expect(result.phrases.filter(({ kind }) => kind === "core")).toHaveLength(600);
     expect(result.phrases).toHaveLength(2000);
     for (const category of categories) expect(result.phrases.filter((phrase) => phrase.categoryId === category && phrase.kind === "core")).toHaveLength(quotas[category]);
-    expect(client.complete).toHaveBeenCalledTimes(12);
+    expect(client.complete).toHaveBeenCalledTimes(62);
     const calls = vi.mocked(client.complete).mock.calls;
     expect(calls[0][0].map(({ content }) => content).join(" ")).toContain("daily");
     expect(calls[1][0][0].content).toContain("独立审校");
