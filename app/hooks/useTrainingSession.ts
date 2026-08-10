@@ -211,6 +211,9 @@ export function useTrainingSession({
         .map((event) => event.phraseId)).size;
       const personalNewCount = new Set(todayEvents.filter((event) => event.source === "new" && (phrasesById.get(event.phraseId)?.origin ?? "personal") === "personal").map((event) => event.phraseId)).size;
       const systemNewCount = new Set(todayEvents.filter((event) => event.source === "new" && phrasesById.get(event.phraseId)?.origin === "system").map((event) => event.phraseId)).size;
+      const practicedPersonal = new Set(todayEvents.filter((event) => (phrasesById.get(event.phraseId)?.origin ?? "personal") === "personal").map((event) => event.phraseId));
+      const practicedSystemNew = new Set(todayEvents.filter((event) => phrasesById.get(event.phraseId)?.origin === "system" && event.source === "new").map((event) => event.phraseId));
+      const practicedDue = new Set(todayEvents.filter((event) => phrasesById.get(event.phraseId)?.origin === "system" && event.source !== "new").map((event) => event.phraseId));
       const selected = selectTrainingGroup(phrases, {
         mode,
         now: started,
@@ -220,6 +223,7 @@ export function useTrainingSession({
         systemNewIntroducedToday: Math.max(newIntroducedToday, systemNewCount),
         learningStates,
         practicedTodayIds,
+        practicedTodayBucketCounts: { personal: practicedPersonal.size, due: practicedDue.size, systemNew: practicedSystemNew.size },
       });
       const session: TrainingSessionRecord = {
         id: createId(),

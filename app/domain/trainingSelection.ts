@@ -14,6 +14,7 @@ export interface TrainingSelectionOptions {
   personalNewIntroducedToday?: number;
   systemNewIntroducedToday?: number;
   learningStates?: PhraseLearningState[];
+  practicedTodayBucketCounts?: { personal: number; due: number; systemNew: number };
 }
 
 function stableHash(value: string): number {
@@ -148,16 +149,18 @@ function selectPrioritizedGroup(phrases: Phrase[], options: TrainingSelectionOpt
   };
   const isPersonal = (phrase: Phrase) => (phrase.origin ?? "personal") === "personal";
   const due = unique.filter((phrase) => phrase.lastReviewedAt && new Date(phrase.nextReviewAt).getTime() <= nowTime);
+  const personalNewAllowance = Math.max(0, 5 - (options.personalNewIntroducedToday ?? 0));
+  const systemNewAllowance = Math.max(0, 3 - (options.systemNewIntroducedToday ?? 0));
+  const personalReviewed = unique.filter((phrase) => isPersonal(phrase) && phrase.lastReviewedAt)
+    .sort((left, right) => left.masteryLevel - right.masteryLevel || right.createdAt.localeCompare(left.createdAt));
+  const personalNew = seededOrder(unique.filter((phrase) => isPersonal(phrase) && !phrase.lastReviewedAt), options.seed)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, personalNewAllowance);
+  const personalPool = [...personalNew, ...personalReviewed];
+  const systemNew = seededOrder(unique.filter((phrase) => !isPersonal(phrase) && !phrase.lastReviewedAt), options.seed).slice(0, systemNewAllowance);
+  const duePool = due.filter((phrase) => !isPersonal(phrase));
+
   if (options.mode === "standard") {
-    const personalNewAllowance = Math.max(0, 5 - (options.personalNewIntroducedToday ?? 0));
-    const systemNewAllowance = Math.max(0, 3 - (options.systemNewIntroducedToday ?? 0));
-    const personalReviewed = unique.filter((phrase) => isPersonal(phrase) && phrase.lastReviewedAt)
-      .sort((left, right) => left.masteryLevel - right.masteryLevel || right.createdAt.localeCompare(left.createdAt));
-    const personalNew = seededOrder(unique.filter((phrase) => isPersonal(phrase) && !phrase.lastReviewedAt), options.seed)
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-      .slice(0, personalNewAllowance);
-    const personalPool = [...personalNew, ...personalReviewed];
-    const systemNew = unique.filter((phrase) => !isPersonal(phrase) && !phrase.lastReviewedAt).slice(0, systemNewAllowance);
 
     add(personalPool, 5, true);
     add(due.filter((phrase) => !ids.has(phrase.id)), 3);
@@ -168,12 +171,33 @@ function selectPrioritizedGroup(phrases: Phrase[], options: TrainingSelectionOpt
     add(unique.filter((phrase) => phrase.lastReviewedAt && !ids.has(phrase.id)));
     return selected;
   }
-  add(due.filter(isPersonal));
-  add(due.filter((phrase) => !isPersonal(phrase)));
-  add(unique.filter((phrase) => isPersonal(phrase) && phrase.lastReviewedAt && !ids.has(phrase.id) && (states.get(phrase.id)?.masteredDates.length ?? 0) < 2));
-  add(unique.filter((phrase) => isPersonal(phrase) && !phrase.lastReviewedAt), Math.max(0, 5 - (options.personalNewIntroducedToday ?? 0)));
-  add(unique.filter((phrase) => !isPersonal(phrase) && phrase.lastReviewedAt && !ids.has(phrase.id)));
-  add(unique.filter((phrase) => !isPersonal(phrase) && !phrase.lastReviewedAt), Math.max(0, 3 - (options.systemNewIntroducedToday ?? 0)));
+
+  const today = options.practicedTodayBucketCounts ?? { personal: 0, due: 0, systemNew: 0 };
+  const chosen = { personal: 0, due: 0, systemNew: 0 };
+  const pools = { personal: personalPool, due: duePool, systemNew };
+  const shares = { personal: 0.5, due: 0.3, systemNew: 0.2 };
+  const finalTotal = today.personal + today.due + today.systemNew + target;
+  while (selected.length < target) {
+    const ranked = (["personal", "due", "systemNew"] as const).sort((left, right) => {
+      const rightDeficit = shares[right] * finalTotal - today[right] - chosen[right];
+      const leftDeficit = shares[left] * finalTotal - today[left] - chosen[left];
+      return rightDeficit - leftDeficit;
+    });
+    let filled = false;
+    for (const bucket of ranked) {
+      const before = selected.length;
+      add(pools[bucket], 1, bucket === "personal");
+      if (selected.length > before) {
+        chosen[bucket] += 1;
+        filled = true;
+        break;
+      }
+    }
+    if (!filled) break;
+  }
+  add(personalPool.filter((phrase) => !ids.has(phrase.id)));
+  add(due.filter((phrase) => !ids.has(phrase.id)));
+  add(systemNew.filter((phrase) => !ids.has(phrase.id)));
   add(unique.filter((phrase) => phrase.lastReviewedAt && !ids.has(phrase.id)));
   return selected;
 }

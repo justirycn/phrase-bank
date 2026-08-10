@@ -134,6 +134,25 @@ describe("useTrainingSession", () => {
     expect(store.getSession()?.sources).not.toContain("new");
   });
 
+  it("uses persisted Shanghai-day bucket counts to balance the next quick group", async () => {
+    const personal = Array.from({ length: 4 }, (_, index) => ({ ...phrase(`ratio-personal-${index}`), origin: "personal" as const, kind: "standalone" as const, nextReviewAt: "2026-08-12T00:00:00.000Z" }));
+    const due = Array.from({ length: 4 }, (_, index) => ({ ...phrase(`ratio-due-${index}`), origin: "system" as const, kind: "core" as const, nextReviewAt: "2026-08-08T00:00:00.000Z" }));
+    const systemNew = Array.from({ length: 4 }, (_, index) => ({ ...phrase(`ratio-new-${index}`), origin: "system" as const, kind: "core" as const, lastReviewedAt: undefined }));
+    const store = memoryRepository([...personal, ...due, ...systemNew]); const api = services();
+    store.events.push(
+      { id: "prior-personal", sessionId: "prior", phraseId: personal[0].id, source: "weak", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T01:00:00.000Z" },
+      { id: "prior-due", sessionId: "prior", phraseId: due[0].id, source: "due", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T02:00:00.000Z" },
+      { id: "prior-system-new", sessionId: "prior", phraseId: systemNew[0].id, source: "new", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T03:00:00.000Z" },
+    );
+
+    renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "ratio", now: () => new Date("2026-08-09T08:00:00.000Z") }));
+    await waitFor(() => expect(store.getSession()?.phraseIds).toHaveLength(3));
+    const selected = store.getSession()!.phraseIds.map((id) => [...personal, ...due, ...systemNew].find((item) => item.id === id)!);
+    expect(selected.filter(({ origin }) => origin === "personal")).toHaveLength(2);
+    expect(selected.filter(({ origin, lastReviewedAt }) => origin === "system" && lastReviewedAt)).toHaveLength(1);
+    expect(selected.filter(({ origin, lastReviewedAt }) => origin === "system" && !lastReviewedAt)).toHaveLength(0);
+  });
+
   it("records unknown once, reveals it and appends the phrase once", async () => {
     const store = memoryRepository();
     const api = services();

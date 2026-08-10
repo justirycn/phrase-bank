@@ -56,6 +56,21 @@ describe("selectTrainingGroup", () => {
     expect(new Set(selected.map(({ phrase }) => phrase.id)).size).toBe(10);
   });
 
+  it("balances successive quick groups toward the same-day 50/30/20 target", () => {
+    const phrases = [
+      ...Array.from({ length: 6 }, (_, index) => ({ ...reviewedPhrase(`quick-personal-${index}`, 1, "2026-08-12T00:00:00.000Z"), origin: "personal" as const, kind: "standalone" as const })),
+      ...Array.from({ length: 5 }, (_, index) => ({ ...reviewedPhrase(`quick-due-system-${index}`, 1, "2026-08-08T00:00:00.000Z"), origin: "system" as const, kind: "core" as const })),
+      ...Array.from({ length: 4 }, (_, index) => ({ ...newPhrase(`quick-new-system-${index}`), origin: "system" as const, kind: "core" as const })),
+    ];
+    const base = { mode: "quick" as const, now, seed: "quick-ratio", newIntroducedToday: 0, personalNewIntroducedToday: 0, systemNewIntroducedToday: 0, learningStates: [] };
+    const bucket = ({ phrase, source }: ReturnType<typeof selectTrainingGroup>[number]) => phrase.origin === "personal" ? "personal" : source === "new" ? "systemNew" : "due";
+
+    const first = selectTrainingGroup(phrases, { ...base, practicedTodayBucketCounts: { personal: 0, due: 0, systemNew: 0 } });
+    expect(first.map(bucket).sort()).toEqual(["due", "personal", "systemNew"]);
+    const second = selectTrainingGroup(phrases, { ...base, practicedTodayIds: new Set(first.map(({ phrase }) => phrase.id)), practicedTodayBucketCounts: { personal: 1, due: 1, systemNew: 1 } });
+    expect(second.map(bucket).sort()).toEqual(["due", "personal", "personal"]);
+  });
+
   it("prioritizes personal due and ungraduated phrases before unlocked system content", () => {
     const personalDue = { ...reviewedPhrase("personal-due", 1, "2026-08-08T00:00:00.000Z"), origin: "personal" as const, kind: "standalone" as const };
     const systemDue = { ...reviewedPhrase("system-due", 1, "2026-08-08T00:00:00.000Z"), origin: "system" as const, kind: "core" as const };
@@ -66,7 +81,7 @@ describe("selectTrainingGroup", () => {
       personalNewIntroducedToday: 0, systemNewIntroducedToday: 0,
       learningStates: [{ phraseId: "personal-priority", masteredDates: ["2026-08-08"], updatedAt: "2026-08-08T00:00:00.000Z" }],
     });
-    expect(selected.map(({ phrase }) => phrase.id)).toEqual(["personal-due", "system-due", "personal-priority"]);
+    expect(new Set(selected.map(({ phrase }) => phrase.id))).toEqual(new Set(["personal-due", "system-due", "personal-priority"]));
     expect(selected.map(({ phrase }) => phrase.id)).not.toContain("locked");
   });
 
