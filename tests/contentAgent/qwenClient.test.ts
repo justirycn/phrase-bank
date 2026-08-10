@@ -15,7 +15,7 @@ describe("Qwen client", () => {
     const [url, init] = fetcher.mock.calls[0];
     expect(url).toBe("https://example.invalid/compatible-mode/v1/chat/completions");
     expect(init?.headers).toMatchObject({ Authorization: "Bearer test-secret", "Content-Type": "application/json" });
-    expect(JSON.parse(String(init?.body))).toMatchObject({ model: "qwen-plus", stream: false, messages: [{ role: "user", content: "hello" }] });
+    expect(JSON.parse(String(init?.body))).toMatchObject({ model: "qwen-plus", stream: false, max_tokens: 8192, messages: [{ role: "user", content: "hello" }] });
   });
 
   it("requires the server-side key", () => {

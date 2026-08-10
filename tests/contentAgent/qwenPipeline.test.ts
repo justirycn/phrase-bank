@@ -46,8 +46,13 @@ describe("Qwen content pipeline", () => {
     expect(client.complete).toHaveBeenCalledTimes(62);
     const calls = vi.mocked(client.complete).mock.calls;
     expect(calls[0][0].map(({ content }) => content).join(" ")).toContain("daily");
+    expect(calls[0][0].map(({ content }) => content).join(" ")).toContain("每个核心恰好 3 个案例");
+    expect(calls[0][0].map(({ content }) => content).join(" ")).toContain("sys-daily-01-1-1");
     expect(calls[1][0][0].content).toContain("独立审校");
     expect(calls[1][0]).not.toBe(calls[0][0]);
+    const firstTravelCall = 18;
+    expect(calls[firstTravelCall][0].map(({ content }) => content).join(" ")).toContain("每个核心恰好 3 个案例");
+    expect(calls[firstTravelCall + 2][0].map(({ content }) => content).join(" ")).toContain("每个核心恰好 2 个案例");
   });
 
   it("accepts a single JSON markdown fence but rejects review failures", async () => {
@@ -67,5 +72,13 @@ describe("Qwen content pipeline", () => {
     const failedDir = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-failed-"));
     await expect(runQwenAgent({ client: fakeClient(responseQueue("fail")), version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1", outputDir: failedDir })).rejects.toThrow();
     expect(await readdir(failedDir)).toEqual([]);
+  });
+
+  it("rejects a batch that changes stable source IDs", async () => {
+    const outputs = responseQueue();
+    const first = JSON.parse(outputs[0]);
+    first.phrases[0].id = "changed-id";
+    outputs[0] = JSON.stringify(first);
+    await expect(buildQwenCandidate({ client: fakeClient(outputs), version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1" })).rejects.toThrow("ID");
   });
 });
