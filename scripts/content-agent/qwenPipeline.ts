@@ -13,7 +13,8 @@ interface PipelineProgress { category: string; stage: "generate" | "review"; com
 interface PipelineOptions { client: QwenClient; version: string; generatedAt: string; qualityVersion: string; sourceContent?: SystemContentPackage; onProgress?: (progress: PipelineProgress) => void; }
 interface AgentOptions extends PipelineOptions { outputDir: string; }
 interface BatchResponse { phrases: SystemContentPhrase[]; }
-interface ReviewResponse extends BatchResponse { status: "pass" | "fail"; issues: string[]; }
+interface ReviewCorrection { id: string; english: string; chinese: string; }
+interface ReviewResponse { status: "pass" | "fail"; issues: string[]; corrections: ReviewCorrection[]; }
 
 function parseJson<T>(value: string): T {
   const trimmed = value.trim();
@@ -37,8 +38,27 @@ function generationMessages(category: string, coreCount: number, exampleCount: n
 function reviewMessages(category: string, coreCount: number, batch: BatchResponse): QwenMessage[] {
   return [
     { role: "system", content: "你是独立审校员，不继承生成上下文。检查口语自然度、中英文一致性、实用性、重复、冒犯或危险内容。只返回 JSON。" },
-    { role: "user", content: `独立审校 ${category} 批次，必须包含 ${coreCount} 个核心。修正后返回 '{"status":"pass|fail","issues":[],"phrases":[...]}'。输入：${JSON.stringify(batch)}` },
+    { role: "user", content: `逐条独立审校 ${category} 批次中的全部内容（共 ${coreCount} 个核心及其案例）。不要复述整批；只返回需要修改的条目。若修正后整批可发布，返回 '{"status":"pass","issues":[],"corrections":[{"id":"原ID","english":"修正后的英文","chinese":"修正后的中文"}]}'；无法安全修正才返回 fail。corrections 可为空，ID 必须来自输入。输入：${JSON.stringify(batch)}` },
   ];
+}
+
+function applyReview(category: string, generated: BatchResponse, review: ReviewResponse): BatchResponse {
+  if (!review || !Array.isArray(review.issues) || !Array.isArray(review.corrections)) throw new Error(`${category} 审校格式无效`);
+  if (review.status !== "pass") throw new Error(`${category} 审校未通过`);
+  const corrections = new Map<string, ReviewCorrection>();
+  for (const correction of review.corrections) {
+    if (!correction || typeof correction.id !== "string" || typeof correction.english !== "string" || !correction.english.trim() || typeof correction.chinese !== "string" || !correction.chinese.trim()) {
+      throw new Error(`${category} 审校修正格式无效`);
+    }
+    if (corrections.has(correction.id)) throw new Error(`${category} 审校包含重复 ID`);
+    corrections.set(correction.id, correction);
+  }
+  const knownIds = new Set(generated.phrases.map(({ id }) => id));
+  if ([...corrections.keys()].some((id) => !knownIds.has(id))) throw new Error(`${category} 审校包含未知 ID`);
+  return { phrases: generated.phrases.map((phrase) => {
+    const correction = corrections.get(phrase.id);
+    return correction ? { ...phrase, english: correction.english.trim(), chinese: correction.chinese.trim() } : phrase;
+  }) };
 }
 
 function assertBatch(category: string, coreCount: number, batch: BatchResponse, source?: BatchResponse) {
@@ -73,8 +93,7 @@ export async function buildQwenCandidate(options: PipelineOptions): Promise<Syst
       const generated = parseJson<BatchResponse>(await options.client.complete(generationMessages(category, coreCount, exampleCount, chunkIndex, chunkCount, source, options)));
       assertBatch(category, coreCount, generated, source);
       options.onProgress?.({ category, stage: "generate", completed: ++completedRequests, total: TOTAL_REQUESTS });
-      const reviewed = parseJson<ReviewResponse>(await options.client.complete(reviewMessages(category, coreCount, generated)));
-      if (reviewed.status !== "pass") throw new Error(`${category} 审校未通过`);
+      const reviewed = applyReview(category, generated, parseJson<ReviewResponse>(await options.client.complete(reviewMessages(category, coreCount, generated))));
       assertBatch(category, coreCount, reviewed, source);
       options.onProgress?.({ category, stage: "review", completed: ++completedRequests, total: TOTAL_REQUESTS });
       categoryPhrases.push(...reviewed.phrases);

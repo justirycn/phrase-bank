@@ -22,7 +22,7 @@ function responseQueue(reviewStatus: "pass" | "fail" = "pass") {
       const chunkCores = cores.slice(chunkIndex * 10, chunkIndex * 10 + 10);
       const ids = new Set(chunkCores.map(({ id }) => id));
       const chunk = phrases.filter((phrase) => phrase.kind === "core" ? ids.has(phrase.id) : ids.has(phrase.parentPhraseId ?? ""));
-      return [JSON.stringify({ phrases: chunk }), JSON.stringify({ status: reviewStatus, issues: reviewStatus === "pass" ? [] : ["unnatural"], phrases: chunk })];
+      return [JSON.stringify({ phrases: chunk }), JSON.stringify({ status: reviewStatus, issues: reviewStatus === "pass" ? [] : ["unnatural"], corrections: [] })];
     }).flat();
   });
 }
@@ -83,5 +83,18 @@ describe("Qwen content pipeline", () => {
     first.phrases[0].id = "changed-id";
     outputs[0] = JSON.stringify(first);
     await expect(buildQwenCandidate({ client: fakeClient(outputs), version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1" })).rejects.toThrow("ID");
+  });
+
+  it("applies reviewer corrections without requiring the full batch to be returned", async () => {
+    const outputs = responseQueue();
+    const firstGenerated = JSON.parse(outputs[0]);
+    outputs[1] = JSON.stringify({
+      status: "pass",
+      issues: ["更自然的日常表达"],
+      corrections: [{ id: firstGenerated.phrases[0].id, english: "That works for me.", chinese: "我觉得可以。" }],
+    });
+
+    const result = await buildQwenCandidate({ client: fakeClient(outputs), version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1" });
+    expect(result.phrases.find(({ id }) => id === firstGenerated.phrases[0].id)).toMatchObject({ english: "That works for me.", chinese: "我觉得可以。" });
   });
 });
