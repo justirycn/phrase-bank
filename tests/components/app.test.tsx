@@ -68,6 +68,34 @@ describe("PhraseBankApp", () => {
     expect(installer).toHaveBeenCalledWith(repo);
     expect(repo.phrases).toContainEqual(expect.objectContaining({ id: "system-ready" }));
   });
+
+  it("separates personal and system library tabs and copies system content as personal", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.phrases = [
+      makePhrase({ id: "mine", english: "My phrase", origin: "personal", kind: "standalone" }),
+      makePhrase({ id: "system", english: "System phrase", origin: "system", kind: "core", subcategory: "planning", cefrLevel: "B1", intent: "coordinate work", contentVersion: "v1", qualityVersion: "q1" }),
+    ];
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: /句库/ }));
+    expect(screen.getByText("My phrase")).toBeVisible();
+    expect(screen.queryByText("System phrase")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "系统句库" }));
+    expect(screen.getByText("System phrase")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "复制到我的句子" }));
+    expect(repo.phrases.filter(({ english, origin }) => english === "System phrase" && origin === "personal")).toHaveLength(1);
+    expect(repo.phrases.find(({ id }) => id === "system")?.origin).toBe("system");
+  });
+
+  it("renders the large system library in bounded pages", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.phrases = Array.from({ length: 60 }, (_, index) => makePhrase({ id: `system-${index}`, english: `System phrase ${index}`, origin: "system", kind: "core", subcategory: "planning", cefrLevel: "B1" }));
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: /句库/ }));
+    await user.click(screen.getByRole("tab", { name: "系统句库" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(50);
+    await user.click(screen.getByRole("button", { name: "再显示 10 条" }));
+    expect(screen.getAllByRole("listitem")).toHaveLength(60);
+  });
   it("shows accumulated daily progress and both training entries", async () => {
     const repo = new MemoryRepository();
     repo.events.push({ id: "e1", sessionId: "s1", phraseId: "p1", source: "due", result: "hard", usedPronunciationHint: false, recorded: true, activeSeconds: 720, occurredAt: new Date().toISOString() });
@@ -149,7 +177,7 @@ describe("PhraseBankApp", () => {
     render(<PhraseBankApp repository={repo as never} />);
     await screen.findByText("今天，说出来");
     await user.click(screen.getByRole("button", { name: "句库" }));
-    expect(await screen.findByRole("heading", { name: "我的句库" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "我的句子" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "添加" }));
     expect(await screen.findByRole("heading", { name: "收藏语言块" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "设置" }));
