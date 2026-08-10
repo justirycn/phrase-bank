@@ -97,4 +97,16 @@ describe("Qwen content pipeline", () => {
     const result = await buildQwenCandidate({ client: fakeClient(outputs), version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1" });
     expect(result.phrases.find(({ id }) => id === firstGenerated.phrases[0].id)).toMatchObject({ english: "That works for me.", chinese: "我觉得可以。" });
   });
+
+  it("automatically retries an incomplete generated batch", async () => {
+    const outputs = responseQueue();
+    const incomplete = JSON.parse(outputs[0]);
+    const omittedId = incomplete.phrases.find((phrase: { kind: string }) => phrase.kind === "core").id;
+    incomplete.phrases = incomplete.phrases.filter((phrase: { id: string; parentPhraseId?: string }) => phrase.id !== omittedId && phrase.parentPhraseId !== omittedId);
+    outputs.unshift(JSON.stringify(incomplete));
+    const client = fakeClient(outputs);
+
+    await expect(buildQwenCandidate({ client, version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1" })).resolves.toMatchObject({ version: "2026.08.2" });
+    expect(client.complete).toHaveBeenCalledTimes(121);
+  });
 });

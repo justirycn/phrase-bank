@@ -26,6 +26,7 @@ function parseJson<T>(value: string): T {
 }
 
 const MAX_CORES_PER_REQUEST = 10;
+const MAX_VALIDATION_ATTEMPTS = 3;
 const TOTAL_REQUESTS = CATEGORY_QUOTAS.reduce((total, [, quota]) => total + Math.ceil(quota / MAX_CORES_PER_REQUEST) * 2, 0);
 
 function generationMessages(category: string, coreCount: number, exampleCount: number, chunkIndex: number, chunkCount: number, source: BatchResponse, options: PipelineOptions): QwenMessage[] {
@@ -73,6 +74,40 @@ function assertBatch(category: string, coreCount: number, batch: BatchResponse, 
   }
 }
 
+async function generateValidBatch(options: PipelineOptions, category: string, coreCount: number, exampleCount: number, chunkIndex: number, chunkCount: number, source: BatchResponse) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_VALIDATION_ATTEMPTS; attempt += 1) {
+    try {
+      const generated = parseJson<BatchResponse>(await options.client.complete(generationMessages(category, coreCount, exampleCount, chunkIndex, chunkCount, source, options)));
+      assertBatch(category, coreCount, generated, source);
+      return generated;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
+async function reviewValidBatch(options: PipelineOptions, category: string, coreCount: number, generated: BatchResponse) {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_VALIDATION_ATTEMPTS; attempt += 1) {
+    let response: ReviewResponse;
+    try {
+      response = parseJson<ReviewResponse>(await options.client.complete(reviewMessages(category, coreCount, generated)));
+    } catch (error) {
+      lastError = error;
+      continue;
+    }
+    if (response.status !== "pass") throw new Error(`${category} 审校未通过`);
+    try {
+      return applyReview(category, generated, response);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError;
+}
+
 export async function buildQwenCandidate(options: PipelineOptions): Promise<SystemContentPackage> {
   const phrases: SystemContentPhrase[] = [];
   let completedRequests = 0;
@@ -90,10 +125,9 @@ export async function buildQwenCandidate(options: PipelineOptions): Promise<Syst
       const source: BatchResponse = { phrases: sourcePhrases.filter((phrase) => phrase.kind === "core" ? coreIds.has(phrase.id) : coreIds.has(phrase.parentPhraseId ?? "")) };
       const exampleCount = source.phrases.filter(({ kind }) => kind === "example").length / coreCount;
       if (!Number.isInteger(exampleCount)) throw new Error(`${category} 输入模板案例数量不一致`);
-      const generated = parseJson<BatchResponse>(await options.client.complete(generationMessages(category, coreCount, exampleCount, chunkIndex, chunkCount, source, options)));
-      assertBatch(category, coreCount, generated, source);
+      const generated = await generateValidBatch(options, category, coreCount, exampleCount, chunkIndex, chunkCount, source);
       options.onProgress?.({ category, stage: "generate", completed: ++completedRequests, total: TOTAL_REQUESTS });
-      const reviewed = applyReview(category, generated, parseJson<ReviewResponse>(await options.client.complete(reviewMessages(category, coreCount, generated))));
+      const reviewed = await reviewValidBatch(options, category, coreCount, generated);
       assertBatch(category, coreCount, reviewed, source);
       options.onProgress?.({ category, stage: "review", completed: ++completedRequests, total: TOTAL_REQUESTS });
       categoryPhrases.push(...reviewed.phrases);
