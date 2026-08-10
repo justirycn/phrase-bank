@@ -2,19 +2,21 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { PhraseBankApp } from "../../app/PhraseBankApp";
-import type { BackupEnvelopeV3, Category, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import type { BackupEnvelopeV4, Category, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 
 class MemoryRepository {
   phrases: Phrase[] = [];
   failPhraseReads = false;
   failPhraseSave = false;
+  phraseSaveAttempts = 0;
+  failLearningStateSave = false;
   phraseReadAttempts = 0;
   categories: Category[] = [{ id: "daily", name: "日常", isDefault: true, createdAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-07T00:00:00.000Z" }];
   async initialize() {}
   async listPhrases() { this.phraseReadAttempts += 1; if (this.failPhraseReads) throw new Error("db failed"); return [...this.phrases]; }
   async listCategories() { return [...this.categories]; }
   async listDuePhrases() { return [...this.phrases]; }
-  async savePhrase(phrase: Phrase) { if (this.failPhraseSave) throw new Error("save failed"); this.phrases = [...this.phrases.filter((p) => p.id !== phrase.id), phrase]; }
+  async savePhrase(phrase: Phrase) { this.phraseSaveAttempts += 1; if (this.failPhraseSave) throw new Error("save failed"); this.phrases = [...this.phrases.filter((p) => p.id !== phrase.id), phrase]; }
   async deletePhrase(id: string) { this.phrases = this.phrases.filter((p) => p.id !== id); }
   async submitReview(id: string, result: ReviewResult) { void id; void result; }
   events: TrainingEvent[] = [];
@@ -38,7 +40,7 @@ class MemoryRepository {
   async saveSpeechPreferences(value: SpeechPreferences) { this.preferenceSaves.push(value); if (this.savePreferenceImpl) return this.savePreferenceImpl(value); if (this.failPreferenceSave) throw new Error("preference save failed"); this.preferences = value; }
   async listPhraseLearningStates() { return [...this.learningStates]; }
   async getPhraseLearningState(id: string) { return this.learningStates.find((state) => state.phraseId === id); }
-  async savePhraseLearningState(state: PhraseLearningState) { this.learningStates = [...this.learningStates.filter((item) => item.phraseId !== state.phraseId), state]; }
+  async savePhraseLearningState(state: PhraseLearningState) { if (this.failLearningStateSave) throw new Error("state failed"); this.learningStates = [...this.learningStates.filter((item) => item.phraseId !== state.phraseId), state]; }
   async saveLearningSession(session: import("../../app/domain/types").LearningSessionRecord) { this.learningSessions = [...this.learningSessions.filter((item) => item.id !== session.id), session]; }
   async getActiveLearningSession() { return this.learningSessions.find((session) => !session.completedAt); }
   async completeLearningSession(id: string, completedAt: Date) { this.learningSessions = this.learningSessions.map((session) => session.id === id ? { ...session, completedAt: completedAt.toISOString() } : session); }
@@ -52,7 +54,7 @@ class MemoryRepository {
   async rollbackSystemContentPackage() {}
   async saveCategory(category: Category) { this.categories.push(category); }
   async deleteCategoryAndMigrate() {}
-  async exportSnapshot(): Promise<BackupEnvelopeV3> { return { format: "personal-phrase-bank", version: 3, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [], trainingEvents: this.events, trainingSessions: this.sessions, phraseLearningStates: [] }; }
+  async exportSnapshot(): Promise<BackupEnvelopeV4> { return { format: "personal-phrase-bank", version: 4, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [], trainingEvents: this.events, trainingSessions: this.sessions, phraseLearningStates: this.learningStates, learningSessions: this.learningSessions }; }
   async importSnapshot() {}
 }
 
@@ -89,6 +91,40 @@ describe("PhraseBankApp", () => {
     expect(await screen.findByRole("button", { name: /学习新句/ })).toHaveTextContent("0 / 15");
     expect(screen.getByRole("button", { name: /今日复习/ })).toHaveTextContent("2");
     expect(screen.getByRole("button", { name: /三分钟速练/ })).toHaveTextContent("1");
+  });
+
+  it("previews the same rotated system theme and count that learning starts", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true }); vi.setSystemTime(new Date("2026-08-10T08:00:00.000Z"));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime }); const repo = new MemoryRepository();
+    repo.categories.push(
+      { id: "travel", name: "旅行", isDefault: false, createdAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-07T00:00:00.000Z" },
+      { id: "work", name: "工作", isDefault: false, createdAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-07T00:00:00.000Z" },
+    );
+    repo.phrases = [
+      makePhrase({ id: "daily-system", categoryId: "daily", origin: "system", kind: "core" }),
+      makePhrase({ id: "travel-system", categoryId: "travel", origin: "system", kind: "core" }),
+      makePhrase({ id: "work-system", english: "Work preview", categoryId: "work", origin: "system", kind: "core" }),
+      makePhrase({ id: "personal", categoryId: "daily", origin: "personal", kind: "standalone" }),
+    ];
+    render(<PhraseBankApp repository={repo as never} />);
+    const entry = await screen.findByRole("button", { name: /学习新句/ });
+    expect(entry).toHaveTextContent("下一组 4 句 · 工作");
+    await user.click(entry);
+    await vi.waitFor(() => expect(repo.learningSessions[0]).toMatchObject({ themeCategoryId: "work", phraseIds: expect.any(Array) }));
+    expect(repo.learningSessions[0].phraseIds).toHaveLength(4);
+    vi.useRealTimers();
+  });
+
+  it("shows and restores an active group even when today's limit is reached", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository(); const now = new Date().toISOString();
+    repo.phrases = [makePhrase({ id: "active-a" }), makePhrase({ id: "active-b" })];
+    repo.learningStates = Array.from({ length: 15 }, (_, index) => ({ ...learnedState(`done-${index}`), firstTestedAt: now }));
+    repo.learningSessions = [{ id: "active", date: "2026-08-10", themeCategoryId: "daily", phraseIds: ["active-a", "active-b"], studyIndex: 0, testIndex: 0, phase: "study", startedAt: now, updatedAt: now }];
+    render(<PhraseBankApp repository={repo as never} />);
+    const entry = await screen.findByRole("button", { name: /学习新句/ });
+    expect(entry).toHaveTextContent("恢复本组：剩余 2 / 共 2 句 · 日常");
+    await user.click(entry);
+    expect(await screen.findByText("I'll get back to you.")).toBeVisible();
   });
 
   it("enters new phrase learning without bottom navigation and can return home", async () => {
@@ -164,6 +200,24 @@ describe("PhraseBankApp", () => {
     expect(screen.getByRole("heading", { name: "收藏语言块" })).toBeVisible();
   });
 
+  it("retries only the learned-state write after a partial save even when refresh also failed", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: "添加" }));
+    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Partially saved phrase");
+    await user.type(screen.getByRole("textbox", { name: "中文含义" }), "部分保存句子");
+    await user.click(screen.getByRole("checkbox", { name: /先在.*学习新句.*认识/ }));
+    repo.failLearningStateSave = true; repo.failPhraseReads = true;
+    await user.click(screen.getByRole("button", { name: "保存语言块" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("句子已保存，但设置为已学习失败，目前按未学习处理");
+    expect(repo.phraseSaveAttempts).toBe(1);
+    repo.failLearningStateSave = false; repo.failPhraseReads = false;
+    await user.click(screen.getByRole("button", { name: "只重试学习状态" }));
+    await screen.findByRole("heading", { name: "我的句子" });
+    expect(repo.phraseSaveAttempts).toBe(1);
+    expect(repo.learningStates.at(-1)).toMatchObject({ stage: "learned", firstTestedAt: expect.any(String) });
+  });
+
   it("filters only system content by all four learning stages and treats missing as unseen", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     repo.phrases = [
@@ -186,6 +240,14 @@ describe("PhraseBankApp", () => {
     expect(screen.queryByText("Learning system")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "学习中" }));
     expect(screen.getByText("Learning system")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "已学习" }));
+    expect(screen.getByText("Learned system")).toBeVisible();
+    expect(screen.queryByText("Mastered system")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "已掌握" }));
+    expect(screen.getByText("Mastered system")).toBeVisible();
+    await user.type(screen.getByRole("textbox", { name: "搜索语言块" }), "Mastered");
+    await user.click(screen.getByRole("button", { name: "日常" }));
+    expect(screen.getByText("Mastered system")).toBeVisible();
   });
   it("installs bundled system content during initialization and refreshes safely", async () => {
     const repo = new MemoryRepository();

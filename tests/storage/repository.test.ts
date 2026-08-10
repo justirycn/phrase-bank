@@ -377,6 +377,33 @@ describe("LocalPhraseRepository", () => {
     expect(await repo.getActiveLearningSession()).toEqual(nextSession);
   });
 
+  it("enforces the Shanghai-day first-learning hard cap atomically after allowing the fifteenth", async () => {
+    const phraseId = "starter-daily-not-sure";
+    for (let index = 0; index < 14; index += 1) await repo.savePhraseLearningState({ phraseId: `counted-${index}`, stage: "learned", firstTestedAt: "2026-08-10T16:00:30.000Z", consecutiveGood: 0, masteredDates: [], updatedAt: "2026-08-10T16:00:30.000Z" });
+    await repo.savePhraseLearningState({ phraseId: "previous-shanghai-day", stage: "learned", firstTestedAt: "2026-08-10T15:59:59.000Z", consecutiveGood: 0, masteredDates: [], updatedAt: "2026-08-10T15:59:59.000Z" });
+    const session = learningSession({ phraseIds: [phraseId] });
+    await beginTestingSession(session);
+    const event: TrainingEvent = { id: "fifteenth", sessionId: session.id, phraseId, source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-10T16:01:00.000Z" };
+    await repo.submitFirstLearningReview(event, { ...session, testIndex: 1, updatedAt: event.occurredAt });
+    await repo.submitFirstLearningReview(event, { ...session, testIndex: 1, updatedAt: event.occurredAt });
+    expect((await repo.listTrainingEvents()).filter(({ id }) => id === event.id)).toHaveLength(1);
+
+    const secondPhrase = { ...(await repo.getPhrase(phraseId))!, id: "sixteenth", lastReviewedAt: undefined };
+    await repo.savePhrase(secondPhrase);
+    const secondSession = learningSession({ id: "second-cap-session", phraseIds: [secondPhrase.id], startedAt: "2026-08-10T16:01:00.000Z", updatedAt: "2026-08-10T16:01:00.000Z" });
+    await repo.completeLearningSession(session.id, new Date(event.occurredAt));
+    await beginTestingSession(secondSession);
+    const rejected: TrainingEvent = { ...event, id: "sixteenth-event", sessionId: secondSession.id, phraseId: secondPhrase.id, occurredAt: "2026-08-10T16:02:00.000Z" };
+    const before = await repo.exportSnapshot();
+    await expect(repo.submitFirstLearningReview(rejected, { ...secondSession, testIndex: 1, updatedAt: rejected.occurredAt })).rejects.toThrow("15句上限");
+    const after = await repo.exportSnapshot();
+    expect(after.trainingEvents).toEqual(before.trainingEvents);
+    expect(after.reviewLogs).toEqual(before.reviewLogs);
+    expect(after.phrases).toEqual(before.phrases);
+    expect(after.phraseLearningStates).toEqual(before.phraseLearningStates);
+    expect(after.learningSessions).toEqual(before.learningSessions);
+  });
+
   it("rejects missing phrases, missing sessions, and mismatched first-review cursors without progress", async () => {
     const phraseId = "starter-daily-not-sure";
     const session = learningSession({ phraseIds: [phraseId] });
@@ -390,6 +417,8 @@ describe("LocalPhraseRepository", () => {
     await expect(repo.submitFirstLearningReview({ ...event, id: "missing-phrase", phraseId: "missing" }, { ...session, phraseIds: ["missing"], testIndex: 1 })).rejects.toThrow();
     await expect(repo.submitFirstLearningReview({ ...event, id: "missing-session", sessionId: "missing" }, { ...session, id: "missing", testIndex: 1 })).rejects.toThrow();
     await expect(repo.submitFirstLearningReview(event, { ...session, testIndex: 0 })).rejects.toThrow("首次测试进度不一致");
+    const invalidDateEvent = { ...event, id: "invalid-date", occurredAt: "not-a-date" };
+    await expect(repo.submitFirstLearningReview(invalidDateEvent, { ...session, testIndex: 1, updatedAt: event.occurredAt })).rejects.toThrow("首次测试时间无效");
     const after = await repo.exportSnapshot();
     expect(after.trainingEvents).toEqual(before.trainingEvents);
     expect(after.reviewLogs).toEqual(before.reviewLogs);

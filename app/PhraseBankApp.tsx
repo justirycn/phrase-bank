@@ -7,6 +7,7 @@ import { SpeakingPractice } from "./components/SpeakingPractice";
 import { TrainingHome } from "./components/TrainingHome";
 import type { Category, LearningStage, Phrase, PhraseInput, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingEvent, TrainingMode, TrainingSessionRecord } from "./domain/types";
 import { createNewPhrase } from "./domain/review";
+import { DAILY_NEW_PHRASE_LIMIT, previewLearningGroup } from "./domain/learningSelection";
 import { calculateStreak, summarizeDailyTraining, summarizeWeek } from "./domain/trainingStats";
 import { validateCategoryName, validatePhraseInput, type PhraseErrors } from "./domain/validation";
 import { useTrainingSession } from "./hooks/useTrainingSession";
@@ -25,7 +26,7 @@ const defaultSpeech = typeof window === "undefined" ? undefined : new BrowserSpe
 const defaultRecorder = typeof window === "undefined" ? undefined : new TemporaryRecorder();
 const defaultSpeechPreferences: SpeechPreferences = { accent: "en-US", autoSpeak: true };
 const shanghaiDate = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-const shanghaiTimestampDate = (timestamp: string) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(timestamp));
+const shanghaiTimestampDate = (timestamp: string) => { const value = new Date(timestamp); return Number.isNaN(value.getTime()) ? "" : new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(value); };
 const mondayOf = (date: string) => { const value = new Date(`${date}T00:00:00.000Z`); value.setUTCDate(value.getUTCDate() - ((value.getUTCDay() + 6) % 7)); return value.toISOString().slice(0, 10); };
 
 const masteryText = ["未掌握", "有印象", "可以使用", "已自动化"];
@@ -44,6 +45,7 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
   const [trainingEvents, setTrainingEvents] = useState<TrainingEvent[]>([]);
   const [trainingSessions, setTrainingSessions] = useState<TrainingSessionRecord[]>([]);
   const [learningStates, setLearningStates] = useState<PhraseLearningState[]>([]);
+  const [activeLearningSession, setActiveLearningSession] = useState<LearningSessionRecord>();
   const [trainingMode, setTrainingMode] = useState<TrainingMode>("standard");
   const [trainingRun, setTrainingRun] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -53,7 +55,7 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
   const refresh = useCallback(async () => {
     if (!repo) return;
     const [nextPhrases, nextCategories, nextDue, nextEvents, nextLearningStates, snapshot] = await Promise.all([repo.listPhrases(), repo.listCategories(), repo.listDuePhrases(), repo.listTrainingEvents(), repo.listPhraseLearningStates(), repo.exportSnapshot()]);
-    setPhrases(nextPhrases); setCategories(nextCategories); setDue(nextDue); setTrainingEvents(nextEvents); setLearningStates(nextLearningStates); setTrainingSessions(snapshot.trainingSessions);
+    setPhrases(nextPhrases); setCategories(nextCategories); setDue(nextDue); setTrainingEvents(nextEvents); setLearningStates(nextLearningStates); setTrainingSessions(snapshot.trainingSessions); setActiveLearningSession(snapshot.learningSessions?.find((session) => !session.completedAt));
   }, [repo]);
 
   useEffect(() => {
@@ -81,19 +83,22 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
   const newIntroducedToday = new Set(trainingEvents.filter((event) => event.source === "new" && shanghaiTimestampDate(event.occurredAt) === today).map((event) => event.phraseId)).size;
   const learnedToday = new Set(learningStates.filter((state) => state.firstTestedAt && shanghaiTimestampDate(state.firstTestedAt) === today).map((state) => state.phraseId)).size;
   const learningById = new Map(learningStates.map((state) => [state.phraseId, state]));
-  const unseen = phrases.filter((phrase) => !phrase.retiredAt && ((phrase.origin ?? "personal") === "personal" && (phrase.kind ?? "standalone") === "standalone" || phrase.origin === "system" && phrase.kind === "core") && (learningById.get(phrase.id)?.stage ?? "unseen") === "unseen");
-  const newestPersonal = unseen.filter((phrase) => (phrase.origin ?? "personal") === "personal").sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
-  const nextThemeId = newestPersonal?.categoryId ?? unseen.find((phrase) => phrase.origin === "system")?.categoryId;
-  const nextLearningCount = Math.min(5, Math.max(0, 15 - learnedToday), unseen.length);
+  const preview = previewLearningGroup(phrases, learningStates, categories.map((category) => category.id), { date: today, remaining: Math.max(0, DAILY_NEW_PHRASE_LIMIT - learnedToday) });
+  const nextThemeId = activeLearningSession?.themeCategoryId ?? preview.themeCategoryId;
+  const phraseIds = new Set(phrases.map((phrase) => phrase.id));
+  const activePhraseIds = activeLearningSession?.phraseIds.filter((id) => phraseIds.has(id));
+  const activeCursor = activeLearningSession?.phase === "test" ? activeLearningSession.testIndex : activeLearningSession?.studyIndex ?? 0;
+  const activeRemaining = activeLearningSession?.phraseIds.slice(activeCursor).filter((id) => phraseIds.has(id)).length;
+  const nextLearningCount = activePhraseIds?.length ?? preview.phrases.length;
   const learnedEligibleCount = phrases.filter((phrase) => !phrase.retiredAt && ["learned", "mastered"].includes(learningById.get(phrase.id)?.stage ?? "unseen")).length;
 
   return <div className="app-shell">
     <main className="app-main">
       {error && <div className="toast error" role="alert">{error}</div>}
       {notice && <div className="toast" role="status">{notice}</div>}
-      {screen === "home" && <TrainingHome dailySummary={dailySummary} streak={calculateStreak(trainingDays, today)} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} dueCount={due.length} practiceCount={learnedEligibleCount} onStartLearning={() => go("learn")} onStartStandard={() => startTraining("standard")} onStartQuick={() => startTraining("quick")} />}
+      {screen === "home" && <TrainingHome dailySummary={dailySummary} streak={calculateStreak(trainingDays, today)} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} activeLearning={Boolean(activeLearningSession)} activeRemaining={activeRemaining} dueCount={due.length} practiceCount={learnedEligibleCount} onStartLearning={() => go("learn")} onStartStandard={() => startTraining("standard")} onStartQuick={() => startTraining("quick")} />}
       {screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
-      {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={async (input, learnFirst) => { if (!repo) return; const phrase = createNewPhrase(input); await repo.savePhrase(phrase); if (!learnFirst) { const savedAt = new Date().toISOString(); try { await repo.savePhraseLearningState({ phraseId: phrase.id, stage: "learned", firstSeenAt: savedAt, firstTestedAt: savedAt, consecutiveGood: 0, masteredDates: [], updatedAt: savedAt }); } catch { await refresh(); setError("句子已保存，但学习状态暂时无法保存，请稍后重试。"); setScreen("library"); return; } } await refresh(); setNotice("已收入你的句库"); setScreen("library"); }} />}
+      {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={async (input, learnFirst) => { if (!repo) throw new Error("repository unavailable"); const phrase = createNewPhrase(input); await repo.savePhrase(phrase); const finish = async () => { try { await refresh(); } catch { setError("句子已保存，但列表暂时无法刷新。"); } setNotice("已收入你的句库"); setScreen("library"); }; if (!learnFirst) { const savedAt = new Date().toISOString(); const state: PhraseLearningState = { phraseId: phrase.id, stage: "learned", firstSeenAt: savedAt, firstTestedAt: savedAt, consecutiveGood: 0, masteredDates: [], updatedAt: savedAt }; try { await repo.savePhraseLearningState(state); } catch { void refresh().catch(() => undefined); return { status: "partial" as const, retry: async () => { await repo.savePhraseLearningState(state); await finish(); } }; } } await finish(); return { status: "saved" as const }; }} />}
       {screen === "learn" && repo && defaultSpeech && <LearningSession repository={repo} speech={defaultSpeech} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}
       {screen === "review" && <Review phrases={due} onBack={() => go("home")} onGrade={async (id, result) => { if (!repo) return; await repo.submitReview(id, result); await refresh(); }} />}
       {screen === "practice" && repo && defaultSpeech && defaultRecorder && <PracticeSession key={`${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} speech={defaultSpeech} recorder={defaultRecorder} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => { setTrainingRun((run) => run + 1); void refresh().catch(() => setError("本地数据暂时无法刷新，请稍后再试。")); }} setError={setError} />}
@@ -109,7 +114,7 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
 }
 
 function LearningSession({ repository, speech, onHome }: { repository: PhraseRepository; speech: BrowserSpeechService; onHome: () => void }) {
-  const controller = useNewPhraseLearning({ repository, speech, dailyLimit: 15 });
+  const controller = useNewPhraseLearning({ repository, speech, dailyLimit: DAILY_NEW_PHRASE_LIMIT });
   return <NewPhraseLearning controller={controller} onHome={onHome} />;
 }
 
@@ -125,14 +130,17 @@ function PracticeSession({ repository, mode, newIntroducedToday, speech, recorde
   return <SpeakingPractice controller={controller} onHome={() => void controller.finish().then(onHome).catch(() => setError("训练进度暂时无法保存，请稍后重试。"))} onAgain={() => void controller.finish().then(onAgain).catch(() => setError("训练进度暂时无法保存，请稍后重试。"))} />;
 }
 
-function AddPhrase({ categories, onSave, onCancel }: { categories: Category[]; onSave: (input: PhraseInput, learnFirst: boolean) => Promise<void>; onCancel: () => void }) {
+type AddSaveResult = { status: "saved" } | { status: "partial"; retry: () => Promise<void> };
+
+function AddPhrase({ categories, onSave, onCancel }: { categories: Category[]; onSave: (input: PhraseInput, learnFirst: boolean) => Promise<AddSaveResult>; onCancel: () => void }) {
   const [input, setInput] = useState<PhraseInput>({ english: "", chinese: "", categoryId: categories[0]?.id ?? "daily", personalExample: "", sourceNote: "" });
   const [errors, setErrors] = useState<PhraseErrors>({});
   const [more, setMore] = useState(false);
   const [learnFirst, setLearnFirst] = useState(true);
   const [saveError, setSaveError] = useState("");
+  const [partialRetry, setPartialRetry] = useState<(() => Promise<void>)>();
   const field = (key: keyof PhraseInput, value: string) => setInput((old) => ({ ...old, [key]: value }));
-  const submit = async (event: React.FormEvent) => { event.preventDefault(); const next = validatePhraseInput(input); setErrors(next); if (Object.keys(next).length) return; setSaveError(""); try { await onSave(input, learnFirst); } catch { setSaveError("句子保存失败，请检查本地存储后重试。"); } };
+  const submit = async (event: React.FormEvent) => { event.preventDefault(); if (partialRetry) return; const next = validatePhraseInput(input); setErrors(next); if (Object.keys(next).length) return; setSaveError(""); try { const result = await onSave(input, learnFirst); if (result.status === "partial") { setPartialRetry(() => result.retry); setSaveError("句子已保存，但设置为已学习失败，目前按未学习处理。"); } } catch { setSaveError("句子保存失败，请检查本地存储后重试。"); } };
   return <><header className="screen-head"><button className="icon-button" onClick={onCancel} aria-label="返回"><AppIcon name="back" size={24} /></button><div><h1>收藏语言块</h1><p>Save a phrase you’ll actually use.</p></div></header>
     <form className="phrase-form" onSubmit={submit}>
       <label>英文表达<textarea aria-label="英文表达" value={input.english} onChange={(e) => field("english", e.target.value)} placeholder="e.g. I haven't decided yet." rows={3} />{errors.english && <small className="field-error">{errors.english}</small>}</label>
@@ -142,7 +150,8 @@ function AddPhrase({ categories, onSave, onCancel }: { categories: Category[]; o
       {more && <div className="optional-fields"><label>我的例句<textarea value={input.personalExample} onChange={(e) => field("personalExample", e.target.value)} rows={2} /></label><label>来源或备注<input value={input.sourceNote} onChange={(e) => field("sourceNote", e.target.value)} /></label></div>}
       <label><input type="checkbox" checked={learnFirst} onChange={(event) => setLearnFirst(event.target.checked)} />先在“学习新句”里认识这句话</label>
       {saveError && <p className="field-error" role="alert">{saveError}</p>}
-      <div className="form-actions"><button type="button" className="secondary" onClick={onCancel}>取消</button><button className="primary" type="submit" aria-label="保存语言块">保存语言块</button></div>
+      {partialRetry && <button type="button" onClick={() => { void partialRetry().catch(() => setSaveError("已保存句子，但设置为已学习仍然失败，请重试。")); }}>只重试学习状态</button>}
+      <div className="form-actions"><button type="button" className="secondary" onClick={onCancel}>取消</button><button className="primary" type="submit" aria-label="保存语言块" disabled={Boolean(partialRetry)}>保存语言块</button></div>
     </form></>;
 }
 

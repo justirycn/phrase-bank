@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { selectLearningGroup } from "../../app/domain/learningSelection";
+import { previewLearningGroup, selectLearningGroup } from "../../app/domain/learningSelection";
 import type { Phrase, PhraseLearningState } from "../../app/domain/types";
 
 const timestamp = "2026-08-10T08:00:00.000Z";
@@ -44,6 +44,17 @@ const options = {
 };
 
 describe("selectLearningGroup", () => {
+  it("rotates sorted system themes before personal fallback and returns the actual capped preview", () => {
+    const phrases = [
+      phrase("daily", { categoryId: "daily" }), phrase("travel", { categoryId: "travel" }),
+      phrase("work-a", { categoryId: "work" }), phrase("work-b", { categoryId: "work" }),
+      phrase("personal", { categoryId: "daily", origin: "personal", kind: "standalone" }),
+    ];
+    const preview = previewLearningGroup(phrases, [], ["daily", "travel", "work"], { date: "2026-08-10", remaining: 2 });
+    expect(preview.themeCategoryId).toBe("work");
+    expect(preview.phrases).toHaveLength(2);
+    expect(preview.phrases.some(({ categoryId }) => categoryId === "work")).toBe(true);
+  });
   it("selects unlearned personal standalone phrases first, newest first", () => {
     const result = selectLearningGroup([
       phrase("system"),

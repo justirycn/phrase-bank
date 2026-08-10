@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { selectLearningGroup } from "../domain/learningSelection";
+import { DAILY_NEW_PHRASE_LIMIT, previewLearningGroup } from "../domain/learningSelection";
 import type {
   LearningSessionRecord,
   Phrase,
@@ -66,7 +66,7 @@ const systemNow = () => new Date();
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const defaultPreferences: SpeechPreferences = { accent: "en-US", autoSpeak: true };
 const CREATION_COORDINATION_MS = 200;
-const DEFAULT_DAILY_LIMIT = 15;
+const DEFAULT_DAILY_LIMIT = DAILY_NEW_PHRASE_LIMIT;
 
 function normalizeDailyLimit(value: number | undefined): number {
   if (value === undefined || Number.isNaN(value)) return DEFAULT_DAILY_LIMIT;
@@ -101,11 +101,6 @@ function shanghaiDate(value: Date): string {
   }).formatToParts(value);
   const byType = new Map(parts.map((part) => [part.type, part.value]));
   return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
-}
-
-function dateRotationIndex(date: string, length: number): number {
-  const [year, month, day] = date.split("-").map(Number);
-  return Math.floor(Date.UTC(year, month - 1, day) / 86_400_000) % length;
 }
 
 function cursorAfterFiltering(ids: string[], cursor: number, survivingIds: Set<string>): number {
@@ -341,35 +336,14 @@ export function useNewPhraseLearning({
         setOperation(false);
         return;
       }
-      const stateById = new Map(states.map((state) => [state.phraseId, state]));
-      const categoryIds = new Set(categories.map((item) => item.id));
-      const eligibleSystemThemes = [...new Set(phrases.filter((item) =>
-        item.origin === "system"
-          && item.kind === "core"
-          && !item.retiredAt
-          && (stateById.get(item.id)?.stage ?? "unseen") === "unseen"
-          && categoryIds.has(item.categoryId)
-      ).map((item) => item.categoryId))].sort();
-      const eligiblePersonal = phrases.filter((item) =>
-        (item.origin ?? "personal") === "personal"
-          && (item.kind ?? "standalone") === "standalone"
-          && !item.retiredAt
-          && (stateById.get(item.id)?.stage ?? "unseen") === "unseen"
-          && categoryIds.has(item.categoryId)
-      ).sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
-      const themeCategoryId = eligibleSystemThemes.length > 0
-        ? eligibleSystemThemes[dateRotationIndex(date, eligibleSystemThemes.length)]
-        : eligiblePersonal[0]?.categoryId;
+      const preview = previewLearningGroup(phrases, states, categories.map((item) => item.id), { date, remaining });
+      const { themeCategoryId } = preview;
       if (!themeCategoryId) {
         replacePhase("empty");
         setOperation(false);
         return;
       }
-      const selected = selectLearningGroup(phrases, states, {
-        date,
-        themeCategoryId,
-        target: Math.min(5, remaining),
-      });
+      const selected = preview.phrases;
       if (selected.length === 0) {
         replacePhase("empty");
         setOperation(false);
