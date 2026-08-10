@@ -1,7 +1,7 @@
 import type { Category } from "../domain/types";
 
 const names = [
-  ["daily", "日常"], ["travel", "旅行"], ["business", "商务"], ["supply-chain", "供应链"],
+  ["daily", "日常"], ["travel", "旅行"], ["work", "工作沟通"], ["business", "商务"], ["supply-chain", "供应链"],
   ["opinions", "观点表达"], ["social", "聊天社交"], ["emotions", "情绪表达"], ["fitness", "健身"],
 ] as const;
 

@@ -73,11 +73,11 @@ describe("LocalPhraseRepository", () => {
     expect((await restored.listPhraseLearningStates()).find(({ phraseId }) => phraseId === "sys-core")?.masteredDates).toEqual(["2026-08-09"]);
   });
 
-  it("seeds the eight default categories once", async () => {
-    expect(await repo.listCategories()).toHaveLength(8);
+  it("seeds the nine default categories once", async () => {
+    expect(await repo.listCategories()).toHaveLength(9);
     expect(await repo.listPhrases()).toHaveLength(40);
     await repo.initialize();
-    expect(await repo.listCategories()).toHaveLength(8);
+    expect(await repo.listCategories()).toHaveLength(9);
     expect(await repo.listPhrases()).toHaveLength(40);
   });
 

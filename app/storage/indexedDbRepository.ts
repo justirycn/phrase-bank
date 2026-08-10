@@ -74,6 +74,10 @@ export class LocalPhraseRepository implements PhraseRepository {
       for (const item of defaultCategories()) await tx.objectStore("categories").put(item);
       await metadata.put({ key: "initialized", value: "1" });
     }
+    if (!await tx.objectStore("categories").get("work")) {
+      const work = defaultCategories().find(({ id }) => id === "work");
+      if (work) await tx.objectStore("categories").put(work);
+    }
 
     const starterVersion = await metadata.get("starterPhrasesVersion");
     if (starterVersion?.value !== "1") {
