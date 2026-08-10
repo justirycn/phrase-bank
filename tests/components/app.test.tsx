@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { PhraseBankApp } from "../../app/PhraseBankApp";
-import type { BackupEnvelopeV2, Category, Phrase, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import type { BackupEnvelopeV3, Category, Phrase, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 
 class MemoryRepository {
   phrases: Phrase[] = [];
@@ -35,11 +35,11 @@ class MemoryRepository {
   async saveSpeechPreferences(value: SpeechPreferences) { this.preferenceSaves.push(value); if (this.savePreferenceImpl) return this.savePreferenceImpl(value); if (this.failPreferenceSave) throw new Error("preference save failed"); this.preferences = value; }
   async listPhraseLearningStates() { return []; }
   async getActiveSystemContentVersion() { return undefined; }
-  async installSystemContentPackage(_content: SystemContentPackage) {}
-  async rollbackSystemContentPackage(_version: string) {}
+  async installSystemContentPackage() {}
+  async rollbackSystemContentPackage() {}
   async saveCategory(category: Category) { this.categories.push(category); }
   async deleteCategoryAndMigrate() {}
-  async exportSnapshot(): Promise<BackupEnvelopeV2> { return { format: "personal-phrase-bank", version: 2, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [], trainingEvents: this.events, trainingSessions: this.sessions }; }
+  async exportSnapshot(): Promise<BackupEnvelopeV3> { return { format: "personal-phrase-bank", version: 3, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [], trainingEvents: this.events, trainingSessions: this.sessions, phraseLearningStates: [] }; }
   async importSnapshot() {}
 }
 

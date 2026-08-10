@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import type { BackupEnvelope, BackupEnvelopeV2, Category, Phrase, PhraseLearningState, ReviewLog, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+import type { BackupEnvelope, BackupEnvelopeV3, Category, Phrase, PhraseLearningState, ReviewLog, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
 import { scheduleReview } from "../domain/review";
 import { personalPhraseDefaults, validateSystemContentPackage } from "../domain/systemContent";
 import { applyLearningResult, nextExampleToUnlock } from "../domain/learningProgress";
@@ -255,36 +255,43 @@ export class LocalPhraseRepository implements PhraseRepository {
     if (!content) throw new Error("找不到可回滚的系统内容版本");
     await this.installSystemContentPackage(content);
   }
-  async exportSnapshot(): Promise<BackupEnvelopeV2> {
+  async exportSnapshot(): Promise<BackupEnvelopeV3> {
     const db = await this.db();
-    const tx = db.transaction(["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions"]);
-    const [categories, phrases, reviewLogs, trainingEvents, trainingSessions] = await Promise.all([
+    const tx = db.transaction(["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions", "phraseLearningState", "metadata"]);
+    const [categories, phrases, reviewLogs, trainingEvents, trainingSessions, phraseLearningStates, activeVersion] = await Promise.all([
       tx.objectStore("categories").getAll(),
       tx.objectStore("phrases").getAll(),
       tx.objectStore("reviewLogs").getAll(),
       tx.objectStore("trainingEvents").getAll(),
       tx.objectStore("trainingSessions").getAll(),
+      tx.objectStore("phraseLearningState").getAll(),
+      tx.objectStore("metadata").get("activeSystemContentVersion"),
     ]);
     await tx.done;
-    return { format: "personal-phrase-bank", version: 2, exportedAt: new Date().toISOString(), categories, phrases, reviewLogs, trainingEvents, trainingSessions };
+    return { format: "personal-phrase-bank", version: 3, exportedAt: new Date().toISOString(), categories, phrases, reviewLogs, trainingEvents, trainingSessions, phraseLearningStates, activeSystemContentVersion: activeVersion?.value };
   }
 
   async importSnapshot(snapshot: BackupEnvelope, policy: "skip" | "overwrite") {
     const db = await this.db();
-    const stores = snapshot.version === 2 ? ["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions"] as const : ["categories", "phrases", "reviewLogs"] as const;
+    const stores = snapshot.version === 3 ? ["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions", "phraseLearningState", "metadata"] as const : snapshot.version === 2 ? ["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions"] as const : ["categories", "phrases", "reviewLogs"] as const;
     const tx = db.transaction(stores, "readwrite");
     const put = async <S extends typeof stores[number]>(store: S, records: PhraseBankDb[S]["value"][]) => {
       for (const record of records) {
-        if (policy === "skip" && await tx.objectStore(store).get(record.id)) continue;
+        const recordKey = "phraseId" in record && store === "phraseLearningState" ? record.phraseId : "id" in record ? record.id : undefined;
+        if (policy === "skip" && recordKey !== undefined && await tx.objectStore(store).get(recordKey)) continue;
         await tx.objectStore(store).put(record as never);
       }
     };
     await put("categories", snapshot.categories);
     await put("phrases", snapshot.phrases);
     await put("reviewLogs", snapshot.reviewLogs);
-    if (snapshot.version === 2) {
+    if (snapshot.version >= 2) {
       await put("trainingEvents", snapshot.trainingEvents);
       await put("trainingSessions", snapshot.trainingSessions);
+    }
+    if (snapshot.version === 3) {
+      await put("phraseLearningState", snapshot.phraseLearningStates);
+      if (snapshot.activeSystemContentVersion) await tx.objectStore("metadata").put({ key: "activeSystemContentVersion", value: snapshot.activeSystemContentVersion });
     }
     await tx.done;
   }

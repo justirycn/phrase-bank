@@ -137,4 +137,17 @@ export interface BackupEnvelopeV2 {
   trainingSessions: TrainingSessionRecord[];
 }
 
-export type BackupEnvelope = BackupEnvelopeV1 | BackupEnvelopeV2;
+export interface BackupEnvelopeV3 {
+  format: "personal-phrase-bank";
+  version: 3;
+  exportedAt: string;
+  categories: Category[];
+  phrases: Phrase[];
+  reviewLogs: ReviewLog[];
+  trainingEvents: TrainingEvent[];
+  trainingSessions: TrainingSessionRecord[];
+  phraseLearningStates: PhraseLearningState[];
+  activeSystemContentVersion?: string;
+}
+
+export type BackupEnvelope = BackupEnvelopeV1 | BackupEnvelopeV2 | BackupEnvelopeV3;

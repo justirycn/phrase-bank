@@ -12,7 +12,7 @@ const valid = {
 
 describe("backup parsing", () => {
   it("accepts a valid version-one backup", () => {
-    expect(parseBackup(JSON.stringify(valid))).toMatchObject({ version: 2, trainingEvents: [], trainingSessions: [] });
+    expect(parseBackup(JSON.stringify(valid))).toMatchObject({ version: 3, trainingEvents: [], trainingSessions: [], phraseLearningStates: [] });
   });
 
   it("accepts and validates a version-two backup", () => {
@@ -23,7 +23,7 @@ describe("backup parsing", () => {
       trainingSessions: [{ id: "s1", mode: "quick", startedAt: valid.exportedAt, updatedAt: valid.exportedAt, phraseIds: ["p1"], currentIndex: 0, activeSeconds: 3 }],
       phrases: [{ id: "p1", english: "A", chinese: "A", categoryId: "daily", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt }],
     };
-    expect(parseBackup(JSON.stringify(v2))).toEqual(v2);
+    expect(parseBackup(JSON.stringify(v2))).toMatchObject({ ...v2, version: 3, phrases: [{ ...v2.phrases[0], origin: "personal", kind: "standalone" }], phraseLearningStates: [] });
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], id: "" }] }))).toThrow();
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], sessionId: "" }] }))).toThrow();
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], phraseId: "" }] }))).toThrow();
@@ -54,7 +54,18 @@ describe("backup parsing", () => {
   });
 
   it("rejects an unsupported version", () => {
-    expect(() => parseBackup(JSON.stringify({ ...valid, version: 3 }))).toThrow();
+    expect(() => parseBackup(JSON.stringify({ ...valid, version: 4 }))).toThrow();
+  });
+
+  it("preserves version-three learning and content state", () => {
+    const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "system", kind: "core", subcategory: "routine", cefrLevel: "A2", intent: "state", contentVersion: "v1", qualityVersion: "q1", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const v3 = { ...valid, version: 3, phrases: [phrase], trainingEvents: [], trainingSessions: [], phraseLearningStates: [{ phraseId: "p1", masteredDates: ["2026-08-07"], unlockedAt: valid.exportedAt, updatedAt: valid.exportedAt }], activeSystemContentVersion: "v1" };
+    expect(parseBackup(JSON.stringify(v3))).toEqual(v3);
+    expect(() => parseBackup(JSON.stringify({ ...v3, phraseLearningStates: [{ ...v3.phraseLearningStates[0], phraseId: "missing" }] }))).toThrow("无效学习状态");
+    expect(() => parseBackup(JSON.stringify({ ...v3, phraseLearningStates: [{ ...v3.phraseLearningStates[0], masteredDates: ["2026-08-07", "2026-08-07"] }] }))).toThrow("无效学习状态");
+    const orphan = { ...phrase, id: "orphan", kind: "example", parentPhraseId: "missing", unlockOrder: 1 };
+    expect(() => parseBackup(JSON.stringify({ ...v3, phrases: [orphan], phraseLearningStates: [] }))).toThrow("内容层级");
+    expect(() => parseBackup(JSON.stringify({ ...v3, phrases: [{ ...phrase, origin: "unknown" }] }))).toThrow("内容层级");
   });
 
   it("rejects phrases referencing missing categories", () => {

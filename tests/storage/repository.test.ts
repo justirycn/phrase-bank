@@ -59,6 +59,20 @@ describe("LocalPhraseRepository", () => {
     expect((await repo.listPhraseLearningStates()).find(({ phraseId }) => phraseId === "sys-example")?.unlockedAt).toBe("2026-08-10T08:00:00.000Z");
   });
 
+  it("round-trips system version and learning state through a v3 backup", async () => {
+    await repo.installSystemContentPackage(contentPackage("v1"));
+    await repo.submitTrainingReview({ id: "mastery", sessionId: "s", phraseId: "sys-core", source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T08:00:00.000Z" });
+    const snapshot = await repo.exportSnapshot();
+    const restored = new LocalPhraseRepository(`restored-${crypto.randomUUID()}`);
+    await restored.initialize();
+    await restored.importSnapshot(snapshot, "overwrite");
+    expect(await restored.getActiveSystemContentVersion()).toBe("v1");
+    expect(await restored.getPhrase("sys-core")).toMatchObject({ origin: "system", contentVersion: "v1" });
+    expect(await restored.listPhraseLearningStates()).toContainEqual(expect.objectContaining({ phraseId: "sys-core", masteredDates: ["2026-08-09"] }));
+    await restored.importSnapshot({ ...snapshot, phraseLearningStates: snapshot.phraseLearningStates.map((state) => state.phraseId === "sys-core" ? { ...state, masteredDates: ["2026-08-10"] } : state) }, "skip");
+    expect((await restored.listPhraseLearningStates()).find(({ phraseId }) => phraseId === "sys-core")?.masteredDates).toEqual(["2026-08-09"]);
+  });
+
   it("seeds the eight default categories once", async () => {
     expect(await repo.listCategories()).toHaveLength(8);
     expect(await repo.listPhrases()).toHaveLength(40);
@@ -176,7 +190,7 @@ describe("LocalPhraseRepository", () => {
     await persistedRepo.saveSpeechPreferences({ accent: "en-GB", autoSpeak: false });
     expect(await new LocalPhraseRepository(persistedName).getSpeechPreferences()).toEqual({ accent: "en-GB", autoSpeak: false });
     const snapshot = await repo.exportSnapshot();
-    expect(snapshot.version).toBe(2);
+    expect(snapshot.version).toBe(3);
     const dbName = `phrase-bank-${crypto.randomUUID()}`;
     const corruptRepo = new LocalPhraseRepository(dbName);
     await corruptRepo.initialize();
@@ -196,18 +210,18 @@ describe("LocalPhraseRepository", () => {
 
   it("exports v2 and imports v1/v2 training data with skip and overwrite policies", async () => {
     const base = await repo.exportSnapshot();
-    expect(base).toMatchObject({ version: 2, trainingEvents: [], trainingSessions: [] });
+    expect(base).toMatchObject({ version: 3, trainingEvents: [], trainingSessions: [], phraseLearningStates: [] });
     const v1: BackupEnvelopeV1 = { format: base.format, version: 1, exportedAt: base.exportedAt, categories: [], phrases: [], reviewLogs: [] };
     const event: TrainingEvent = { id: "event", sessionId: "session", phraseId: "starter-daily-not-sure", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: base.exportedAt };
     const session: TrainingSessionRecord = { id: "session", mode: "quick", startedAt: base.exportedAt, updatedAt: base.exportedAt, phraseIds: [event.phraseId], sources: ["due"], currentIndex: 0, activeSeconds: 1 };
     await repo.saveTrainingEvent(event);
     await repo.saveTrainingSession(session);
     const normalizedV1 = parseBackup(JSON.stringify(v1));
-    expect(normalizedV1).toMatchObject({ version: 2, trainingEvents: [], trainingSessions: [] });
+    expect(normalizedV1).toMatchObject({ version: 3, trainingEvents: [], trainingSessions: [], phraseLearningStates: [] });
     await repo.importSnapshot(normalizedV1, "overwrite");
     expect((await repo.exportSnapshot()).trainingEvents).toEqual([event]);
     expect((await repo.exportSnapshot()).trainingSessions).toEqual([session]);
-    const v2: BackupEnvelopeV2 = { ...base, trainingEvents: [event], trainingSessions: [session] };
+    const v2: BackupEnvelopeV2 = { format: base.format, version: 2, exportedAt: base.exportedAt, categories: base.categories, phrases: base.phrases, reviewLogs: base.reviewLogs, trainingEvents: [event], trainingSessions: [session] };
     await repo.importSnapshot(v2, "overwrite");
     await repo.importSnapshot({ ...v2, trainingEvents: [{ ...event, activeSeconds: 9 }], trainingSessions: [{ ...session, activeSeconds: 9 }] }, "skip");
     expect((await repo.listTrainingEvents())[0].activeSeconds).toBe(1);
