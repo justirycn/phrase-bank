@@ -180,6 +180,24 @@ describe("useNewPhraseLearning", () => {
     expect(hook.result.current.busy).toBe(false);
   });
 
+  it("never exposes study examples through the controller during test", async () => {
+    const core = phrase("core", { origin: "system", kind: "core" });
+    const example = phrase("example", {
+      origin: "system", kind: "example", parentPhraseId: core.id, unlockOrder: 1,
+    });
+    const active: LearningSessionRecord = {
+      id: "active", date: "2026-08-10", themeCategoryId: "daily", phraseIds: [core.id],
+      studyIndex: 1, testIndex: 0, phase: "test", startedAt: timestamp, updatedAt: timestamp,
+    };
+    const store = memoryRepository({ phrases: [core, example], states: [unseen(core.id)], active });
+    const hook = renderLearning(store);
+    await waitFor(() => expect(hook.result.current.phase).toBe("test"));
+
+    expect(hook.result.current.examples).toEqual([]);
+    await act(() => hook.result.current.reveal());
+    expect(hook.result.current.examples).toEqual([]);
+  });
+
   it("persists all study cursors before testing and creates no review event during study", async () => {
     const items = Array.from({ length: 5 }, (_, index) => phrase(`p-${index}`));
     const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
@@ -209,6 +227,8 @@ describe("useNewPhraseLearning", () => {
     const hook = renderLearning(store, voice);
     await waitFor(() => expect(hook.result.current.phase).toBe("test"));
 
+    expect(voice.speak).not.toHaveBeenCalled();
+    await act(() => hook.result.current.replay());
     expect(voice.speak).not.toHaveBeenCalled();
     await act(() => hook.result.current.grade("good"));
     expect(submit).not.toHaveBeenCalled();
@@ -377,6 +397,58 @@ describe("useNewPhraseLearning", () => {
     expect(voice.cancel).toHaveBeenCalledOnce();
     expect(store.repository.saveLearningSession).not.toHaveBeenCalled();
     expect(store.repository.savePhraseLearningState).not.toHaveBeenCalled();
+  });
+
+  it("keeps a retried initialization busy and visible while an old study advance finishes", async () => {
+    const items = [phrase("first"), phrase("second")];
+    const active: LearningSessionRecord = {
+      id: "active", date: "2026-08-10", themeCategoryId: "daily", phraseIds: items.map((item) => item.id),
+      studyIndex: 0, testIndex: 0, phase: "study", startedAt: timestamp, updatedAt: timestamp,
+    };
+    const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)), active });
+    const hook = renderLearning(store);
+    await waitFor(() => expect(hook.result.current.phase).toBe("study"));
+
+    let releaseSave!: () => void;
+    const deferredSave = new Promise<void>((resolve) => { releaseSave = resolve; });
+    (store.repository.saveLearningSession as ReturnType<typeof vi.fn>).mockImplementationOnce(() => deferredSave);
+    let releaseReload!: (value: Phrase[]) => void;
+    const deferredReload = new Promise<Phrase[]>((resolve) => { releaseReload = resolve; });
+    (store.repository.listPhrases as ReturnType<typeof vi.fn>).mockImplementationOnce(() => deferredReload);
+
+    let advancing!: Promise<void>;
+    act(() => { advancing = hook.result.current.nextStudyPhrase(); });
+    await waitFor(() => expect(hook.result.current.busy).toBe(true));
+    act(() => hook.result.current.retry());
+    await waitFor(() => expect(hook.result.current.phase).toBe("loading"));
+
+    releaseSave();
+    await act(() => advancing);
+    expect(hook.result.current).toMatchObject({ phase: "loading", studyIndex: 0, busy: true });
+
+    releaseReload(items);
+    await waitFor(() => expect(hook.result.current).toMatchObject({ phase: "study", studyIndex: 0, busy: false }));
+  });
+
+  it("ignores a stale replay rejection after retry loads a new generation", async () => {
+    const item = phrase("first");
+    const store = memoryRepository({ phrases: [item], states: [unseen(item.id)] });
+    const voice = speech();
+    const hook = renderLearning(store, voice);
+    await waitFor(() => expect(hook.result.current.phase).toBe("study"));
+    voice.speak.mockClear();
+
+    let rejectReplay!: (reason: Error) => void;
+    const deferredReplay = new Promise<void>((_resolve, reject) => { rejectReplay = reject; });
+    voice.speak.mockImplementationOnce(() => deferredReplay);
+    const replaying = hook.result.current.replay();
+    act(() => hook.result.current.retry());
+    await waitFor(() => expect(store.repository.getActiveLearningSession).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(hook.result.current.phase).toBe("study"));
+
+    await act(async () => { rejectReplay(new Error("old speech failed")); await replaying; });
+    expect(hook.result.current.error).toBeUndefined();
+    expect(hook.result.current.busy).toBe(false);
   });
 
   it("does not reinitialize for an inline clock and actions use the latest clock", async () => {

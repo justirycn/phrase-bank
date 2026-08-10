@@ -332,19 +332,25 @@ export function useNewPhraseLearning({
   }, [current, ensureLearningState, phase, speech, setVisibleError]);
 
   const replay = useCallback(async () => {
+    const generation = generationRef.current;
+    if (phaseRef.current !== "study" && phaseRef.current !== "test") return;
+    if (phaseRef.current === "test" && !revealedRef.current) return;
     const item = phaseRef.current === "study"
       ? queueRef.current[studyIndexRef.current]
       : queueRef.current[testIndexRef.current];
     if (!item) return;
     try {
       await speech.speak(item.english, preferencesRef.current.accent);
+      if (generation !== generationRef.current) return;
       setVisibleError(undefined);
     } catch {
+      if (generation !== generationRef.current) return;
       setVisibleError("发音播放失败，请稍后重试。");
     }
   }, [setVisibleError, speech]);
 
   const nextStudyPhrase = useCallback(async () => {
+    const generation = generationRef.current;
     if (operationRef.current || phaseRef.current !== "study") return;
     const session = sessionRef.current;
     const item = queueRef.current[studyIndexRef.current];
@@ -353,6 +359,7 @@ export function useNewPhraseLearning({
     setVisibleError(undefined);
     try {
       await ensureLearningState(item);
+      if (generation !== generationRef.current) return;
       const next = studyIndexRef.current + 1;
       const proposed: LearningSessionRecord = {
         ...session,
@@ -362,7 +369,7 @@ export function useNewPhraseLearning({
         updatedAt: readNow().toISOString(),
       };
       await repository.saveLearningSession(proposed);
-      if (!mountedRef.current) return;
+      if (generation !== generationRef.current || !mountedRef.current) return;
       sessionRef.current = proposed;
       speech.cancel();
       replaceStudyIndex(next);
@@ -372,16 +379,19 @@ export function useNewPhraseLearning({
         replacePhase("test");
       }
     } catch {
+      if (generation !== generationRef.current) return;
       setVisibleError("学习进度保存失败，请重试。");
     } finally {
-      setOperation(false);
+      if (generation === generationRef.current) setOperation(false);
     }
   }, [ensureLearningState, readNow, replacePhase, replaceRevealed, replaceStudyIndex, replaceTestIndex, repository, setOperation, setVisibleError, speech]);
 
   const reveal = useCallback(async () => {
+    const generation = generationRef.current;
     if (operationRef.current || phaseRef.current !== "test" || revealedRef.current) return;
     const item = queueRef.current[testIndexRef.current];
     if (!item) return;
+    if (generation !== generationRef.current) return;
     replaceRevealed(true);
     if (preferencesRef.current.autoSpeak) {
       void speech.speak(item.english, preferencesRef.current.accent).catch(() => undefined);
@@ -389,6 +399,7 @@ export function useNewPhraseLearning({
   }, [replaceRevealed, speech]);
 
   const grade = useCallback(async (result: ReviewResult) => {
+    const generation = generationRef.current;
     if (operationRef.current || phaseRef.current !== "test" || !revealedRef.current) return;
     const session = sessionRef.current;
     const item = queueRef.current[testIndexRef.current];
@@ -420,11 +431,12 @@ export function useNewPhraseLearning({
       }
       const pending = pendingReviewRef.current;
       await repository.submitFirstLearningReview(pending.event, pending.nextSession);
+      if (generation !== generationRef.current) return;
       reviewSaved = true;
       if (pending.nextSession.testIndex >= queueRef.current.length) {
         const completedAt = readNow();
         await repository.completeLearningSession(session.id, completedAt);
-        if (!mountedRef.current) return;
+        if (generation !== generationRef.current || !mountedRef.current) return;
         sessionRef.current = {
           ...pending.nextSession,
           completedAt: completedAt.toISOString(),
@@ -433,7 +445,7 @@ export function useNewPhraseLearning({
         replaceTestIndex(pending.nextSession.testIndex);
         replacePhase("complete");
       } else {
-        if (!mountedRef.current) return;
+        if (generation !== generationRef.current || !mountedRef.current) return;
         sessionRef.current = pending.nextSession;
         replaceTestIndex(pending.nextSession.testIndex);
         replaceRevealed(false);
@@ -441,15 +453,16 @@ export function useNewPhraseLearning({
       pendingReviewRef.current = undefined;
       speech.cancel();
     } catch {
+      if (generation !== generationRef.current) return;
       setVisibleError(reviewSaved
         ? "学习会话完成失败，请重试。"
         : "测试结果保存失败，请重试。");
     } finally {
-      setOperation(false);
+      if (generation === generationRef.current) setOperation(false);
     }
   }, [readId, readNow, replacePhase, replaceRevealed, replaceTestIndex, repository, setOperation, setVisibleError, speech]);
 
-  const examples = current?.origin === "system" && current.kind === "core"
+  const examples = phase === "study" && current?.origin === "system" && current.kind === "core"
     ? allPhrases.filter((item) =>
       item.origin === "system" && item.kind === "example" && item.parentPhraseId === current.id
     ).sort((left, right) => (left.unlockOrder ?? Number.MAX_SAFE_INTEGER) - (right.unlockOrder ?? Number.MAX_SAFE_INTEGER)
