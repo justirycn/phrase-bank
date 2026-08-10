@@ -30,6 +30,32 @@ function newPhrase(id: string): Phrase {
 }
 
 describe("selectTrainingGroup", () => {
+  it("allocates standard practice as five personal, three due, and two system-new phrases", () => {
+    const personal = Array.from({ length: 7 }, (_, index) => ({
+      ...reviewedPhrase(`personal-${index}`, index < 5 ? 1 : 3, "2026-08-12T00:00:00.000Z"),
+      origin: "personal" as const, kind: "standalone" as const,
+      createdAt: `2026-08-0${index + 1}T00:00:00.000Z`,
+    }));
+    const due = Array.from({ length: 5 }, (_, index) => ({
+      ...reviewedPhrase(`system-due-${index}`, 1, "2026-08-08T00:00:00.000Z"),
+      origin: "system" as const, kind: "core" as const,
+    }));
+    const systemNew = Array.from({ length: 4 }, (_, index) => ({
+      ...newPhrase(`system-new-${index}`), origin: "system" as const, kind: "core" as const,
+    }));
+
+    const selected = selectTrainingGroup([...personal, ...due, ...systemNew], {
+      mode: "standard", now, seed: "five-three-two", newIntroducedToday: 0,
+      personalNewIntroducedToday: 0, systemNewIntroducedToday: 0, learningStates: [],
+    });
+
+    expect(selected).toHaveLength(10);
+    expect(selected.filter(({ phrase }) => phrase.origin === "personal")).toHaveLength(5);
+    expect(selected.filter(({ source }) => source === "due")).toHaveLength(3);
+    expect(selected.filter(({ phrase, source }) => phrase.origin === "system" && source === "new")).toHaveLength(2);
+    expect(new Set(selected.map(({ phrase }) => phrase.id)).size).toBe(10);
+  });
+
   it("prioritizes personal due and ungraduated phrases before unlocked system content", () => {
     const personalDue = { ...reviewedPhrase("personal-due", 1, "2026-08-08T00:00:00.000Z"), origin: "personal" as const, kind: "standalone" as const };
     const systemDue = { ...reviewedPhrase("system-due", 1, "2026-08-08T00:00:00.000Z"), origin: "system" as const, kind: "core" as const };

@@ -136,8 +136,9 @@ function selectPrioritizedGroup(phrases: Phrase[], options: TrainingSelectionOpt
     if (phrase.masteryLevel <= 2) return "weak";
     return "mature";
   };
-  const add = (pool: Phrase[], limit = Number.POSITIVE_INFINITY) => {
-    const ordered = [...seededOrder(pool.filter((phrase) => !practiced.has(phrase.id)), options.seed), ...seededOrder(pool.filter((phrase) => practiced.has(phrase.id)), options.seed)];
+  const add = (pool: Phrase[], limit = Number.POSITIVE_INFINITY, preserveOrder = false) => {
+    const order = (items: Phrase[]) => preserveOrder ? items : seededOrder(items, options.seed);
+    const ordered = [...order(pool.filter((phrase) => !practiced.has(phrase.id))), ...order(pool.filter((phrase) => practiced.has(phrase.id)))];
     for (const phrase of ordered) {
       if (selected.length >= target || limit <= 0 || ids.has(phrase.id)) continue;
       selected.push({ phrase, source: sourceFor(phrase) });
@@ -147,6 +148,26 @@ function selectPrioritizedGroup(phrases: Phrase[], options: TrainingSelectionOpt
   };
   const isPersonal = (phrase: Phrase) => (phrase.origin ?? "personal") === "personal";
   const due = unique.filter((phrase) => phrase.lastReviewedAt && new Date(phrase.nextReviewAt).getTime() <= nowTime);
+  if (options.mode === "standard") {
+    const personalNewAllowance = Math.max(0, 5 - (options.personalNewIntroducedToday ?? 0));
+    const systemNewAllowance = Math.max(0, 3 - (options.systemNewIntroducedToday ?? 0));
+    const personalReviewed = unique.filter((phrase) => isPersonal(phrase) && phrase.lastReviewedAt)
+      .sort((left, right) => left.masteryLevel - right.masteryLevel || right.createdAt.localeCompare(left.createdAt));
+    const personalNew = seededOrder(unique.filter((phrase) => isPersonal(phrase) && !phrase.lastReviewedAt), options.seed)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, personalNewAllowance);
+    const personalPool = [...personalNew, ...personalReviewed];
+    const systemNew = unique.filter((phrase) => !isPersonal(phrase) && !phrase.lastReviewedAt).slice(0, systemNewAllowance);
+
+    add(personalPool, 5, true);
+    add(due.filter((phrase) => !ids.has(phrase.id)), 3);
+    add(systemNew.filter((phrase) => !ids.has(phrase.id)), 2);
+    add(personalPool.filter((phrase) => !ids.has(phrase.id)));
+    add(due.filter((phrase) => !ids.has(phrase.id)));
+    add(systemNew.filter((phrase) => !ids.has(phrase.id)));
+    add(unique.filter((phrase) => phrase.lastReviewedAt && !ids.has(phrase.id)));
+    return selected;
+  }
   add(due.filter(isPersonal));
   add(due.filter((phrase) => !isPersonal(phrase)));
   add(unique.filter((phrase) => isPersonal(phrase) && phrase.lastReviewedAt && !ids.has(phrase.id) && (states.get(phrase.id)?.masteredDates.length ?? 0) < 2));
