@@ -23,7 +23,13 @@ describe("backup parsing", () => {
       trainingSessions: [{ id: "s1", mode: "quick", startedAt: valid.exportedAt, updatedAt: valid.exportedAt, phraseIds: ["p1"], currentIndex: 0, activeSeconds: 3 }],
       phrases: [{ id: "p1", english: "A", chinese: "A", categoryId: "daily", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt }],
     };
-    expect(parseBackup(JSON.stringify(v2))).toMatchObject({ ...v2, version: 4, phrases: [{ ...v2.phrases[0], origin: "personal", kind: "standalone" }], phraseLearningStates: [], learningSessions: [] });
+    expect(parseBackup(JSON.stringify(v2))).toMatchObject({
+      ...v2, version: 4, phrases: [{ ...v2.phrases[0], origin: "personal", kind: "standalone" }], learningSessions: [],
+      phraseLearningStates: [{
+        phraseId: "p1", stage: "learned", firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt,
+        firstResult: "good", consecutiveGood: 1, masteredDates: [], updatedAt: valid.exportedAt,
+      }],
+    });
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], id: "" }] }))).toThrow();
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], sessionId: "" }] }))).toThrow();
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], phraseId: "" }] }))).toThrow();
@@ -176,5 +182,75 @@ describe("backup parsing", () => {
       { ...validStates[2], firstResult: "easy" }, { ...validStates[2], updatedAt: "bad" }, { ...validStates[2], unlockedAt: "bad" },
     ];
     for (const state of invalidStates) expect(() => parseBackup(JSON.stringify({ ...base, phraseLearningStates: [state] }))).toThrow("无效学习状态");
+  });
+
+  it("normalizes v1 review logs and v2 training events into legal learning states", () => {
+    const phrase = (id: string, masteryLevel: number) => ({
+      id, english: id, chinese: id, categoryId: "daily", reviewStep: masteryLevel, masteryLevel,
+      nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt,
+    });
+    const v1 = {
+      ...valid, phrases: [phrase("v1-phrase", 1)],
+      reviewLogs: [{ id: "v1-log", phraseId: "v1-phrase", result: "hard", reviewedAt: "2026-08-08T08:00:00.000Z", previousStep: 0, nextReviewAt: valid.exportedAt }],
+    };
+    expect(parseBackup(JSON.stringify(v1)).phraseLearningStates).toEqual([{
+      phraseId: "v1-phrase", stage: "learned", firstSeenAt: "2026-08-08T08:00:00.000Z",
+      firstTestedAt: "2026-08-08T08:00:00.000Z", firstResult: "hard", consecutiveGood: 0,
+      masteredDates: [], updatedAt: valid.exportedAt,
+    }]);
+
+    const v2 = {
+      ...valid, version: 2, phrases: [phrase("v2-phrase", 3)], reviewLogs: [],
+      trainingSessions: [{ id: "v2-session", mode: "quick", startedAt: valid.exportedAt, updatedAt: valid.exportedAt, phraseIds: ["v2-phrase"], currentIndex: 0, activeSeconds: 2 }],
+      trainingEvents: [
+        { id: "v2-1", sessionId: "v2-session", phraseId: "v2-phrase", source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-08T08:00:00.000Z" },
+        { id: "v2-2", sessionId: "v2-session", phraseId: "v2-phrase", source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T08:00:00.000Z" },
+      ],
+    };
+    expect(parseBackup(JSON.stringify(v2)).phraseLearningStates).toEqual([{
+      phraseId: "v2-phrase", stage: "mastered", firstSeenAt: "2026-08-08T08:00:00.000Z",
+      firstTestedAt: "2026-08-08T08:00:00.000Z", firstResult: "good", consecutiveGood: 2,
+      masteredDates: [], updatedAt: valid.exportedAt,
+    }]);
+  });
+
+  it("sorts same-timestamp evidence deterministically by source and id", () => {
+    const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", reviewStep: 1, masteryLevel: 1, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const session = { id: "s1", mode: "quick", startedAt: valid.exportedAt, updatedAt: valid.exportedAt, phraseIds: ["p1"], currentIndex: 0, activeSeconds: 1 };
+    const timestamp = "2026-08-09T08:00:00.000Z";
+    const events = [
+      { id: "z-again", sessionId: "s1", phraseId: "p1", source: "new", result: "again", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: timestamp },
+      { id: "a-good", sessionId: "s1", phraseId: "p1", source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: timestamp },
+    ];
+    const logs = [{ id: "a-log-hard", phraseId: "p1", result: "hard", reviewedAt: timestamp, previousStep: 0, nextReviewAt: valid.exportedAt }];
+    const backup = { ...valid, version: 3, phrases: [phrase], reviewLogs: logs, trainingSessions: [session], trainingEvents: events, phraseLearningStates: [] };
+    const forward = parseBackup(JSON.stringify(backup)).phraseLearningStates[0];
+    const reversed = parseBackup(JSON.stringify({ ...backup, reviewLogs: [...logs].reverse(), trainingEvents: [...events].reverse() })).phraseLearningStates[0];
+    expect(forward).toEqual(reversed);
+    expect(forward).toMatchObject({ firstResult: "good", consecutiveGood: 0 });
+  });
+
+  it("validates v4 learning-session lifecycle semantics", () => {
+    const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const session = { id: "ls1", date: "2026-08-07", themeCategoryId: "daily", phraseIds: ["p1"], studyIndex: 0, testIndex: 0, phase: "study", startedAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const base = { ...valid, version: 4, phrases: [phrase], trainingEvents: [], trainingSessions: [], phraseLearningStates: [], learningSessions: [session] };
+    for (const validSession of [
+      session,
+      { ...session, phase: "test", studyIndex: 1, testIndex: 0 },
+      { ...session, phase: "test", studyIndex: 1, testIndex: 1 },
+      { ...session, phase: "test", studyIndex: 1, testIndex: 1, completedAt: valid.exportedAt },
+    ]) expect(() => parseBackup(JSON.stringify({ ...base, learningSessions: [validSession] }))).not.toThrow();
+    for (const invalidSession of [
+      { ...session, phraseIds: [] }, { ...session, studyIndex: 1 }, { ...session, testIndex: 1 },
+      { ...session, completedAt: valid.exportedAt }, { ...session, phase: "test", studyIndex: 0 },
+      { ...session, phase: "test", studyIndex: 1, testIndex: 0, completedAt: valid.exportedAt },
+    ]) expect(() => parseBackup(JSON.stringify({ ...base, learningSessions: [invalidSession] }))).toThrow("学习会话");
+  });
+
+  it("rejects personal standalone phrases that carry hierarchy fields", () => {
+    const phrase = { id: "p1", english: "A", chinese: "甲", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    for (const hierarchy of [{ parentPhraseId: "anything" }, { unlockOrder: 1 }]) {
+      expect(() => parseBackup(JSON.stringify({ ...valid, phrases: [{ ...phrase, ...hierarchy }] }))).toThrow("内容层级");
+    }
   });
 });

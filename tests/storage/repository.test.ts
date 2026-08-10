@@ -307,15 +307,15 @@ describe("LocalPhraseRepository", () => {
     await repo.savePhraseLearningState(state);
     expect(await repo.getPhraseLearningState(state.phraseId)).toEqual(state);
 
-    await repo.saveLearningSession(learningSession({ id: "older" }));
-    await repo.saveLearningSession(learningSession({ id: "completed-newer", updatedAt: "2026-08-10T10:00:00.000Z", completedAt: "2026-08-10T10:00:00.000Z" }));
-    await repo.saveLearningSession(learningSession({ id: "newest", updatedAt: "2026-08-10T09:00:00.000Z" }));
+    await repo.saveLearningSession(learningSession({ id: "older", testIndex: 1, completedAt: "2026-08-10T08:00:00.000Z" }));
+    await repo.saveLearningSession(learningSession({ id: "completed-newer", testIndex: 1, updatedAt: "2026-08-10T10:00:00.000Z", completedAt: "2026-08-10T10:00:00.000Z" }));
+    await repo.saveLearningSession(learningSession({ id: "newest", testIndex: 1, updatedAt: "2026-08-10T09:00:00.000Z" }));
     expect((await repo.getActiveLearningSession())?.id).toBe("newest");
 
     const completedAt = new Date("2026-08-10T11:00:00.000Z");
     await repo.completeLearningSession("newest", completedAt);
     expect((await repo.exportSnapshot()).learningSessions.find(({ id }) => id === "newest")).toEqual({
-      ...learningSession({ id: "newest", updatedAt: completedAt.toISOString() }),
+      ...learningSession({ id: "newest", testIndex: 1, updatedAt: completedAt.toISOString() }),
       completedAt: completedAt.toISOString(),
     });
     await expect(repo.completeLearningSession("missing", completedAt)).rejects.toThrow("找不到学习会话");
@@ -354,7 +354,7 @@ describe("LocalPhraseRepository", () => {
     expect(await repo.getActiveLearningSession()).toEqual(nextSession);
     expect((await repo.exportSnapshot()).reviewLogs.filter(({ phraseId: id }) => id === phraseId)).toHaveLength(1);
 
-    await repo.submitFirstLearningReview(event, { ...nextSession, testIndex: 0 });
+    await repo.submitFirstLearningReview(event, nextSession);
     expect((await repo.listTrainingEvents()).filter(({ id }) => id === event.id)).toHaveLength(1);
     expect((await repo.exportSnapshot()).reviewLogs.filter(({ phraseId: id }) => id === phraseId)).toHaveLength(1);
     expect((await repo.getPhrase(phraseId))?.reviewStep).toBe(1);
@@ -519,6 +519,90 @@ describe("LocalPhraseRepository", () => {
       phraseIds: [kept.id], studyIndex: 1, testIndex: 0, updatedAt: occurredAt,
     });
     expect(snapshot.learningSessions.find(({ id }) => id === "delete-empty-learning")).toBeUndefined();
+    expect(parseBackup(JSON.stringify(snapshot))).toEqual(snapshot);
+  });
+
+  it("rejects conflicting or incomplete pre-existing first-review events without changing data", async () => {
+    const phraseId = "starter-daily-not-sure";
+    const session = learningSession({ id: "preexisting-session", phraseIds: [phraseId] });
+    await repo.saveLearningSession(session);
+    const event: TrainingEvent = {
+      id: "preexisting-event", sessionId: session.id, phraseId, source: "new", result: "good",
+      usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-10T08:05:00.000Z",
+    };
+    await repo.saveTrainingEvent(event);
+    const before = await repo.exportSnapshot();
+    await expect(repo.submitFirstLearningReview(event, { ...session, testIndex: 1, updatedAt: event.occurredAt })).rejects.toThrow("首次测试记录状态不一致");
+    await expect(repo.submitFirstLearningReview({ ...event, result: "hard" }, { ...session, testIndex: 1, updatedAt: event.occurredAt })).rejects.toThrow("事件ID冲突");
+    const after = await repo.exportSnapshot();
+    expect({ ...after, exportedAt: before.exportedAt }).toEqual(before);
+  });
+
+  it("normalizes direct v1 and v2 imports into learned and mastered states", async () => {
+    const exported = await repo.exportSnapshot();
+    const phrase = (id: string, masteryLevel: number): Phrase => ({
+      id, english: id, chinese: id, categoryId: "daily", origin: "personal", kind: "standalone",
+      reviewStep: masteryLevel, masteryLevel, nextReviewAt: exported.exportedAt, createdAt: exported.exportedAt, updatedAt: exported.exportedAt,
+    });
+    const v1Phrase = phrase("direct-v1", 1);
+    const v1: BackupEnvelopeV1 = {
+      format: "personal-phrase-bank", version: 1, exportedAt: exported.exportedAt,
+      categories: exported.categories, phrases: [v1Phrase],
+      reviewLogs: [{ id: "direct-v1-log", phraseId: v1Phrase.id, result: "hard", reviewedAt: exported.exportedAt, previousStep: 0, nextReviewAt: exported.exportedAt }],
+    };
+    await repo.importSnapshot(v1, "overwrite");
+    expect(await repo.getPhraseLearningState(v1Phrase.id)).toMatchObject({ stage: "learned", firstResult: "hard", consecutiveGood: 0 });
+
+    const v2Phrase = phrase("direct-v2", 3);
+    const v2Session: TrainingSessionRecord = { id: "direct-v2-session", mode: "quick", startedAt: exported.exportedAt, updatedAt: exported.exportedAt, phraseIds: [v2Phrase.id], currentIndex: 0, activeSeconds: 2 };
+    const v2: BackupEnvelopeV2 = {
+      format: "personal-phrase-bank", version: 2, exportedAt: exported.exportedAt,
+      categories: exported.categories, phrases: [v2Phrase], reviewLogs: [], trainingSessions: [v2Session],
+      trainingEvents: [
+        { id: "direct-v2-1", sessionId: v2Session.id, phraseId: v2Phrase.id, source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T08:00:00.000Z" },
+        { id: "direct-v2-2", sessionId: v2Session.id, phraseId: v2Phrase.id, source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-10T08:00:00.000Z" },
+      ],
+    };
+    await repo.importSnapshot(v2, "overwrite");
+    expect(await repo.getPhraseLearningState(v2Phrase.id)).toMatchObject({ stage: "mastered", firstResult: "good", consecutiveGood: 2 });
+  });
+
+  it("allows only one active learning session, including concurrent creates", async () => {
+    const first = learningSession({ id: "only-active" });
+    await repo.saveLearningSession(first);
+    await expect(repo.saveLearningSession(learningSession({ id: "rejected-active", updatedAt: "2026-08-10T09:00:00.000Z" }))).rejects.toThrow("已有进行中的学习会话");
+    expect(await repo.getActiveLearningSession()).toEqual(first);
+    await repo.saveLearningSession({ ...first, testIndex: 1, updatedAt: "2026-08-10T09:00:00.000Z" });
+    await repo.saveLearningSession(learningSession({ id: "completed-history", testIndex: 1, completedAt: "2026-08-10T08:00:00.000Z" }));
+    const firstSnapshot = await repo.exportSnapshot();
+    expect(firstSnapshot.learningSessions).toHaveLength(2);
+    expect(parseBackup(JSON.stringify(firstSnapshot))).toEqual(firstSnapshot);
+
+    const concurrent = new LocalPhraseRepository(`concurrent-${crypto.randomUUID()}`);
+    await concurrent.initialize();
+    const settled = await Promise.allSettled([
+      concurrent.saveLearningSession(learningSession({ id: "concurrent-a" })),
+      concurrent.saveLearningSession(learningSession({ id: "concurrent-b" })),
+    ]);
+    expect(settled.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    const snapshot = await concurrent.exportSnapshot();
+    expect(snapshot.learningSessions.filter(({ completedAt }) => !completedAt)).toHaveLength(1);
+    expect(parseBackup(JSON.stringify(snapshot))).toEqual(snapshot);
+  });
+
+  it("does not trust personal parent links, but cascades direct system examples", async () => {
+    const root = { ...createNewPhrase({ english: "Root", chinese: "根", categoryId: "daily" }), id: "personal-root" };
+    const malicious = { ...createNewPhrase({ english: "Child", chinese: "子", categoryId: "daily" }), id: "personal-child", parentPhraseId: root.id };
+    await repo.savePhrase(root); await repo.savePhrase(malicious);
+    await repo.deletePhrase(root.id);
+    expect(await repo.getPhrase(malicious.id)).toEqual(malicious);
+
+    await repo.installSystemContentPackage(contentPackage("delete-system"));
+    await repo.deletePhrase("sys-core");
+    expect(await repo.getPhrase("sys-core")).toBeUndefined();
+    expect(await repo.getPhrase("sys-example")).toBeUndefined();
+    await repo.deletePhrase(malicious.id);
+    const snapshot = await repo.exportSnapshot();
     expect(parseBackup(JSON.stringify(snapshot))).toEqual(snapshot);
   });
 });

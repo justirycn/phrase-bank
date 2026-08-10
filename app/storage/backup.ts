@@ -1,4 +1,4 @@
-import type { BackupEnvelopeV1, BackupEnvelopeV4, LearningSessionRecord, Phrase, PhraseLearningState, ReviewLog, ReviewResult, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+import type { BackupEnvelope, BackupEnvelopeV1, BackupEnvelopeV4, LearningSessionRecord, Phrase, PhraseLearningState, ReviewLog, ReviewResult, TrainingEvent, TrainingSessionRecord } from "../domain/types";
 
 type LegacyLearningState = Partial<PhraseLearningState> & Pick<PhraseLearningState, "phraseId">;
 type BackupCandidate = Omit<Partial<BackupEnvelopeV1>, "version"> & {
@@ -20,29 +20,46 @@ const validDay = (value: unknown): value is string => typeof value === "string" 
 const stages = new Set(["unseen", "learning", "learned", "mastered"]);
 const results = new Set(["again", "hard", "good"]);
 
+type Evidence = { timestamp: string; id: string; source: "trainingEvent" | "reviewLog"; result: ReviewResult };
+
+const evidenceSourceOrder: Record<Evidence["source"], number> = { trainingEvent: 0, reviewLog: 1 };
+const compareEvidence = (left: Evidence, right: Evidence) => left.timestamp.localeCompare(right.timestamp)
+  || evidenceSourceOrder[left.source] - evidenceSourceOrder[right.source]
+  || left.id.localeCompare(right.id)
+  || left.result.localeCompare(right.result);
+
 function resultEvidence(phraseId: string, logs: ReviewLog[], events: TrainingEvent[]) {
-  const unique = new Map<string, { occurredAt: string; result: ReviewResult }>();
-  for (const item of logs) if (item.phraseId === phraseId) unique.set(`${item.reviewedAt}|${item.result}`, { occurredAt: item.reviewedAt, result: item.result });
-  for (const item of events) if (item.phraseId === phraseId) unique.set(`${item.occurredAt}|${item.result}`, { occurredAt: item.occurredAt, result: item.result });
-  return [...unique.values()].filter(({ occurredAt }) => validDate(occurredAt)).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
+  const candidates: Evidence[] = [
+    ...events.filter((item) => item.phraseId === phraseId && validDate(item.occurredAt)).map((item) => ({ timestamp: item.occurredAt, id: item.id, source: "trainingEvent" as const, result: item.result })),
+    ...logs.filter((item) => item.phraseId === phraseId && validDate(item.reviewedAt)).map((item) => ({ timestamp: item.reviewedAt, id: item.id, source: "reviewLog" as const, result: item.result })),
+  ];
+  const paired = new Map<string, Evidence>();
+  for (const candidate of candidates) {
+    const key = `${candidate.timestamp}|${candidate.result}`;
+    const current = paired.get(key);
+    if (!current || compareEvidence(candidate, current) < 0) paired.set(key, candidate);
+  }
+  return [...paired.values()].sort(compareEvidence);
 }
 
-function migrateLegacyState(phrase: Phrase, legacy: LegacyLearningState | undefined, logs: ReviewLog[], events: TrainingEvent[]): PhraseLearningState {
+export function normalizeLegacyLearningState(phrase: Phrase, legacy: LegacyLearningState | undefined, logs: ReviewLog[], events: TrainingEvent[]): PhraseLearningState {
   const evidence = resultEvidence(phrase.id, logs, events);
   const earliest = evidence[0];
   const lastReviewedAt = validDate(phrase.lastReviewedAt) ? phrase.lastReviewedAt : undefined;
   const masteredDates = Array.isArray(legacy?.masteredDates) ? legacy.masteredDates.filter((day): day is string => typeof day === "string") : [];
   const priorLearning = lastReviewedAt !== undefined || phrase.reviewStep > 0 || phrase.masteryLevel > 0 || masteredDates.length > 0
     || legacy?.stage === "learning" || legacy?.stage === "learned" || legacy?.stage === "mastered";
-  const firstSeenAt = earliest?.occurredAt ?? lastReviewedAt ?? (validDate(legacy?.firstSeenAt)
+  const firstSeenAt = earliest?.timestamp ?? lastReviewedAt ?? (validDate(legacy?.firstSeenAt)
     ? legacy.firstSeenAt
     : priorLearning ? validDate(legacy?.updatedAt) ? legacy.updatedAt : validDate(phrase.updatedAt) ? phrase.updatedAt : undefined : undefined);
-  const firstTestedAt = earliest?.occurredAt;
+  const firstTestedAt = earliest?.timestamp;
   const firstResult = earliest?.result;
   const stage: PhraseLearningState["stage"] = earliest
     ? phrase.masteryLevel === 3 || masteredDates.length >= 2 ? "mastered" : "learned"
     : firstSeenAt ? "learning" : "unseen";
-  const phraseEvents = events.filter((event) => event.phraseId === phrase.id && validDate(event.occurredAt)).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
+  const phraseEvents = events
+    .filter((event) => event.phraseId === phrase.id && validDate(event.occurredAt))
+    .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id) || left.result.localeCompare(right.result));
   let consecutiveGood = 0;
   for (let index = phraseEvents.length - 1; index >= 0 && phraseEvents[index].result === "good"; index -= 1) consecutiveGood += 1;
   const migrated: PhraseLearningState = {
@@ -51,7 +68,7 @@ function migrateLegacyState(phrase: Phrase, legacy: LegacyLearningState | undefi
     stage,
     consecutiveGood,
     masteredDates,
-    updatedAt: validDate(legacy?.updatedAt) ? legacy.updatedAt : validDate(phrase.updatedAt) ? phrase.updatedAt : earliest?.occurredAt ?? lastReviewedAt ?? phrase.createdAt,
+    updatedAt: validDate(legacy?.updatedAt) ? legacy.updatedAt : validDate(phrase.updatedAt) ? phrase.updatedAt : earliest?.timestamp ?? lastReviewedAt ?? phrase.createdAt,
   };
   delete migrated.firstSeenAt;
   delete migrated.firstTestedAt;
@@ -62,6 +79,28 @@ function migrateLegacyState(phrase: Phrase, legacy: LegacyLearningState | undefi
   if (firstResult) migrated.firstResult = firstResult;
   if (validDate(legacy?.unlockedAt)) migrated.unlockedAt = legacy.unlockedAt;
   return migrated;
+}
+
+export function normalizeLegacyBackup(backup: BackupEnvelope): BackupEnvelopeV4 {
+  if (backup.version === 4) return backup;
+  const phrases = backup.phrases.map((phrase) => ({ origin: "personal", kind: "standalone", ...phrase })) as Phrase[];
+  const trainingEvents = backup.version === 1 ? [] : backup.trainingEvents;
+  const trainingSessions = backup.version === 1 ? [] : backup.trainingSessions;
+  const legacyStates = backup.version === 3 ? backup.phraseLearningStates as LegacyLearningState[] : [];
+  const statesByPhrase = new Map(legacyStates.map((state) => [state.phraseId, state]));
+  return {
+    format: "personal-phrase-bank",
+    version: 4,
+    exportedAt: backup.exportedAt,
+    categories: backup.categories,
+    phrases,
+    reviewLogs: backup.reviewLogs,
+    trainingEvents,
+    trainingSessions,
+    phraseLearningStates: phrases.map((phrase) => normalizeLegacyLearningState(phrase, statesByPhrase.get(phrase.id), backup.reviewLogs, trainingEvents)),
+    learningSessions: [],
+    ...(backup.version === 3 && backup.activeSystemContentVersion ? { activeSystemContentVersion: backup.activeSystemContentVersion } : {}),
+  };
 }
 
 function invalidLearningState(state: LegacyLearningState, phraseIds: Set<string>) {
@@ -96,7 +135,7 @@ export function parseBackup(raw: string): BackupEnvelopeV4 {
   const phraseIds = new Set(phrases.map(({ id }) => id));
   const cores = new Set(phrases.filter(({ origin, kind }) => origin === "system" && kind === "core").map(({ id }) => id));
   const invalidHierarchy = phrases.some((phrase) => {
-    if (phrase.origin === "personal") return phrase.kind !== "standalone";
+    if (phrase.origin === "personal") return phrase.kind !== "standalone" || phrase.parentPhraseId !== undefined || phrase.unlockOrder !== undefined;
     if (phrase.origin !== "system" || (phrase.kind !== "core" && phrase.kind !== "example")) return true;
     if (phrase.kind === "core") return phrase.parentPhraseId !== undefined || phrase.unlockOrder !== undefined;
     return !phrase.parentPhraseId || !cores.has(phrase.parentPhraseId) || !Number.isInteger(phrase.unlockOrder) || (phrase.unlockOrder ?? 0) < 1;
@@ -122,13 +161,16 @@ export function parseBackup(raw: string): BackupEnvelopeV4 {
   if (!Array.isArray(learningSessions)) throw new Error("备份缺少学习会话");
   const invalidLearningSession = (session: LearningSessionRecord) => !session.id?.trim()
     || !validDay(session.date) || !categoryIds.has(session.themeCategoryId)
-    || !Array.isArray(session.phraseIds) || session.phraseIds.some((id) => !phraseIds.has(id))
+    || !Array.isArray(session.phraseIds) || session.phraseIds.length === 0 || session.phraseIds.some((id) => !phraseIds.has(id))
     || new Set(session.phraseIds).size !== session.phraseIds.length
     || !validIndex(session.studyIndex) || session.studyIndex > session.phraseIds.length
     || !validIndex(session.testIndex) || session.testIndex > session.phraseIds.length
     || (session.phase !== "study" && session.phase !== "test")
     || !validDate(session.startedAt) || !validDate(session.updatedAt)
-    || (session.completedAt !== undefined && !validDate(session.completedAt));
+    || (session.completedAt !== undefined && !validDate(session.completedAt))
+    || (session.phase === "study" && (session.completedAt !== undefined || session.testIndex !== 0 || session.studyIndex >= session.phraseIds.length))
+    || (session.phase === "test" && session.studyIndex !== session.phraseIds.length)
+    || (session.completedAt !== undefined && (session.phase !== "test" || session.studyIndex !== session.phraseIds.length || session.testIndex !== session.phraseIds.length));
   if (learningSessions.some(invalidLearningSession) || new Set(learningSessions.map(({ id }) => id)).size !== learningSessions.length) throw new Error("备份包含无效的学习会话");
   if (learningSessions.filter(({ completedAt }) => completedAt === undefined).length > 1) throw new Error("备份包含多个进行中的学习会话");
 
@@ -151,10 +193,13 @@ export function parseBackup(raw: string): BackupEnvelopeV4 {
       || !Array.isArray(state.masteredDates) || new Set(state.masteredDates).size !== state.masteredDates.length
       || state.masteredDates.some((day) => !validDay(day))
       || !validDate(state.updatedAt) || (state.unlockedAt !== undefined && !validDate(state.unlockedAt)))) throw new Error("备份包含无效学习状态");
-    const statesByPhrase = new Map(backup.phraseLearningStates.map((state) => [state.phraseId, state]));
-    phraseLearningStates = phrases.map((phrase) => migrateLegacyState(phrase, statesByPhrase.get(phrase.id), backup.reviewLogs!, trainingEvents));
+    phraseLearningStates = [];
   } else {
     phraseLearningStates = [];
+  }
+
+  if (backup.version !== 4) {
+    return normalizeLegacyBackup({ ...backup, phrases, trainingEvents, trainingSessions } as BackupEnvelope);
   }
 
   return {

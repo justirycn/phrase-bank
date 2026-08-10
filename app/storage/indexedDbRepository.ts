@@ -5,6 +5,7 @@ import { personalPhraseDefaults, validateSystemContentPackage } from "../domain/
 import { applyLearningResult, nextExampleToUnlock } from "../domain/learningProgress";
 import { defaultCategories } from "./seed";
 import { STARTER_PHRASES } from "./starterPhrases";
+import { normalizeLegacyBackup, normalizeLegacyLearningState } from "./backup";
 import type { PhraseRepository } from "./repository";
 
 interface PhraseBankDb extends DBSchema {
@@ -19,63 +20,19 @@ interface PhraseBankDb extends DBSchema {
   learningSessions: { key: string; value: LearningSessionRecord; indexes: { "by-updated": string } };
 }
 
-type LegacyLearningState = Partial<PhraseLearningState> & Pick<PhraseLearningState, "phraseId">;
-
-const validDate = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value));
-
-function resultEvidence(logs: ReviewLog[], events: TrainingEvent[]) {
-  const unique = new Map<string, { occurredAt: string; result: ReviewResult }>();
-  for (const item of logs) unique.set(`${item.reviewedAt}|${item.result}`, { occurredAt: item.reviewedAt, result: item.result });
-  for (const item of events) unique.set(`${item.occurredAt}|${item.result}`, { occurredAt: item.occurredAt, result: item.result });
-  return [...unique.values()].filter(({ occurredAt }) => validDate(occurredAt)).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
-}
-
-function consecutiveGoodFrom(events: TrainingEvent[]) {
-  const evidence = events.filter(({ occurredAt }) => validDate(occurredAt)).sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
-  let count = 0;
-  for (let index = evidence.length - 1; index >= 0 && evidence[index].result === "good"; index -= 1) count += 1;
-  return count;
-}
-
-function migrateLearningState(phrase: Phrase, legacy: LegacyLearningState | undefined, logs: ReviewLog[], events: TrainingEvent[]): PhraseLearningState {
-  const evidence = resultEvidence(logs, events);
-  const earliest = evidence[0];
-  const lastReviewedAt = validDate(phrase.lastReviewedAt) ? phrase.lastReviewedAt : undefined;
-  const masteredDates = Array.isArray(legacy?.masteredDates) ? legacy.masteredDates.filter((day): day is string => typeof day === "string") : [];
-  const priorLearning = lastReviewedAt !== undefined || phrase.reviewStep > 0 || phrase.masteryLevel > 0 || masteredDates.length > 0
-    || legacy?.stage === "learning" || legacy?.stage === "learned" || legacy?.stage === "mastered";
-  const firstSeenAt = earliest?.occurredAt ?? lastReviewedAt ?? (validDate(legacy?.firstSeenAt)
-    ? legacy.firstSeenAt
-    : priorLearning ? validDate(legacy?.updatedAt) ? legacy.updatedAt : validDate(phrase.updatedAt) ? phrase.updatedAt : undefined : undefined);
-  const firstTestedAt = earliest?.occurredAt;
-  const firstResult = earliest?.result;
-  const stage: PhraseLearningState["stage"] = earliest
-    ? phrase.masteryLevel === 3 || masteredDates.length >= 2 ? "mastered" : "learned"
-    : firstSeenAt ? "learning" : "unseen";
-  const updatedAt = validDate(legacy?.updatedAt)
-    ? legacy.updatedAt
-    : validDate(phrase.updatedAt) ? phrase.updatedAt : earliest?.occurredAt ?? lastReviewedAt ?? phrase.createdAt;
-  const migrated: PhraseLearningState = {
-    ...legacy,
-    phraseId: phrase.id,
-    stage,
-    consecutiveGood: consecutiveGoodFrom(events),
-    masteredDates,
-    updatedAt,
-  };
-  delete migrated.firstSeenAt;
-  delete migrated.firstTestedAt;
-  delete migrated.firstResult;
-  delete migrated.unlockedAt;
-  if (firstSeenAt) migrated.firstSeenAt = firstSeenAt;
-  if (firstTestedAt) migrated.firstTestedAt = firstTestedAt;
-  if (firstResult) migrated.firstResult = firstResult;
-  if (validDate(legacy?.unlockedAt)) migrated.unlockedAt = legacy.unlockedAt;
-  return migrated;
-}
-
 function cursorAfterDeletion(phraseIds: string[], cursor: number, deletedIds: Set<string>) {
   return phraseIds.slice(0, Math.min(cursor, phraseIds.length)).filter((id) => !deletedIds.has(id)).length;
+}
+
+function sameTrainingEvent(left: TrainingEvent, right: TrainingEvent) {
+  return left.id === right.id && left.sessionId === right.sessionId && left.phraseId === right.phraseId
+    && left.source === right.source && left.result === right.result
+    && left.usedPronunciationHint === right.usedPronunciationHint && left.recorded === right.recorded
+    && left.activeSeconds === right.activeSeconds && left.occurredAt === right.occurredAt;
+}
+
+function samePhraseIds(left: string[], right: string[]) {
+  return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
 function unseenState(phraseId: string, updatedAt: string, unlockedAt?: string): PhraseLearningState {
@@ -145,16 +102,16 @@ export class LocalPhraseRepository implements PhraseRepository {
             const stateStore = transaction.objectStore("phraseLearningState");
             const logs = await transaction.objectStore("reviewLogs").getAll();
             const events = await transaction.objectStore("trainingEvents").getAll();
-            const states = await stateStore.getAll() as unknown as LegacyLearningState[];
+            const states = await stateStore.getAll() as unknown as Array<Partial<PhraseLearningState> & Pick<PhraseLearningState, "phraseId">>;
             const statesByPhrase = new Map(states.map((state) => [state.phraseId, state]));
             let cursor = await phraseStore.openCursor();
             while (cursor) {
               const phrase = cursor.value;
-              await stateStore.put(migrateLearningState(
+              await stateStore.put(normalizeLegacyLearningState(
                 phrase,
                 statesByPhrase.get(phrase.id),
-                logs.filter(({ phraseId }) => phraseId === phrase.id),
-                events.filter(({ phraseId }) => phraseId === phrase.id),
+                logs,
+                events,
               ));
               cursor = await cursor.continue();
             }
@@ -216,13 +173,10 @@ export class LocalPhraseRepository implements PhraseRepository {
     try {
       const phraseStore = tx.objectStore("phrases");
       const deletedIds = new Set([id]);
-      const pendingParents = [id];
-      while (pendingParents.length > 0) {
-        const parentId = pendingParents.shift()!;
-        for (const child of await phraseStore.index("by-parent").getAll(parentId)) {
-          if (deletedIds.has(child.id)) continue;
-          deletedIds.add(child.id);
-          pendingParents.push(child.id);
+      const root = await phraseStore.get(id);
+      if (root?.origin === "system" && root.kind === "core") {
+        for (const child of await phraseStore.index("by-parent").getAll(root.id)) {
+          if (child.origin === "system" && child.kind === "example" && child.parentPhraseId === root.id) deletedIds.add(child.id);
         }
       }
 
@@ -391,7 +345,22 @@ export class LocalPhraseRepository implements PhraseRepository {
   async listPhraseLearningStates() { return (await this.db()).getAll("phraseLearningState"); }
   async getPhraseLearningState(id: string) { return (await this.db()).get("phraseLearningState", id); }
   async savePhraseLearningState(state: PhraseLearningState) { await (await this.db()).put("phraseLearningState", state); }
-  async saveLearningSession(session: LearningSessionRecord) { await (await this.db()).put("learningSessions", session); }
+  async saveLearningSession(session: LearningSessionRecord) {
+    const db = await this.db();
+    const tx = db.transaction("learningSessions", "readwrite");
+    try {
+      const store = tx.objectStore("learningSessions");
+      const otherActive = (await store.getAll()).filter((existing) => existing.id !== session.id && !existing.completedAt);
+      const resultingActiveCount = otherActive.length + (session.completedAt ? 0 : 1);
+      if (resultingActiveCount > 1) throw new Error("已有进行中的学习会话");
+      await store.put(session);
+      await tx.done;
+    } catch (error) {
+      try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }
+      try { await tx.done; } catch { /* Preserve the original error. */ }
+      throw error;
+    }
+  }
   async getActiveLearningSession() {
     const sessions = await (await this.db()).getAllFromIndex("learningSessions", "by-updated");
     return sessions.reverse().find((session) => !session.completedAt);
@@ -411,12 +380,29 @@ export class LocalPhraseRepository implements PhraseRepository {
     const tx = db.transaction(["trainingEvents", "phrases", "reviewLogs", "phraseLearningState", "learningSessions"], "readwrite");
     try {
       const eventStore = tx.objectStore("trainingEvents");
-      if (await eventStore.get(event.id)) {
+      const phraseStore = tx.objectStore("phrases");
+      const sessionStore = tx.objectStore("learningSessions");
+      const stateStore = tx.objectStore("phraseLearningState");
+      const storedEvent = await eventStore.get(event.id);
+      if (storedEvent) {
+        if (!sameTrainingEvent(storedEvent, event)) throw new Error("首次测试事件ID冲突");
+        const [phrase, session, state, logs] = await Promise.all([
+          phraseStore.get(event.phraseId),
+          sessionStore.get(event.sessionId),
+          stateStore.get(event.phraseId),
+          tx.objectStore("reviewLogs").index("by-phrase").getAll(event.phraseId),
+        ]);
+        const cursorRecorded = session?.phase === "test" && samePhraseIds(session.phraseIds, nextSession.phraseIds)
+          && nextSession.testIndex > 0 && nextSession.phraseIds[nextSession.testIndex - 1] === event.phraseId
+          && session.testIndex >= nextSession.testIndex;
+        const stateRecorded = (state?.stage === "learned" || state?.stage === "mastered")
+          && state.firstTestedAt === event.occurredAt && state.firstResult === event.result;
+        const scheduleRecorded = phrase?.lastReviewedAt !== undefined && phrase.lastReviewedAt >= event.occurredAt
+          && logs.some((log) => log.reviewedAt === event.occurredAt && log.result === event.result);
+        if (!cursorRecorded || !stateRecorded || !scheduleRecorded) throw new Error("首次测试记录状态不一致");
         await tx.done;
         return;
       }
-      const phraseStore = tx.objectStore("phrases");
-      const sessionStore = tx.objectStore("learningSessions");
       const phrase = await phraseStore.get(event.phraseId);
       const session = await sessionStore.get(event.sessionId);
       const cursorMatches = phrase && session
@@ -435,7 +421,6 @@ export class LocalPhraseRepository implements PhraseRepository {
       const scheduled = scheduleReview(phrase, event.result, reviewTime);
       await phraseStore.put(scheduled.phrase);
       await tx.objectStore("reviewLogs").put(scheduled.log);
-      const stateStore = tx.objectStore("phraseLearningState");
       const nextState = reviewedState(await stateStore.get(phrase.id), scheduled.phrase, event.result, reviewTime);
       await stateStore.put(nextState);
       if (phrase.origin === "system") {
@@ -520,13 +505,8 @@ export class LocalPhraseRepository implements PhraseRepository {
 
   async importSnapshot(snapshot: BackupEnvelope, policy: "skip" | "overwrite") {
     const db = await this.db();
-    const stores = snapshot.version === 4
-      ? ["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions", "phraseLearningState", "learningSessions", "metadata"] as const
-      : snapshot.version === 3
-        ? ["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions", "phraseLearningState", "metadata"] as const
-        : snapshot.version === 2
-          ? ["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions"] as const
-          : ["categories", "phrases", "reviewLogs"] as const;
+    const normalized = normalizeLegacyBackup(snapshot);
+    const stores = ["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions", "phraseLearningState", "learningSessions", "metadata"] as const;
     const tx = db.transaction(stores, "readwrite");
     const put = async <S extends typeof stores[number]>(store: S, records: PhraseBankDb[S]["value"][]) => {
       for (const record of records) {
@@ -535,18 +515,14 @@ export class LocalPhraseRepository implements PhraseRepository {
         await tx.objectStore(store).put(record as never);
       }
     };
-    await put("categories", snapshot.categories);
-    await put("phrases", snapshot.phrases);
-    await put("reviewLogs", snapshot.reviewLogs);
-    if (snapshot.version === 2 || snapshot.version === 3 || snapshot.version === 4) {
-      await put("trainingEvents", snapshot.trainingEvents);
-      await put("trainingSessions", snapshot.trainingSessions);
-    }
-    if (snapshot.version === 3 || snapshot.version === 4) {
-      await put("phraseLearningState", snapshot.phraseLearningStates);
-      if (snapshot.activeSystemContentVersion) await tx.objectStore("metadata").put({ key: "activeSystemContentVersion", value: snapshot.activeSystemContentVersion });
-    }
-    if (snapshot.version === 4) await put("learningSessions", snapshot.learningSessions);
+    await put("categories", normalized.categories);
+    await put("phrases", normalized.phrases);
+    await put("reviewLogs", normalized.reviewLogs);
+    await put("trainingEvents", normalized.trainingEvents);
+    await put("trainingSessions", normalized.trainingSessions);
+    await put("phraseLearningState", normalized.phraseLearningStates);
+    await put("learningSessions", normalized.learningSessions);
+    if (normalized.activeSystemContentVersion) await tx.objectStore("metadata").put({ key: "activeSystemContentVersion", value: normalized.activeSystemContentVersion });
     await tx.done;
   }
 }
