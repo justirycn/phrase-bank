@@ -69,6 +69,27 @@ describe("useTrainingSession", () => {
     expect(result.current.phase).toBe("prompt");
   });
 
+  it("rotates a second quick group away from phrases already practiced today", async () => {
+    const store = memoryRepository();
+    const firstApi = services();
+    const first = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...firstApi, seed: "same-day" }));
+    await waitFor(() => expect(first.result.current.total).toBe(3));
+    const firstIds: string[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      firstIds.push(first.result.current.current!.phrase.id);
+      await act(() => first.result.current.grade("hard"));
+    }
+    await act(() => first.result.current.finish());
+    first.unmount();
+
+    const second = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...services(), seed: "same-day" }));
+    await waitFor(() => expect(second.result.current.total).toBe(3));
+    const secondIds = store.getSession()!.phraseIds;
+
+    expect(secondIds).toHaveLength(3);
+    expect(secondIds.every((id) => !firstIds.includes(id))).toBe(true);
+  });
+
   it("starts and grades training when randomUUID is unavailable on an insecure origin", async () => {
     const originalCrypto = globalThis.crypto;
     vi.stubGlobal("crypto", { getRandomValues: originalCrypto.getRandomValues.bind(originalCrypto) });
