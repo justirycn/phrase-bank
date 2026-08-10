@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { NewPhraseLearning } from "../../app/components/NewPhraseLearning";
@@ -150,7 +150,8 @@ describe("NewPhraseLearning", () => {
     expect(value.nextStudyPhrase).toHaveBeenCalledOnce();
     expect(next).toBeDisabled();
     expect(screen.getByRole("button", { name: "关闭学习并返回首页" })).toBeDisabled();
-    release();
+    await act(async () => { release(); await pending; });
+    expect(next).toBeEnabled();
   });
 
   it("reports rejected actions as a retryable status", async () => {
@@ -179,6 +180,46 @@ describe("NewPhraseLearning", () => {
     await user.click(screen.getByRole("button", { name: "重试" }));
     await user.click(screen.getByRole("button", { name: "返回首页" }));
     expect(value.retry).toHaveBeenCalledOnce(); expect(onHome).toHaveBeenCalledOnce();
+  });
+
+  it.each(["error", "empty", "complete"] as const)("disables terminal %s actions while busy", (phase) => {
+    const value = controller({ phase, current: undefined, busy: true, error: phase === "error" ? "暂时无法加载" : undefined });
+    render(<NewPhraseLearning controller={value} onHome={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "返回首页" })).toBeDisabled();
+    if (phase === "error") expect(screen.getByRole("button", { name: "重试" })).toBeDisabled();
+  });
+
+  it.each([
+    ["empty", () => { throw new Error("sync"); }],
+    ["complete", async () => { throw new Error("async"); }],
+  ] as const)("shows a status when the %s home action fails", async (phase, onHome) => {
+    const user = userEvent.setup();
+    render(<NewPhraseLearning controller={controller({ phase, current: undefined })} onHome={onHome} />);
+    await user.click(screen.getByRole("button", { name: "返回首页" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("操作没有完成");
+  });
+
+  it("shows a status when retry rejects", async () => {
+    const user = userEvent.setup();
+    render(<NewPhraseLearning controller={controller({ phase: "error", current: undefined, retry: vi.fn(async () => { throw new Error("retry"); }) })} onHome={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("操作没有完成");
+  });
+
+  it.each(["resolve", "reject"] as const)("does not update after unmount when a pending action %ss", async (settlement) => {
+    let resolve!: () => void; let reject!: (reason: Error) => void;
+    const pending = new Promise<void>((done, fail) => { resolve = done; reject = fail; });
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    const view = render(<NewPhraseLearning controller={controller({ replay: vi.fn(() => pending) })} onHome={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "重听标准发音" }));
+    view.unmount();
+    await act(async () => {
+      if (settlement === "resolve") resolve(); else reject(new Error("late"));
+      await pending.catch(() => undefined);
+    });
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
   });
 
   it("exposes the top close action with an accessible name", async () => {

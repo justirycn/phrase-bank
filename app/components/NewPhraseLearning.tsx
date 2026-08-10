@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReviewResult } from "../domain/types";
 import type { NewPhraseLearningController } from "../hooks/useNewPhraseLearning";
 import { AppIcon } from "./AppIcon";
@@ -12,6 +12,12 @@ export function NewPhraseLearning({ controller, onHome }: {
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState("");
   const pendingRef = useRef(false);
+  const mountedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const run = async (action: () => Promise<unknown> | void) => {
     if (pendingRef.current || controller.busy) return;
@@ -21,15 +27,16 @@ export function NewPhraseLearning({ controller, onHome }: {
     try {
       await action();
     } catch {
-      setStatus("操作没有完成，你仍然可以继续学习。请再试一次。");
+      if (mountedRef.current) setStatus("操作没有完成，你仍然可以继续学习。请再试一次。");
     } finally {
       pendingRef.current = false;
-      setPending(false);
+      if (mountedRef.current) setPending(false);
     }
   };
 
   const disabled = controller.busy || pending;
   const exit = () => { void run(onHome); };
+  const actionStatus = status && <p className="new-learning-status" role="status">{status}</p>;
 
   if (controller.phase === "loading") {
     return <section className="new-learning-loading" aria-live="polite">正在准备今天的新语言块</section>;
@@ -40,8 +47,9 @@ export function NewPhraseLearning({ controller, onHome }: {
       <AppIcon name="completion" size={34} />
       <h1>学习内容暂时打不开</h1>
       <p>{controller.error ?? "暂时无法加载，请稍后重试。"}</p>
+      {actionStatus}
       <div className="new-learning-state-actions">
-        <button type="button" onClick={exit}>返回首页</button>
+        <button type="button" disabled={disabled} onClick={exit}>返回首页</button>
         <button type="button" disabled={disabled} onClick={() => { void run(controller.retry); }}>重试</button>
       </div>
     </section>;
@@ -51,7 +59,8 @@ export function NewPhraseLearning({ controller, onHome }: {
     return <section className="new-learning-empty">
       <h1>今天没有新的语言块需要学习</h1>
       <p>你已经学完目前可用的新内容，可以先复习已学语言块。</p>
-      <button type="button" onClick={exit}>返回首页</button>
+      {actionStatus}
+      <button type="button" disabled={disabled} onClick={exit}>返回首页</button>
     </section>;
   }
 
@@ -60,7 +69,8 @@ export function NewPhraseLearning({ controller, onHome }: {
       <AppIcon name="completion" size={36} />
       <h1>本组学习完成</h1>
       <p>本组已学习 {controller.total} 个语言块</p>
-      <button type="button" onClick={exit}>返回首页</button>
+      {actionStatus}
+      <button type="button" disabled={disabled} onClick={exit}>返回首页</button>
     </section>;
   }
 
