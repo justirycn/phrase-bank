@@ -38,8 +38,10 @@ export function SpeakingPractice({ controller, onHome, onAgain }: {
     {status && <p className="practice-status" role="status">{status}</p>}
     <div className="practice-actions">
       {controller.phase === "prompt" && <>
-        <button className="unknown-action" onClick={() => run(controller.revealAsUnknown)}>不会，直接看答案</button>
-        <button className="pronounce-action" onClick={() => run(controller.usePronunciationHint)}><AppIcon name="speaker" size={21} />先听发音</button>
+        <div className="prompt-secondary-actions">
+          <button className="unknown-action" onClick={() => run(controller.revealAsUnknown)}>不会，直接看答案</button>
+          <button className="pronounce-action" onClick={() => run(controller.usePronunciationHint)}><AppIcon name="speaker" size={21} />先听发音</button>
+        </div>
         <button className="self-assessment-action" onClick={() => run(controller.revealForSelfAssessment)}>查看答案并自评</button>
       </>}
       {answered && <>

@@ -1124,8 +1124,27 @@ label.settings-action:focus-within {
   flex:0 0 auto;
 }
 .self-assessment-action {
-  border:1px solid rgba(27,67,50,.18);
+  width:100%;
+  border:0;
   border-radius:14px;
-  background:#fff;
-  color:var(--forest,#173f30);
+  background:var(--forest,#173f30);
+  color:#fff;
+  font-weight:700;
+}
+.prompt-secondary-actions {
+  display:grid;
+  grid-template-columns:repeat(2,1fr);
+  gap:8px;
+}
+.prompt-secondary-actions button {
+  min-width:0;
+  min-height:44px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:7px;
+  padding-inline:8px;
+}
+.prompt-secondary-actions button svg {
+  flex:0 0 auto;
 }

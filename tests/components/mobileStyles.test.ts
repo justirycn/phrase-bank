@@ -29,4 +29,20 @@ describe("mobile phrase typography", () => {
     expect(rule).toMatch(/gap:7px/);
     expect(rule).toMatch(/min-height:44px/);
   });
+
+  it("lays out prompt helpers above a full-width primary action", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+    const helperRule = css.match(/\.prompt-secondary-actions\s*\{([^}]*)\}/)?.[1] ?? "";
+    const helperButtonRule = css.match(/\.prompt-secondary-actions button\s*\{([^}]*)\}/)?.[1] ?? "";
+    const primaryRule = css.match(/\.self-assessment-action\s*\{([^}]*)\}/)?.[1] ?? "";
+
+    expect(helperRule).toMatch(/display:grid/);
+    expect(helperRule).toMatch(/grid-template-columns:repeat\(2,1fr\)/);
+    expect(helperButtonRule).toMatch(/display:flex/);
+    expect(helperButtonRule).toMatch(/justify-content:center/);
+    expect(helperButtonRule).toMatch(/gap:7px/);
+    expect(primaryRule).toMatch(/width:100%/);
+    expect(primaryRule).toMatch(/background:var\(--forest/);
+    expect(primaryRule).toMatch(/color:#fff/);
+  });
 });
