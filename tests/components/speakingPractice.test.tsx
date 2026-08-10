@@ -31,9 +31,15 @@ describe("SpeakingPractice", () => {
     render(<SpeakingPractice controller={value} onHome={vi.fn()} onAgain={vi.fn()} />);
     expect(screen.getByText("我还没决定。")).toBeVisible();
     expect(screen.queryByText("I haven't decided yet.")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "不会，直接看答案" }));
-    await user.click(screen.getByRole("button", { name: "先听发音" }));
-    await user.click(screen.getByRole("button", { name: "查看答案并自评" }));
+    const unknown = screen.getByRole("button", { name: "不会，直接看答案" });
+    const pronunciation = screen.getByRole("button", { name: "先听发音" });
+    const selfAssessment = screen.getByRole("button", { name: "查看答案并自评" });
+    expect(unknown.parentElement).toBe(pronunciation.parentElement);
+    expect(unknown.parentElement).toHaveClass("prompt-secondary-actions");
+    expect(unknown.parentElement?.nextElementSibling).toBe(selfAssessment);
+    await user.click(unknown);
+    await user.click(pronunciation);
+    await user.click(selfAssessment);
     expect(value.revealAsUnknown).toHaveBeenCalledOnce();
     expect(value.usePronunciationHint).toHaveBeenCalledOnce();
     expect(value.revealForSelfAssessment).toHaveBeenCalledOnce();
