@@ -56,9 +56,32 @@ interface SessionCreation {
   promise: Promise<LearningSessionRecord>;
 }
 
+type CreationWindowResult =
+  | { status: "saved" }
+  | { status: "failed" }
+  | { status: "timeout" };
+
 const systemNow = () => new Date();
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const defaultPreferences: SpeechPreferences = { accent: "en-US", autoSpeak: true };
+const CREATION_COORDINATION_MS = 200;
+
+function waitForCreationWindow(promise: Promise<LearningSessionRecord>): Promise<CreationWindowResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result: CreationWindowResult) => {
+      if (settled) return;
+      settled = true;
+      globalThis.clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = globalThis.setTimeout(() => finish({ status: "timeout" }), CREATION_COORDINATION_MS);
+    void promise.then(
+      () => finish({ status: "saved" }),
+      () => finish({ status: "failed" }),
+    );
+  });
+}
 
 function shanghaiDate(value: Date): string {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -186,9 +209,8 @@ export function useNewPhraseLearning({
     };
 
     const existingWrite = stateWritesRef.current.get(item.id);
-    if (existingWrite?.repository === repository) {
-      if (existingWrite.generation === generation) return existingWrite.promise;
-      return trackWrite(existingWrite.state, existingWrite.promise);
+    if (existingWrite?.repository === repository && existingWrite.generation === generation) {
+      return existingWrite.promise;
     }
 
     const updatedAt = readNow().toISOString();
@@ -206,6 +228,7 @@ export function useNewPhraseLearning({
 
   const initialize = useCallback(() => {
     const generation = ++generationRef.current;
+    const creationAtStart = sessionCreationRef.current;
     pendingReviewRef.current = undefined;
     setOperation(true);
     setVisibleError(undefined);
@@ -230,20 +253,19 @@ export function useNewPhraseLearning({
       preferencesRef.current = preferences;
 
       let active = initialActive;
-      const pendingCreation = sessionCreationRef.current;
+      const pendingCreation = creationAtStart;
       if (!active && pendingCreation?.repository === repository) {
-        try {
-          active = await pendingCreation.promise;
-        } catch {
-          if (!mountedRef.current || generation !== generationRef.current) return;
-          active = await repository.getActiveLearningSession();
-        }
+        const result = await waitForCreationWindow(pendingCreation.promise);
         if (!mountedRef.current || generation !== generationRef.current) return;
+        if (result.status !== "timeout") {
+          active = await repository.getActiveLearningSession();
+          if (!mountedRef.current || generation !== generationRef.current) return;
+        }
       }
 
-      if (active) {
+      const restoreActive = async (saved: LearningSessionRecord) => {
         const byId = new Map(phrases.map((item) => [item.id, item]));
-        const restoredWithPositions = active.phraseIds.flatMap((id, position) => {
+        const restoredWithPositions = saved.phraseIds.flatMap((id, position) => {
           const item = byId.get(id);
           return item ? [{ item, position }] : [];
         });
@@ -252,9 +274,9 @@ export function useNewPhraseLearning({
         }
         const restored = restoredWithPositions.map(({ item }) => item);
         const survivingIds = new Set(restored.map((item) => item.id));
-        let normalizedStudy = cursorAfterFiltering(active.phraseIds, active.studyIndex, survivingIds);
-        let normalizedTest = cursorAfterFiltering(active.phraseIds, active.testIndex, survivingIds);
-        let normalizedPhase = active.phase;
+        let normalizedStudy = cursorAfterFiltering(saved.phraseIds, saved.studyIndex, survivingIds);
+        let normalizedTest = cursorAfterFiltering(saved.phraseIds, saved.testIndex, survivingIds);
+        let normalizedPhase = saved.phase;
         if (normalizedPhase === "study" && normalizedStudy >= restored.length) {
           normalizedStudy = restored.length;
           normalizedTest = 0;
@@ -264,13 +286,13 @@ export function useNewPhraseLearning({
           normalizedTest = Math.min(normalizedTest, restored.length);
         }
         const normalized: LearningSessionRecord = {
-          ...active,
+          ...saved,
           phraseIds: restored.map((item) => item.id),
           studyIndex: normalizedStudy,
           testIndex: normalizedTest,
           phase: normalizedPhase,
         };
-        if (!sameSessionProgress(active, normalized)) await repository.saveLearningSession(normalized);
+        if (!sameSessionProgress(saved, normalized)) await repository.saveLearningSession(normalized);
         if (!mountedRef.current || generation !== generationRef.current) return;
         sessionRef.current = normalized;
         replaceQueue(restored);
@@ -287,6 +309,10 @@ export function useNewPhraseLearning({
           replacePhase(normalizedPhase);
         }
         setOperation(false);
+      };
+
+      if (active) {
+        await restoreActive(active);
         return;
       }
 
@@ -338,7 +364,26 @@ export function useNewPhraseLearning({
         promise: repository.saveLearningSession(session).then(() => session),
       };
       sessionCreationRef.current = creation;
-      await creation.promise;
+      void creation.promise.then(
+        () => {
+          if (sessionCreationRef.current === creation) sessionCreationRef.current = undefined;
+        },
+        () => {
+          if (sessionCreationRef.current === creation) sessionCreationRef.current = undefined;
+        },
+      );
+      try {
+        await creation.promise;
+      } catch (cause) {
+        if (!mountedRef.current || generation !== generationRef.current) return;
+        const recovered = await repository.getActiveLearningSession();
+        if (!mountedRef.current || generation !== generationRef.current) return;
+        if (recovered) {
+          await restoreActive(recovered);
+          return;
+        }
+        throw cause;
+      }
       if (!mountedRef.current || generation !== generationRef.current) return;
       sessionRef.current = session;
       replaceQueue(selected);

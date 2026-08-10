@@ -404,6 +404,61 @@ describe("useNewPhraseLearning", () => {
     expect(ids).toHaveBeenCalledTimes(1);
   });
 
+  it("does not resurrect a settled creation snapshot after completion and retry", async () => {
+    const item = phrase("only");
+    const store = memoryRepository({ phrases: [item], states: [unseen(item.id)] });
+    const hook = renderLearning(store);
+    await waitFor(() => expect(hook.result.current.phase).toBe("study"));
+    await act(() => hook.result.current.nextStudyPhrase());
+    await act(() => hook.result.current.reveal());
+    await act(() => hook.result.current.grade("good"));
+    expect(hook.result.current.phase).toBe("complete");
+
+    act(() => hook.result.current.retry());
+    await waitFor(() => expect(hook.result.current.phase).toBe("empty"));
+
+    expect(hook.result.current.total).toBe(0);
+    expect(store.sessions).toHaveLength(1);
+    expect(store.sessions[0].completedAt).toBeDefined();
+  });
+
+  it("takes over a never-settling initial creation and ignores its late conflict", async () => {
+    const items = [phrase("first"), phrase("second")];
+    const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
+    const save = store.repository.saveLearningSession as ReturnType<typeof vi.fn>;
+    const persist = save.getMockImplementation()!;
+    let releaseOld!: () => void;
+    const neverUntilReleased = new Promise<void>((resolve) => { releaseOld = resolve; });
+    save.mockImplementationOnce(async (session: LearningSessionRecord) => {
+      await neverUntilReleased;
+      if (store.sessions.some((item) => !item.completedAt)) throw new Error("已有进行中的学习会话");
+      await persist(session);
+    });
+    const ids = vi.fn()
+      .mockReturnValueOnce("stalled-session")
+      .mockReturnValueOnce("replacement-session");
+    const voice = speech();
+    const hook = renderHook(() => useNewPhraseLearning({
+      repository: store.repository,
+      speech: voice,
+      now: () => new Date(timestamp),
+      idFactory: ids,
+    }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+
+    act(() => hook.result.current.retry());
+    await waitFor(() => expect(hook.result.current.phase).toBe("study"));
+
+    expect(hook.result.current.busy).toBe(false);
+    expect(store.sessions).toHaveLength(1);
+    expect(store.sessions[0].id).toBe("replacement-session");
+    expect(save).toHaveBeenCalledTimes(2);
+    releaseOld();
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(store.sessions).toHaveLength(1);
+    expect(hook.result.current).toMatchObject({ phase: "study", studyIndex: 0, busy: false });
+  });
+
   it("keeps speech failures non-blocking and replay reports a Chinese error", async () => {
     const items = [phrase("first"), phrase("second")];
     const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
@@ -530,6 +585,42 @@ describe("useNewPhraseLearning", () => {
       stage: "learning", firstSeenAt: timestamp,
     });
     expect(result.current).toMatchObject({ phase: "study", studyIndex: 1, error: undefined });
+  });
+
+  it("restarts a never-settling learning-state put for a newer generation on the same repository", async () => {
+    const items = [phrase("first"), phrase("second")];
+    const active: LearningSessionRecord = {
+      id: "active", date: "2026-08-10", themeCategoryId: "daily", phraseIds: items.map((item) => item.id),
+      studyIndex: 0, testIndex: 0, phase: "study", startedAt: timestamp, updatedAt: timestamp,
+    };
+    const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)), active });
+    const saveState = store.repository.savePhraseLearningState as ReturnType<typeof vi.fn>;
+    let releaseOld!: () => void;
+    const oldWrite = new Promise<void>((resolve) => { releaseOld = resolve; });
+    saveState.mockImplementationOnce(() => oldWrite);
+    let actionTime = "2026-08-10T08:00:00.000Z";
+    const voice = speech();
+    const hook = renderHook(() => useNewPhraseLearning({
+      repository: store.repository,
+      speech: voice,
+      now: () => new Date(actionTime),
+      idFactory: () => "unused",
+    }));
+    await waitFor(() => expect(saveState).toHaveBeenCalledTimes(1));
+
+    actionTime = "2026-08-10T09:00:00.000Z";
+    act(() => hook.result.current.retry());
+    await waitFor(() => expect(saveState).toHaveBeenCalledTimes(2));
+    await act(() => hook.result.current.nextStudyPhrase());
+
+    expect(hook.result.current).toMatchObject({ phase: "study", studyIndex: 1, busy: false });
+    expect(saveState.mock.calls.filter(([state]) => state.phraseId === "first")).toHaveLength(2);
+    expect(saveState.mock.calls[1][0]).toMatchObject({ firstSeenAt: "2026-08-10T09:00:00.000Z" });
+    releaseOld();
+    await act(async () => { await Promise.resolve(); });
+    expect(store.states.find((state) => state.phraseId === "first")).toMatchObject({
+      stage: "learning", firstSeenAt: "2026-08-10T09:00:00.000Z",
+    });
   });
 
   it("does not reinitialize for an inline clock and actions use the latest clock", async () => {
