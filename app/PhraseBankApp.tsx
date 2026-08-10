@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AppIcon } from "./components/AppIcon";
 import { NewPhraseLearning } from "./components/NewPhraseLearning";
 import { SpeakingPractice } from "./components/SpeakingPractice";
@@ -151,6 +151,11 @@ function PracticeSession({ repository, mode, newIntroducedToday, speech, recorde
 
 type AddSaveResult = { status: "saved" } | { status: "partial"; state: PhraseLearningState };
 
+function resetAddPhraseVisibleScope(setSaving: (value: boolean) => void, setSaveError: (value: string) => void, hasPartial: boolean) {
+  setSaving(false);
+  setSaveError(hasPartial ? "句子已保存，但设置为已学习失败，目前按未学习处理。" : "");
+}
+
 function AddPhrase({ categories, onSave, onRetryState, onComplete, onCancel }: { categories: Category[]; onSave: (input: PhraseInput, learnFirst: boolean) => Promise<AddSaveResult>; onRetryState: (state: PhraseLearningState) => Promise<void>; onComplete: () => Promise<void>; onCancel: () => void }) {
   const [input, setInput] = useState<PhraseInput>({ english: "", chinese: "", categoryId: categories[0]?.id ?? "daily", personalExample: "", sourceNote: "" });
   const [errors, setErrors] = useState<PhraseErrors>({});
@@ -162,24 +167,22 @@ function AddPhrase({ categories, onSave, onRetryState, onComplete, onCancel }: {
   const operationRef = useRef<symbol>();
   const partialRef = useRef<PhraseLearningState>();
   const mountedRef = useRef(true);
-  /* eslint-disable react-hooks/refs -- Handler scope must invalidate pending work synchronously during render, before effects run. */
   const scopeRef = useRef({ onSave, onRetryState, onComplete });
   const scopeGenerationRef = useRef(0);
-  if (scopeRef.current.onSave !== onSave || scopeRef.current.onRetryState !== onRetryState || scopeRef.current.onComplete !== onComplete) {
+  useLayoutEffect(() => {
     scopeRef.current = { onSave, onRetryState, onComplete };
     scopeGenerationRef.current += 1;
     operationRef.current = undefined;
-  }
-  /* eslint-enable react-hooks/refs */
-  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
-  useEffect(() => {
-    const scope = scopeGenerationRef.current;
-    queueMicrotask(() => {
-      if (!mountedRef.current || scopeGenerationRef.current !== scope || operationRef.current) return;
-      setSaving(false);
-      setSaveError(partialRef.current ? "句子已保存，但设置为已学习失败，目前按未学习处理。" : "");
-    });
+    resetAddPhraseVisibleScope(setSaving, setSaveError, Boolean(partialRef.current));
   }, [onComplete, onRetryState, onSave]);
+  useLayoutEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      scopeGenerationRef.current += 1;
+      operationRef.current = undefined;
+    };
+  }, []);
   const field = (key: keyof PhraseInput, value: string) => setInput((old) => ({ ...old, [key]: value }));
   const submit = async (event: React.FormEvent) => { event.preventDefault(); if (operationRef.current || partialRef.current) return; const token = Symbol("phrase-save"); const scope = scopeGenerationRef.current; operationRef.current = token; setSaving(true); const next = validatePhraseInput(input); setErrors(next); if (Object.keys(next).length) { operationRef.current = undefined; setSaving(false); return; } setSaveError(""); try { const result = await onSave(input, learnFirst); if (!mountedRef.current || operationRef.current !== token || scopeGenerationRef.current !== scope) return; if (result.status === "partial") { partialRef.current = result.state; setPartialState(result.state); setSaveError("句子已保存，但设置为已学习失败，目前按未学习处理。"); } else { await onComplete(); } } catch { if (mountedRef.current && operationRef.current === token && scopeGenerationRef.current === scope) setSaveError("句子保存失败，请检查本地存储后重试。"); } finally { if (operationRef.current === token) { operationRef.current = undefined; if (mountedRef.current) setSaving(false); } } };
   const retryState = async () => { if (operationRef.current || !partialRef.current) return; const token = Symbol("state-retry"); const scope = scopeGenerationRef.current; const state = partialRef.current; operationRef.current = token; setSaving(true); setSaveError(""); try { await onRetryState(state); if (!mountedRef.current || operationRef.current !== token || scopeGenerationRef.current !== scope) return; await onComplete(); } catch { if (mountedRef.current && operationRef.current === token && scopeGenerationRef.current === scope) setSaveError("已保存句子，但设置为已学习仍然失败，请重试。"); } finally { if (operationRef.current === token) { operationRef.current = undefined; if (mountedRef.current) setSaving(false); } } };

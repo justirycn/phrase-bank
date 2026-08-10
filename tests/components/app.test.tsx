@@ -234,11 +234,27 @@ describe("PhraseBankApp", () => {
     await user.click(screen.getByRole("button", { name: "保存语言块" }));
     const readsA = repoA.phraseReadAttempts;
     view.rerender(<PhraseBankApp repository={repoB as never} />);
+    expect(screen.getByRole("button", { name: "保存语言块" })).toBeEnabled();
     resolveA();
     await vi.waitFor(() => expect(repoA.phrases).toContain(pendingPhrase));
     expect(screen.getByRole("heading", { name: "收藏语言块" })).toBeVisible();
     expect(repoA.phraseReadAttempts).toBe(readsA);
     expect(repoB.phrases).toHaveLength(0);
+    expect(screen.queryByText("已收入你的句库")).not.toBeInTheDocument();
+  });
+
+  it("invalidates a pending save on unmount without later UI work", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository(); let resolveSave!: () => void; let pending!: Phrase;
+    repo.savePhraseImpl = (phrase) => new Promise<void>((resolve) => { pending = phrase; resolveSave = () => { repo.phrases.push(phrase); resolve(); }; });
+    const view = render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: "添加" }));
+    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Unmount pending");
+    await user.type(screen.getByRole("textbox", { name: "中文含义" }), "卸载等待保存");
+    await user.click(screen.getByRole("button", { name: "保存语言块" }));
+    const reads = repo.phraseReadAttempts;
+    view.unmount(); resolveSave();
+    await vi.waitFor(() => expect(repo.phrases).toContain(pending));
+    expect(repo.phraseReadAttempts).toBe(reads);
     expect(screen.queryByText("已收入你的句库")).not.toBeInTheDocument();
   });
 
