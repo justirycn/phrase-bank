@@ -141,12 +141,13 @@ export function useTrainingSession({
     mountedRef.current = true;
     let cancelled = false;
     void (async () => {
-      const [active, phrases, events, learningStates, speechPreferences] = await Promise.all([
+      const [active, phrases, events, learningStates, speechPreferences, snapshot] = await Promise.all([
         repository.getActiveTrainingSession(),
         repository.listPhrases(),
         repository.listTrainingEvents(),
         repository.listPhraseLearningStates(),
         repository.getSpeechPreferences().catch(() => ({ accent: "en-US", autoSpeak: true } as const)),
+        repository.exportSnapshot(),
       ]);
       if (cancelled) return;
       speechPreferencesRef.current = speechPreferences;
@@ -206,6 +207,26 @@ export function useTrainingSession({
       const startedDay = shanghaiDay(started);
       const todayEvents = events.filter((event) => shanghaiDay(event.occurredAt) === startedDay);
       const practicedTodayIds = new Set(todayEvents.map((event) => event.phraseId));
+      const latestTodayEventByPhrase = new Map<string, TrainingEvent>();
+      for (const event of todayEvents) {
+        const latest = latestTodayEventByPhrase.get(event.phraseId);
+        if (!latest || event.occurredAt.localeCompare(latest.occurredAt) > 0
+          || (event.occurredAt === latest.occurredAt && event.id.localeCompare(latest.id) > 0)) {
+          latestTodayEventByPhrase.set(event.phraseId, event);
+        }
+      }
+      const goodTodayIds = new Set([...latestTodayEventByPhrase.values()]
+        .filter((event) => event.result === "good")
+        .map((event) => event.phraseId));
+      const completedToday = snapshot.trainingSessions
+        .filter((session) => Boolean(session.completedAt) && shanghaiDay(session.completedAt!) === startedDay)
+        .sort((left, right) => {
+          const completionDifference = left.completedAt!.localeCompare(right.completedAt!);
+          if (completionDifference) return completionDifference;
+          const updateDifference = left.updatedAt.localeCompare(right.updatedAt);
+          return updateDifference || left.id.localeCompare(right.id);
+        });
+      const previousGroupIds = new Set(completedToday.at(-1)?.phraseIds ?? []);
       const phrasesById = new Map(phrases.map((phrase) => [phrase.id, phrase]));
       const persistedNewCount = new Set(todayEvents.filter((event) => event.source === "new")
         .map((event) => event.phraseId)).size;
@@ -223,6 +244,9 @@ export function useTrainingSession({
         systemNewIntroducedToday: Math.max(newIntroducedToday, systemNewCount),
         learningStates,
         practicedTodayIds,
+        goodTodayIds,
+        previousGroupIds,
+        rotationCursor: completedToday.length,
         practicedTodayBucketCounts: { personal: practicedPersonal.size, due: practicedDue.size, systemNew: practicedSystemNew.size },
       });
       const session: TrainingSessionRecord = {

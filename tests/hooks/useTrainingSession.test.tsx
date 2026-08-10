@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useTrainingSession } from "../../app/hooks/useTrainingSession";
 import type { PhraseRepository } from "../../app/storage/repository";
-import type { Phrase, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import type { Phrase, PhraseLearningState, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 
 const phrase = (id: string): Phrase => ({
   id, english: `English ${id}`, chinese: `中文 ${id}`, categoryId: "daily",
@@ -11,10 +11,22 @@ const phrase = (id: string): Phrase => ({
   updatedAt: "2026-01-01T00:00:00.000Z", lastReviewedAt: "2026-01-02T00:00:00.000Z",
 });
 
-function memoryRepository(items = Array.from({ length: 12 }, (_, index) => phrase(`p-${index}`))) {
+const learnedState = (phraseId: string, stage: "learned" | "mastered" = "learned"): PhraseLearningState => ({
+  phraseId,
+  stage,
+  consecutiveGood: stage === "mastered" ? 3 : 0,
+  masteredDates: stage === "mastered" ? ["2026-08-08"] : [],
+  updatedAt: "2026-08-08T00:00:00.000Z",
+});
+
+function memoryRepository(
+  items = Array.from({ length: 12 }, (_, index) => phrase(`p-${index}`)),
+  learningStates = items.map((item) => learnedState(item.id)),
+  initialSessions: TrainingSessionRecord[] = [],
+) {
   const events: TrainingEvent[] = [];
   const reviewedEventIds = new Set<string>();
-  let session: TrainingSessionRecord | undefined;
+  const sessions = structuredClone(initialSessions);
   const preferences: SpeechPreferences = { accent: "en-US", autoSpeak: true };
   const repository = {
     listPhrases: vi.fn(async () => items),
@@ -32,16 +44,22 @@ function memoryRepository(items = Array.from({ length: 12 }, (_, index) => phras
       reviewedEventIds.add(event.id);
     }),
     listTrainingEvents: vi.fn(async () => [...events]),
-    listPhraseLearningStates: vi.fn(async () => []),
-    saveTrainingSession: vi.fn(async (next: TrainingSessionRecord) => { session = structuredClone(next); }),
-    getActiveTrainingSession: vi.fn(async () => session && !session.completedAt ? structuredClone(session) : undefined),
-    completeTrainingSession: vi.fn(async (id: string, completedAt: Date) => {
-      if (session?.id === id) session = { ...session, completedAt: completedAt.toISOString() };
+    listPhraseLearningStates: vi.fn(async () => structuredClone(learningStates)),
+    saveTrainingSession: vi.fn(async (next: TrainingSessionRecord) => {
+      const existing = sessions.findIndex(({ id }) => id === next.id);
+      if (existing >= 0) sessions[existing] = structuredClone(next);
+      else sessions.push(structuredClone(next));
     }),
+    getActiveTrainingSession: vi.fn(async () => structuredClone([...sessions].reverse().find(({ completedAt }) => !completedAt))),
+    completeTrainingSession: vi.fn(async (id: string, completedAt: Date) => {
+      const session = sessions.find((item) => item.id === id);
+      if (session) session.completedAt = completedAt.toISOString();
+    }),
+    exportSnapshot: vi.fn(async () => ({ trainingSessions: structuredClone(sessions) })),
     submitReview: vi.fn(async () => undefined),
     getSpeechPreferences: vi.fn(async () => preferences),
   } as unknown as PhraseRepository;
-  return { repository, events, getSession: () => session };
+  return { repository, events, sessions, getSession: () => sessions.at(-1) };
 }
 
 function services() {
@@ -116,41 +134,54 @@ describe("useTrainingSession", () => {
     expect(result.current.total).toBe(0);
   });
 
-  it("uses persisted Shanghai-day new events when the app count is stale", async () => {
-    const reviewed = [phrase("reviewed-0")];
-    const newItems = Array.from({ length: 4 }, (_, index) => ({ ...phrase(`new-${index}`), reviewStep: 0, masteryLevel: 0, lastReviewedAt: undefined }));
-    const store = memoryRepository([...reviewed, ...newItems]); const api = services();
-    store.events.push(...Array.from({ length: 5 }, (_, index): TrainingEvent => ({
-      id: `prior-new-${index}`, sessionId: "prior", phraseId: `prior-${index}`, source: "new",
-      result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1,
-      occurredAt: "2026-08-08T16:30:00.000Z",
-    })));
-    const { result } = renderHook(() => useTrainingSession({
-      repository: store.repository, mode: "quick", ...api, newIntroducedToday: 0,
-      now: () => new Date("2026-08-09T08:00:00.000Z"),
-    }));
-    await waitFor(() => expect(result.current.total).toBeGreaterThan(0));
-    expect(result.current.total).toBe(1);
-    expect(store.getSession()?.sources).not.toContain("new");
-  });
-
-  it("uses persisted Shanghai-day bucket counts to balance the next quick group", async () => {
-    const personal = Array.from({ length: 4 }, (_, index) => ({ ...phrase(`ratio-personal-${index}`), origin: "personal" as const, kind: "standalone" as const, nextReviewAt: "2026-08-12T00:00:00.000Z" }));
-    const due = Array.from({ length: 4 }, (_, index) => ({ ...phrase(`ratio-due-${index}`), origin: "system" as const, kind: "core" as const, nextReviewAt: "2026-08-08T00:00:00.000Z" }));
-    const systemNew = Array.from({ length: 4 }, (_, index) => ({ ...phrase(`ratio-new-${index}`), origin: "system" as const, kind: "core" as const, lastReviewedAt: undefined }));
-    const store = memoryRepository([...personal, ...due, ...systemNew]); const api = services();
+  it("uses each phrase's latest Shanghai-day result and event id to exclude only latest-good phrases", async () => {
+    const items = [phrase("latest-hard"), phrase("latest-good"), phrase("tie-good")];
+    const store = memoryRepository(items); const api = services();
     store.events.push(
-      { id: "prior-personal", sessionId: "prior", phraseId: personal[0].id, source: "weak", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T01:00:00.000Z" },
-      { id: "prior-due", sessionId: "prior", phraseId: due[0].id, source: "due", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T02:00:00.000Z" },
-      { id: "prior-system-new", sessionId: "prior", phraseId: systemNew[0].id, source: "new", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T03:00:00.000Z" },
+      { id: "hard-earlier", sessionId: "prior", phraseId: "latest-hard", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T01:00:00.000Z" },
+      { id: "hard-later", sessionId: "prior", phraseId: "latest-hard", source: "due", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T02:00:00.000Z" },
+      { id: "good-earlier", sessionId: "prior", phraseId: "latest-good", source: "due", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T01:00:00.000Z" },
+      { id: "good-later", sessionId: "prior", phraseId: "latest-good", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T02:00:00.000Z" },
+      { id: "tie-a", sessionId: "prior", phraseId: "tie-good", source: "due", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T03:00:00.000Z" },
+      { id: "tie-z", sessionId: "prior", phraseId: "tie-good", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T03:00:00.000Z" },
     );
 
-    renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "ratio", now: () => new Date("2026-08-09T08:00:00.000Z") }));
-    await waitFor(() => expect(store.getSession()?.phraseIds).toHaveLength(3));
-    const selected = store.getSession()!.phraseIds.map((id) => [...personal, ...due, ...systemNew].find((item) => item.id === id)!);
-    expect(selected.filter(({ origin }) => origin === "personal")).toHaveLength(2);
-    expect(selected.filter(({ origin, lastReviewedAt }) => origin === "system" && lastReviewedAt)).toHaveLength(1);
-    expect(selected.filter(({ origin, lastReviewedAt }) => origin === "system" && !lastReviewedAt)).toHaveLength(0);
+    renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "latest-result" }));
+    await waitFor(() => expect(store.getSession()).toBeDefined());
+
+    expect(store.getSession()?.phraseIds).toEqual(["latest-hard"]);
+  });
+
+  it("uses the Asia/Shanghai day boundary for latest-good exclusion", async () => {
+    const items = [phrase("previous-day-good"), phrase("today-good")];
+    const store = memoryRepository(items); const api = services();
+    store.events.push(
+      { id: "before-boundary", sessionId: "prior", phraseId: "previous-day-good", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-08T15:59:59.999Z" },
+      { id: "at-boundary", sessionId: "prior", phraseId: "today-good", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-08T16:00:00.000Z" },
+    );
+
+    renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "shanghai-boundary" }));
+    await waitFor(() => expect(store.getSession()).toBeDefined());
+
+    expect(store.getSession()?.phraseIds).toEqual(["previous-day-good"]);
+  });
+
+  it("excludes the most recent completed Shanghai-day group with a stable session-id tie break", async () => {
+    const items = Array.from({ length: 3 }, (_, index) => phrase(`recent-${index}`));
+    const completedAt = "2026-08-09T02:00:00.000Z";
+    const session = (id: string, phraseIds: string[]): TrainingSessionRecord => ({
+      id, mode: "quick", startedAt: "2026-08-09T01:00:00.000Z", updatedAt: completedAt,
+      completedAt, phraseIds, sources: phraseIds.map(() => "due"), currentIndex: phraseIds.length, activeSeconds: 10,
+    });
+    const store = memoryRepository(items, undefined, [
+      session("completed-a", []),
+      session("completed-z", items.map(({ id }) => id)),
+    ]);
+
+    renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...services(), seed: "recent-session" }));
+    await waitFor(() => expect(store.getSession()?.id).not.toBe("completed-z"));
+
+    expect(store.getSession()?.phraseIds).toEqual([]);
   });
 
   it("records unknown once, reveals it and appends the phrase once", async () => {

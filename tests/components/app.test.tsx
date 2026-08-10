@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { PhraseBankApp } from "../../app/PhraseBankApp";
-import type { BackupEnvelopeV3, Category, Phrase, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import type { BackupEnvelopeV3, Category, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 
 class MemoryRepository {
   phrases: Phrase[] = [];
@@ -22,6 +22,7 @@ class MemoryRepository {
   failPreferenceLoad = false;
   failPreferenceSave = false;
   preferenceSaves: SpeechPreferences[] = [];
+  learningStates: PhraseLearningState[] = [];
   preferenceLoad?: Promise<SpeechPreferences>;
   savePreferenceImpl?: (value: SpeechPreferences) => Promise<void>;
   async getPhrase(id: string) { return this.phrases.find((phrase) => phrase.id === id); }
@@ -33,7 +34,7 @@ class MemoryRepository {
   async completeTrainingSession(id: string, completedAt: Date) { this.sessions = this.sessions.map((session) => session.id === id ? { ...session, completedAt: completedAt.toISOString() } : session); }
   async getSpeechPreferences() { if (this.preferenceLoad) return this.preferenceLoad; if (this.failPreferenceLoad) throw new Error("preference load failed"); return this.preferences; }
   async saveSpeechPreferences(value: SpeechPreferences) { this.preferenceSaves.push(value); if (this.savePreferenceImpl) return this.savePreferenceImpl(value); if (this.failPreferenceSave) throw new Error("preference save failed"); this.preferences = value; }
-  async listPhraseLearningStates() { return []; }
+  async listPhraseLearningStates() { return [...this.learningStates]; }
   async getActiveSystemContentVersion() { return undefined; }
   async installSystemContentPackage() {}
   async rollbackSystemContentPackage() {}
@@ -57,6 +58,11 @@ function makePhrase(overrides: Partial<Phrase> = {}): Phrase {
     updatedAt: now,
     ...overrides,
   };
+}
+
+function learnedState(phraseId: string): PhraseLearningState {
+  const now = new Date().toISOString();
+  return { phraseId, stage: "learned", consecutiveGood: 0, masteredDates: [], updatedAt: now };
 }
 
 describe("PhraseBankApp", () => {
@@ -119,6 +125,7 @@ describe("PhraseBankApp", () => {
   it("starts standard practice with Chinese before English", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     repo.phrases.push(makePhrase({ chinese: "我还没决定。", english: "I haven't decided yet." }));
+    repo.learningStates = repo.phrases.map(({ id }) => learnedState(id));
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: /开始 10 分钟训练/ }));
     expect(await screen.findByText("我还没决定。")).toBeVisible();
@@ -129,6 +136,7 @@ describe("PhraseBankApp", () => {
   it("starts a three-item quick group", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     repo.phrases = Array.from({ length: 4 }, (_, index) => makePhrase({ id: `p${index}`, chinese: `中文 ${index}` }));
+    repo.learningStates = repo.phrases.map(({ id }) => learnedState(id));
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: /快速练一组/ }));
     expect(await screen.findByText(/中文/)).toBeVisible();
