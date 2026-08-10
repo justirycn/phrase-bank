@@ -38,8 +38,8 @@ function seededOrder(phrases: Phrase[], seed: string): Phrase[] {
 
 function oldestReviewedOrder(phrases: Phrase[], seed: string): Phrase[] {
   return [...phrases].sort((left, right) => {
-    const reviewedDifference = (left.lastReviewedAt ?? left.createdAt)
-      .localeCompare(right.lastReviewedAt ?? right.createdAt);
+    const reviewedDifference = new Date(left.lastReviewedAt ?? left.createdAt).getTime()
+      - new Date(right.lastReviewedAt ?? right.createdAt).getTime();
     if (reviewedDifference) return reviewedDifference;
     const hashDifference = stableHash(`${seed}${left.id}`) - stableHash(`${seed}${right.id}`);
     return hashDifference || left.id.localeCompare(right.id);

@@ -125,6 +125,22 @@ describe("selectTrainingGroup", () => {
     expect(new Set(result.map(({ phrase: item }) => item.id)).size).toBe(3);
   });
 
+  it("orders mature review times by epoch across mixed timezone offsets", () => {
+    const phrases = [
+      phrase("very-old", 3, "2026-08-12T00:00:00.000Z", "2026-07-01T01:00:00.000Z"),
+      phrase("offset-older", 3, "2026-08-12T00:00:00.000Z", "2026-07-01T10:00:00+08:00"),
+      phrase("middle", 3, "2026-08-12T00:00:00.000Z", "2026-07-01T02:30:00.000Z"),
+      phrase("z-newer", 3, "2026-08-12T00:00:00.000Z", "2026-07-01T03:00:00.000Z"),
+    ];
+
+    const result = selectTrainingGroup(phrases, {
+      mode: "quick", now, seed: "timezone-order", newIntroducedToday: 0,
+      learningStates: eligibleStates(phrases),
+    });
+
+    expect(result.map(({ phrase: item }) => item.id)).toEqual(["very-old", "offset-older", "middle"]);
+  });
+
   it("excludes today's latest-good phrases and the immediately previous group", () => {
     const phrases = Array.from({ length: 7 }, (_, index) => phrase(`gap-${index}`));
     const result = selectTrainingGroup(phrases, {
