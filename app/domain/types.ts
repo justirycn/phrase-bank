@@ -1,6 +1,9 @@
 export type ReviewResult = "again" | "hard" | "good";
 export type TrainingMode = "quick" | "standard";
 export type TrainingSource = "due" | "weak" | "mature" | "new" | "requeue";
+export type PhraseOrigin = "personal" | "system";
+export type PhraseKind = "standalone" | "core" | "example";
+export type CefrLevel = "A2" | "B1" | "B2";
 
 export interface TrainingEvent {
   id: string;
@@ -57,6 +60,44 @@ export interface Phrase extends PhraseInput {
   createdAt: string;
   updatedAt: string;
   lastReviewedAt?: string;
+  origin?: PhraseOrigin;
+  kind?: PhraseKind;
+  parentPhraseId?: string;
+  unlockOrder?: number;
+  subcategory?: string;
+  cefrLevel?: CefrLevel;
+  intent?: string;
+  contentVersion?: string;
+  qualityVersion?: string;
+  retiredAt?: string;
+}
+
+export interface PhraseLearningState {
+  phraseId: string;
+  masteredDates: string[];
+  unlockedAt?: string;
+  updatedAt: string;
+}
+
+export interface SystemContentPhrase extends PhraseInput {
+  id: string;
+  origin: "system";
+  kind: "core" | "example";
+  parentPhraseId?: string;
+  unlockOrder?: number;
+  subcategory: string;
+  cefrLevel: CefrLevel;
+  intent: string;
+  contentVersion: string;
+  qualityVersion: string;
+}
+
+export interface SystemContentPackage {
+  format: "phrase-bank-system-content";
+  version: string;
+  generatedAt: string;
+  qualityVersion: string;
+  phrases: SystemContentPhrase[];
 }
 
 export interface Category {

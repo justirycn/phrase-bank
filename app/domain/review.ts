@@ -1,4 +1,5 @@
 import type { Phrase, PhraseInput, ReviewLog, ReviewResult } from "./types";
+import { personalPhraseDefaults } from "./systemContent";
 
 export const REVIEW_INTERVAL_DAYS = [1, 3, 7, 14, 30, 60] as const;
 
@@ -9,6 +10,7 @@ export function createNewPhrase(input: PhraseInput, now = new Date()): Phrase {
   const timestamp = now.toISOString();
   return {
     ...input,
+    ...personalPhraseDefaults(),
     english: input.english.trim(),
     chinese: input.chinese.trim(),
     personalExample: input.personalExample?.trim() ?? "",
