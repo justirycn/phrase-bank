@@ -141,10 +141,11 @@ export function useTrainingSession({
     mountedRef.current = true;
     let cancelled = false;
     void (async () => {
-      const [active, phrases, events, speechPreferences] = await Promise.all([
+      const [active, phrases, events, learningStates, speechPreferences] = await Promise.all([
         repository.getActiveTrainingSession(),
         repository.listPhrases(),
         repository.listTrainingEvents(),
+        repository.listPhraseLearningStates(),
         repository.getSpeechPreferences().catch(() => ({ accent: "en-US", autoSpeak: true } as const)),
       ]);
       if (cancelled) return;
@@ -205,13 +206,19 @@ export function useTrainingSession({
       const startedDay = shanghaiDay(started);
       const todayEvents = events.filter((event) => shanghaiDay(event.occurredAt) === startedDay);
       const practicedTodayIds = new Set(todayEvents.map((event) => event.phraseId));
+      const phrasesById = new Map(phrases.map((phrase) => [phrase.id, phrase]));
       const persistedNewCount = new Set(todayEvents.filter((event) => event.source === "new")
         .map((event) => event.phraseId)).size;
+      const personalNewCount = new Set(todayEvents.filter((event) => event.source === "new" && (phrasesById.get(event.phraseId)?.origin ?? "personal") === "personal").map((event) => event.phraseId)).size;
+      const systemNewCount = new Set(todayEvents.filter((event) => event.source === "new" && phrasesById.get(event.phraseId)?.origin === "system").map((event) => event.phraseId)).size;
       const selected = selectTrainingGroup(phrases, {
         mode,
         now: started,
         seed: seed ?? started.toISOString().slice(0, 10),
         newIntroducedToday: Math.max(newIntroducedToday, persistedNewCount),
+        personalNewIntroducedToday: personalNewCount,
+        systemNewIntroducedToday: Math.max(newIntroducedToday, systemNewCount),
+        learningStates,
         practicedTodayIds,
       });
       const session: TrainingSessionRecord = {

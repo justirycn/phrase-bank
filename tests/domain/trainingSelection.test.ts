@@ -30,6 +30,29 @@ function newPhrase(id: string): Phrase {
 }
 
 describe("selectTrainingGroup", () => {
+  it("prioritizes personal due and ungraduated phrases before unlocked system content", () => {
+    const personalDue = { ...reviewedPhrase("personal-due", 1, "2026-08-08T00:00:00.000Z"), origin: "personal" as const, kind: "standalone" as const };
+    const systemDue = { ...reviewedPhrase("system-due", 1, "2026-08-08T00:00:00.000Z"), origin: "system" as const, kind: "core" as const };
+    const personalPriority = { ...reviewedPhrase("personal-priority", 1, "2026-08-11T00:00:00.000Z"), origin: "personal" as const, kind: "standalone" as const };
+    const locked = { ...newPhrase("locked"), origin: "system" as const, kind: "example" as const, parentPhraseId: "system-due", unlockOrder: 1 };
+    const selected = selectTrainingGroup([systemDue, locked, personalPriority, personalDue], {
+      mode: "quick", now, seed: "priority", newIntroducedToday: 0,
+      personalNewIntroducedToday: 0, systemNewIntroducedToday: 0,
+      learningStates: [{ phraseId: "personal-priority", masteredDates: ["2026-08-08"], updatedAt: "2026-08-08T00:00:00.000Z" }],
+    });
+    expect(selected.map(({ phrase }) => phrase.id)).toEqual(["personal-due", "system-due", "personal-priority"]);
+    expect(selected.map(({ phrase }) => phrase.id)).not.toContain("locked");
+  });
+
+  it("enforces separate daily caps of five personal and three system new items", () => {
+    const phrases = [
+      ...Array.from({ length: 4 }, (_, index) => ({ ...newPhrase(`p${index}`), origin: "personal" as const, kind: "standalone" as const })),
+      ...Array.from({ length: 4 }, (_, index) => ({ ...newPhrase(`s${index}`), origin: "system" as const, kind: "core" as const })),
+    ];
+    const selected = selectTrainingGroup(phrases, { mode: "standard", now, seed: "caps", newIntroducedToday: 0, personalNewIntroducedToday: 4, systemNewIntroducedToday: 3, learningStates: [] });
+    expect(selected.filter(({ phrase, source }) => phrase.origin === "personal" && source === "new")).toHaveLength(1);
+    expect(selected.some(({ phrase }) => phrase.origin === "system")).toBe(false);
+  });
   it("selects the standard allocation of six due, two weak, and two mature phrases", () => {
     const phrases = [
       ...Array.from({ length: 8 }, (_, index) =>

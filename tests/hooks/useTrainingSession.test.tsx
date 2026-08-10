@@ -32,6 +32,7 @@ function memoryRepository(items = Array.from({ length: 12 }, (_, index) => phras
       reviewedEventIds.add(event.id);
     }),
     listTrainingEvents: vi.fn(async () => [...events]),
+    listPhraseLearningStates: vi.fn(async () => []),
     saveTrainingSession: vi.fn(async (next: TrainingSessionRecord) => { session = structuredClone(next); }),
     getActiveTrainingSession: vi.fn(async () => session && !session.completedAt ? structuredClone(session) : undefined),
     completeTrainingSession: vi.fn(async (id: string, completedAt: Date) => {
@@ -119,7 +120,7 @@ describe("useTrainingSession", () => {
     const reviewed = [phrase("reviewed-0")];
     const newItems = Array.from({ length: 4 }, (_, index) => ({ ...phrase(`new-${index}`), reviewStep: 0, masteryLevel: 0, lastReviewedAt: undefined }));
     const store = memoryRepository([...reviewed, ...newItems]); const api = services();
-    store.events.push(...Array.from({ length: 3 }, (_, index): TrainingEvent => ({
+    store.events.push(...Array.from({ length: 5 }, (_, index): TrainingEvent => ({
       id: `prior-new-${index}`, sessionId: "prior", phraseId: `prior-${index}`, source: "new",
       result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1,
       occurredAt: "2026-08-08T16:30:00.000Z",

@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { PhraseBankApp } from "../../app/PhraseBankApp";
-import type { BackupEnvelopeV2, Category, Phrase, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import type { BackupEnvelopeV2, Category, Phrase, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 
 class MemoryRepository {
   phrases: Phrase[] = [];
@@ -33,6 +33,10 @@ class MemoryRepository {
   async completeTrainingSession(id: string, completedAt: Date) { this.sessions = this.sessions.map((session) => session.id === id ? { ...session, completedAt: completedAt.toISOString() } : session); }
   async getSpeechPreferences() { if (this.preferenceLoad) return this.preferenceLoad; if (this.failPreferenceLoad) throw new Error("preference load failed"); return this.preferences; }
   async saveSpeechPreferences(value: SpeechPreferences) { this.preferenceSaves.push(value); if (this.savePreferenceImpl) return this.savePreferenceImpl(value); if (this.failPreferenceSave) throw new Error("preference save failed"); this.preferences = value; }
+  async listPhraseLearningStates() { return []; }
+  async getActiveSystemContentVersion() { return undefined; }
+  async installSystemContentPackage(_content: SystemContentPackage) {}
+  async rollbackSystemContentPackage(_version: string) {}
   async saveCategory(category: Category) { this.categories.push(category); }
   async deleteCategoryAndMigrate() {}
   async exportSnapshot(): Promise<BackupEnvelopeV2> { return { format: "personal-phrase-bank", version: 2, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [], trainingEvents: this.events, trainingSessions: this.sessions }; }
@@ -96,10 +100,10 @@ describe("PhraseBankApp", () => {
     expect(repo.sessions[0]?.phraseIds).toHaveLength(3);
   });
 
-  it("does not introduce more new phrases after three distinct new items today", async () => {
+  it("does not introduce more personal phrases after five distinct new items today", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository(); const now = new Date().toISOString();
     repo.phrases = Array.from({ length: 4 }, (_, index) => makePhrase({ id: `new-${index}`, chinese: `新句 ${index}`, lastReviewedAt: undefined }));
-    repo.events = Array.from({ length: 3 }, (_, index) => ({ id: `event-${index}`, sessionId: "old", phraseId: `seen-${index}`, source: "new" as const, result: "hard" as const, usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: now }));
+    repo.events = Array.from({ length: 5 }, (_, index) => ({ id: `event-${index}`, sessionId: "old", phraseId: `seen-${index}`, source: "new" as const, result: "hard" as const, usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: now }));
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: /快速练一组/ }));
     await screen.findByText("这一组完成了");
