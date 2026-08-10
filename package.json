@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "content:generate": "tsx scripts/generate-system-content.ts",
+    "content:qwen": "tsx scripts/run-qwen-content-agent.ts",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
