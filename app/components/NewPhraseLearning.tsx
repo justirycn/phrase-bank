@@ -64,14 +64,16 @@ export function NewPhraseLearning({ controller, onHome }: {
     </section>;
   }
 
+  const isStudy = controller.phase === "study";
+  const index = isStudy ? controller.studyIndex : controller.testIndex;
+  const validProgress = Number.isInteger(controller.total) && controller.total > 0
+    && Number.isInteger(index) && index >= 0 && index < controller.total;
   const current = controller.current;
-  if (!current) {
+  if (!current || !validProgress) {
     return <section className="new-learning-loading" aria-live="polite">正在准备今天的新语言块</section>;
   }
 
-  const isStudy = controller.phase === "study";
   const showAnswer = isStudy || controller.revealed;
-  const index = isStudy ? controller.studyIndex : controller.testIndex;
   const showContext = showAnswer && Boolean(current.intent || current.sourceNote);
   const showExamples = isStudy && current.origin === "system" && current.kind === "core";
   const progress = `${index + 1} / ${controller.total}`;
@@ -79,7 +81,7 @@ export function NewPhraseLearning({ controller, onHome }: {
 
   return <section className={`new-phrase-learning phase-${controller.phase}`}>
     <header className="new-learning-head">
-      <button type="button" className="new-learning-close" aria-label="关闭学习并返回首页" onClick={exit}>
+      <button type="button" className="new-learning-close" aria-label="关闭学习并返回首页" disabled={disabled} onClick={exit}>
         <AppIcon name="close" size={22} />
       </button>
       <span aria-label={`学习进度 ${progress}`}>{progress}</span>

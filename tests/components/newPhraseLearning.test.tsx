@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { useState } from "react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { NewPhraseLearning } from "../../app/components/NewPhraseLearning";
@@ -41,8 +42,10 @@ describe("NewPhraseLearning", () => {
     expect(screen.getByText(phrase.sourceNote)).toBeVisible();
     expect(screen.getByText("1 / 5")).toBeVisible();
     const list = screen.getByRole("list", { name: "例句" });
-    expect(list).toContainElement(screen.getByText("Just give me a moment to check the details."));
-    expect(list.querySelectorAll("li")).toHaveLength(2);
+    const items = within(list).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("Just give me a moment to check the details.");
+    expect(items[1]).toHaveTextContent("Could you give me a moment while I find that?");
     expect(screen.queryByText("This must not render.")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "重听标准发音" }));
     await user.click(screen.getByRole("button", { name: "下一句" }));
@@ -60,17 +63,30 @@ describe("NewPhraseLearning", () => {
     expect(screen.queryByText("使用场景")).not.toBeInTheDocument();
   });
 
-  it("keeps test answers out of the DOM until revealed", async () => {
+  it("keeps test answers out of the DOM until the controller reveals and rerenders", async () => {
     const user = userEvent.setup();
-    const value = controller({ phase: "test", current: phrase, testIndex: 4 });
-    render(<NewPhraseLearning controller={value} onHome={vi.fn()} />);
+    const reveal = vi.fn(async () => undefined);
+    function Harness() {
+      const [revealed, setRevealed] = useState(false);
+      const value = controller({
+        phase: "test", current: phrase, testIndex: 4, revealed,
+        reveal: async () => { reveal(); setRevealed(true); },
+      });
+      return <NewPhraseLearning controller={value} onHome={vi.fn()} />;
+    }
+    render(<Harness />);
     expect(screen.getByText("5 / 5")).toBeVisible();
     expect(screen.getByText(phrase.chinese)).toBeVisible();
     expect(screen.queryByText(phrase.english)).not.toBeInTheDocument();
     expect(screen.queryByText(phrase.intent)).not.toBeInTheDocument();
     expect(screen.queryByText("例句")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "查看答案" }));
-    expect(value.reveal).toHaveBeenCalledOnce();
+    expect(reveal).toHaveBeenCalledOnce();
+    expect(screen.getByRole("heading", { name: phrase.english })).toBeVisible();
+    expect(screen.getByRole("button", { name: "重听标准发音" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "不会" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "模糊" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "掌握" })).toBeVisible();
   });
 
   it("reveals the answer and maps the three self-ratings", async () => {
@@ -89,10 +105,38 @@ describe("NewPhraseLearning", () => {
     expect(value.grade).toHaveBeenNthCalledWith(3, "good");
   });
 
-  it("uses the final study action copy and disables actions while busy", () => {
-    render(<NewPhraseLearning controller={controller({ studyIndex: 4, busy: true })} onHome={vi.fn()} />);
+  it("uses the final study action copy and disables every study action while busy", async () => {
+    const user = userEvent.setup(); const onHome = vi.fn();
+    const value = controller({ studyIndex: 4, busy: true });
+    render(<NewPhraseLearning controller={value} onHome={onHome} />);
     expect(screen.getByRole("button", { name: "开始小测试" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "重听标准发音" })).toBeDisabled();
+    const close = screen.getByRole("button", { name: "关闭学习并返回首页" });
+    expect(close).toBeDisabled();
+    await user.click(close);
+    expect(onHome).not.toHaveBeenCalled();
+    expect(value.replay).not.toHaveBeenCalled();
+    expect(value.nextStudyPhrase).not.toHaveBeenCalled();
+  });
+
+  it("disables reveal and all revealed test actions while busy", async () => {
+    const user = userEvent.setup();
+    const hidden = controller({ phase: "test", busy: true });
+    const view = render(<NewPhraseLearning controller={hidden} onHome={vi.fn()} />);
+    const reveal = screen.getByRole("button", { name: "查看答案" });
+    expect(reveal).toBeDisabled();
+    await user.click(reveal);
+    expect(hidden.reveal).not.toHaveBeenCalled();
+
+    const revealed = controller({ phase: "test", revealed: true, busy: true });
+    view.rerender(<NewPhraseLearning controller={revealed} onHome={vi.fn()} />);
+    for (const name of ["重听标准发音", "不会", "模糊", "掌握"]) {
+      const action = screen.getByRole("button", { name });
+      expect(action).toBeDisabled();
+      await user.click(action);
+    }
+    expect(revealed.replay).not.toHaveBeenCalled();
+    expect(revealed.grade).not.toHaveBeenCalled();
   });
 
   it("guards against rapid double submission while an action is pending", async () => {
@@ -105,6 +149,7 @@ describe("NewPhraseLearning", () => {
     await user.dblClick(next);
     expect(value.nextStudyPhrase).toHaveBeenCalledOnce();
     expect(next).toBeDisabled();
+    expect(screen.getByRole("button", { name: "关闭学习并返回首页" })).toBeDisabled();
     release();
   });
 
@@ -141,5 +186,18 @@ describe("NewPhraseLearning", () => {
     render(<NewPhraseLearning controller={controller()} onHome={onHome} />);
     await user.click(screen.getByRole("button", { name: "关闭学习并返回首页" }));
     expect(onHome).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["missing current", { current: undefined }],
+    ["zero total", { total: 0 }],
+    ["non-finite total", { total: Number.NaN }],
+    ["study index past total", { studyIndex: 5 }],
+    ["test index past total", { phase: "test" as const, testIndex: 5 }],
+  ])("shows a safe preparation state for %s", (_, overrides) => {
+    const view = render(<NewPhraseLearning controller={controller(overrides)} onHome={vi.fn()} />);
+    expect(screen.getByText("正在准备今天的新语言块")).toBeVisible();
+    expect(view.container).not.toHaveTextContent("NaN");
+    expect(view.container).not.toHaveTextContent("0 / 0");
   });
 });
