@@ -11,6 +11,7 @@ import { validateCategoryName, validatePhraseInput, type PhraseErrors } from "./
 import { useTrainingSession } from "./hooks/useTrainingSession";
 import { TemporaryRecorder } from "./services/recorder";
 import { BrowserSpeechService } from "./services/speech";
+import { installBundledSystemContent } from "./services/systemContentInstaller";
 import { backupFileName, parseBackup } from "./storage/backup";
 import { LocalPhraseRepository } from "./storage/indexedDbRepository";
 import type { PhraseRepository } from "./storage/repository";
@@ -32,7 +33,7 @@ function Empty({ title, detail, action }: { title: string; detail: string; actio
   return <div className="empty"><div className="empty-glyph"><AppIcon name="bookmark" size={42} /></div><h3>{title}</h3><p>{detail}</p>{action}</div>;
 }
 
-export function PhraseBankApp({ repository }: { repository?: Repository }) {
+export function PhraseBankApp({ repository, contentInstaller }: { repository?: Repository; contentInstaller?: (repository: Repository) => Promise<unknown> }) {
   const repo = repository ?? defaultRepository;
   const [screen, setScreen] = useState<Screen>("home");
   const [phrases, setPhrases] = useState<Phrase[]>([]);
@@ -54,8 +55,16 @@ export function PhraseBankApp({ repository }: { repository?: Repository }) {
 
   useEffect(() => {
     if (!repo) return;
-    repo.initialize().then(refresh).catch(() => setError("本地数据暂时无法打开，请刷新后重试。" )).finally(() => setLoading(false));
-  }, [repo, refresh]);
+    const installer = contentInstaller ?? (repository ? undefined : installBundledSystemContent);
+    void (async () => {
+      await repo.initialize();
+      if (installer) {
+        try { await installer(repo); }
+        catch { setNotice("系统句库暂时无法更新，个人句子和已有训练仍可正常使用。"); }
+      }
+      await refresh();
+    })().catch(() => setError("本地数据暂时无法打开，请刷新后重试。" )).finally(() => setLoading(false));
+  }, [contentInstaller, repo, refresh, repository]);
 
   const go = (next: Screen) => { setNotice(""); setError(""); setScreen(next); window.scrollTo?.(0, 0); };
   const startTraining = (mode: TrainingMode) => { setTrainingMode(mode); setTrainingRun((run) => run + 1); go("practice"); };

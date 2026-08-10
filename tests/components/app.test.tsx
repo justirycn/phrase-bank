@@ -60,6 +60,14 @@ function makePhrase(overrides: Partial<Phrase> = {}): Phrase {
 }
 
 describe("PhraseBankApp", () => {
+  it("installs bundled system content during initialization and refreshes safely", async () => {
+    const repo = new MemoryRepository();
+    const installer = vi.fn(async () => { repo.phrases = [makePhrase({ id: "system-ready", origin: "system", kind: "core" })]; });
+    render(<PhraseBankApp repository={repo as never} contentInstaller={installer} />);
+    await screen.findByRole("button", { name: /快速练一组/ });
+    expect(installer).toHaveBeenCalledWith(repo);
+    expect(repo.phrases).toContainEqual(expect.objectContaining({ id: "system-ready" }));
+  });
   it("shows accumulated daily progress and both training entries", async () => {
     const repo = new MemoryRepository();
     repo.events.push({ id: "e1", sessionId: "s1", phraseId: "p1", source: "due", result: "hard", usedPronunciationHint: false, recorded: true, activeSeconds: 720, occurredAt: new Date().toISOString() });
