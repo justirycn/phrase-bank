@@ -14,6 +14,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "content:generate": "tsx scripts/generate-system-content.ts",
     "content:qwen": "tsx scripts/run-qwen-content-agent.ts",
+    "content:publish": "tsx scripts/publish-qwen-content.ts",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

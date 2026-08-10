@@ -1,8 +1,8 @@
 import { validateSystemContentPackage } from "../domain/systemContent";
 import type { SystemContentPackage } from "../domain/types";
+import { BUNDLED_SYSTEM_CONTENT_VERSION } from "../domain/bundledSystemContent";
 
-const BUNDLED_VERSION = "2026.08.1";
-const BUNDLED_URL = `/content/system-content-${BUNDLED_VERSION}.json`;
+const BUNDLED_URL = `/content/system-content-${BUNDLED_SYSTEM_CONTENT_VERSION}.json`;
 
 type ContentRepository = {
   getActiveSystemContentVersion(): Promise<string | undefined>;
@@ -13,7 +13,7 @@ export async function installBundledSystemContent(
   repository: ContentRepository,
   fetcher: typeof fetch = fetch,
 ): Promise<"current" | "installed"> {
-  if (await repository.getActiveSystemContentVersion() === BUNDLED_VERSION) return "current";
+  if (await repository.getActiveSystemContentVersion() === BUNDLED_SYSTEM_CONTENT_VERSION) return "current";
   const response = await fetcher(BUNDLED_URL, { cache: "no-cache" });
   if (!response.ok) throw new Error("系统句库暂时无法下载");
   let content: SystemContentPackage;

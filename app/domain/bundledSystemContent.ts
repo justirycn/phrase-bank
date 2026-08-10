@@ -1,0 +1,1 @@
+export const BUNDLED_SYSTEM_CONTENT_VERSION = "2026.08.1";
