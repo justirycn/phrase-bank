@@ -167,8 +167,13 @@ describe("selectTrainingGroup", () => {
     })).toEqual([]);
   });
 
-  it("is deterministic for one cursor and rotates deterministic ties when the cursor changes", () => {
-    const phrases = Array.from({ length: 12 }, (_, index) => phrase(`cursor-${index}`));
+  it("is deterministic for one cursor and rotates mature phrases with distinct review times", () => {
+    const phrases = Array.from({ length: 12 }, (_, index) => phrase(
+      `cursor-${index}`,
+      3,
+      "2026-08-12T00:00:00.000Z",
+      `2026-07-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+    ));
     const idsFor = (rotationCursor: number) => selectTrainingGroup(phrases, {
       mode: "quick", now, seed: "cursor", rotationCursor, newIntroducedToday: 0,
       learningStates: eligibleStates(phrases),

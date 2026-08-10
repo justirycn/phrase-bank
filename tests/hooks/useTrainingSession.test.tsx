@@ -109,6 +109,35 @@ describe("useTrainingSession", () => {
     expect(secondIds.every((id) => !firstIds.includes(id))).toBe(true);
   });
 
+  it("advances through nine mature phrases across three completed groups without grades", async () => {
+    const items = Array.from({ length: 9 }, (_, index) => ({
+      ...phrase(`mature-${index + 1}`),
+      masteryLevel: 3,
+      nextReviewAt: "2026-08-12T00:00:00.000Z",
+      lastReviewedAt: `2026-07-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+    }));
+    const store = memoryRepository(items);
+    const groups: string[][] = [];
+    const fixedNow = () => new Date("2026-08-09T08:00:00.000Z");
+
+    for (let group = 0; group < 3; group += 1) {
+      const hook = renderHook(() => useTrainingSession({
+        repository: store.repository, mode: "quick", ...services(), seed: "mature-day",
+        now: fixedNow,
+      }));
+      await waitFor(() => expect(store.getSession()?.phraseIds).toHaveLength(3));
+      groups.push([...store.getSession()!.phraseIds]);
+      await act(() => hook.result.current.finish());
+      hook.unmount();
+    }
+
+    expect(groups).toEqual([
+      ["mature-1", "mature-2", "mature-3"],
+      ["mature-4", "mature-5", "mature-6"],
+      ["mature-7", "mature-8", "mature-9"],
+    ]);
+  });
+
   it("starts and grades training when randomUUID is unavailable on an insecure origin", async () => {
     const originalCrypto = globalThis.crypto;
     vi.stubGlobal("crypto", { getRandomValues: originalCrypto.getRandomValues.bind(originalCrypto) });
@@ -134,22 +163,22 @@ describe("useTrainingSession", () => {
     expect(result.current.total).toBe(0);
   });
 
-  it("uses each phrase's latest Shanghai-day result and event id to exclude only latest-good phrases", async () => {
-    const items = [phrase("latest-hard"), phrase("latest-good"), phrase("tie-good")];
+  it("uses event epochs and ids to exclude only phrases whose actual latest result is good", async () => {
+    const items = [phrase("later-hard"), phrase("later-good"), phrase("tie-good")];
     const store = memoryRepository(items); const api = services();
     store.events.push(
-      { id: "hard-earlier", sessionId: "prior", phraseId: "latest-hard", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T01:00:00.000Z" },
-      { id: "hard-later", sessionId: "prior", phraseId: "latest-hard", source: "due", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T02:00:00.000Z" },
-      { id: "good-earlier", sessionId: "prior", phraseId: "latest-good", source: "due", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T01:00:00.000Z" },
-      { id: "good-later", sessionId: "prior", phraseId: "latest-good", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T02:00:00.000Z" },
-      { id: "tie-a", sessionId: "prior", phraseId: "tie-good", source: "due", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T03:00:00.000Z" },
-      { id: "tie-z", sessionId: "prior", phraseId: "tie-good", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T03:00:00.000Z" },
+      { id: "hard-earlier", sessionId: "prior", phraseId: "later-hard", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T09:00:00+08:00" },
+      { id: "hard-later", sessionId: "prior", phraseId: "later-hard", source: "due", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T01:30:00.000Z" },
+      { id: "good-earlier", sessionId: "prior", phraseId: "later-good", source: "due", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T10:00:00+08:00" },
+      { id: "good-later", sessionId: "prior", phraseId: "later-good", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T02:30:00.000Z" },
+      { id: "tie-a", sessionId: "prior", phraseId: "tie-good", source: "due", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T10:00:00+08:00" },
+      { id: "tie-z", sessionId: "prior", phraseId: "tie-good", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-09T02:00:00.000Z" },
     );
 
     renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "latest-result" }));
     await waitFor(() => expect(store.getSession()).toBeDefined());
 
-    expect(store.getSession()?.phraseIds).toEqual(["latest-hard"]);
+    expect(store.getSession()?.phraseIds).toEqual(["later-hard"]);
   });
 
   it("uses the Asia/Shanghai day boundary for latest-good exclusion", async () => {
@@ -166,16 +195,16 @@ describe("useTrainingSession", () => {
     expect(store.getSession()?.phraseIds).toEqual(["previous-day-good"]);
   });
 
-  it("excludes the most recent completed Shanghai-day group with a stable session-id tie break", async () => {
+  it("uses completed-session epochs and ids to identify the actual latest group", async () => {
     const items = Array.from({ length: 3 }, (_, index) => phrase(`recent-${index}`));
-    const completedAt = "2026-08-09T02:00:00.000Z";
-    const session = (id: string, updatedAt: string, phraseIds: string[]): TrainingSessionRecord => ({
+    const session = (id: string, completedAt: string, updatedAt: string, phraseIds: string[]): TrainingSessionRecord => ({
       id, mode: "quick", startedAt: "2026-08-09T01:00:00.000Z", updatedAt,
       completedAt, phraseIds, sources: phraseIds.map(() => "due"), currentIndex: phraseIds.length, activeSeconds: 10,
     });
     const store = memoryRepository(items, undefined, [
-      session("completed-a", "2026-08-09T04:00:00.000Z", []),
-      session("completed-z", "2026-08-09T03:00:00.000Z", items.map(({ id }) => id)),
+      session("completed-y", "2026-08-09T10:00:00+08:00", "2026-08-09T05:00:00.000Z", []),
+      session("completed-a", "2026-08-09T10:30:00+08:00", "2026-08-09T05:00:00.000Z", []),
+      session("completed-z", "2026-08-09T02:30:00.000Z", "2026-08-09T04:00:00.000Z", items.map(({ id }) => id)),
     ]);
 
     renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...services(), seed: "recent-session" }));
@@ -397,6 +426,29 @@ describe("useTrainingSession", () => {
     expect(store.repository.submitTrainingReview).toHaveBeenCalledTimes(1);
   });
 
+  it("restores the requeue occurrence evaluation by event epoch and id from reverse repository order", async () => {
+    const item = phrase("repeated");
+    const active: TrainingSessionRecord = {
+      id: "active-repeat", mode: "quick", startedAt: "2026-08-09T01:00:00.000Z",
+      updatedAt: "2026-08-09T03:00:00.000Z", phraseIds: [item.id, item.id], sources: ["due", "requeue"],
+      currentIndex: 1, activeSeconds: 5,
+    };
+    const store = memoryRepository([item], undefined, [active]);
+    store.events.push(
+      { id: "event-z", sessionId: active.id, phraseId: item.id, source: "requeue", result: "hard", usedPronunciationHint: true, recorded: true, activeSeconds: 2, occurredAt: "2026-08-09T02:00:00.000Z" },
+      { id: "event-a", sessionId: active.id, phraseId: item.id, source: "due", result: "again", usedPronunciationHint: false, recorded: false, activeSeconds: 2, occurredAt: "2026-08-09T10:00:00+08:00" },
+    );
+
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...services() }));
+    await waitFor(() => expect(result.current.phase).toBe("answer"));
+
+    expect(result.current.current?.source).toBe("requeue");
+    expect(result.current.usedHint).toBe(true);
+    await act(async () => { expect(await result.current.grade("good")).toEqual({ accepted: false }); });
+    await act(async () => { expect(await result.current.grade("hard")).toEqual({ accepted: true }); });
+    expect(store.events).toHaveLength(2);
+  });
+
   it("preserves every candidate source across remounts", async () => {
     const store = memoryRepository();
     const api = services();
@@ -409,6 +461,58 @@ describe("useTrainingSession", () => {
     const second = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "different" }));
     await waitFor(() => expect(second.result.current.total).toBe(savedSources.length));
     expect(store.getSession()!.sources).toEqual(savedSources);
+  });
+
+  it("does not reinitialize when rerenders receive a new inline clock function", async () => {
+    const store = memoryRepository(); const api = services();
+    const fixed = "2026-08-09T08:00:00.000Z";
+    const { result, rerender } = renderHook(
+      ({ clock }) => useTrainingSession({
+        repository: store.repository, mode: "quick", ...api, seed: "stable-clock",
+        now: clock,
+      }),
+      { initialProps: { clock: () => new Date(fixed) } },
+    );
+    await waitFor(() => expect(result.current.total).toBe(3));
+    const sessionId = store.getSession()!.id;
+    await act(() => result.current.grade("hard"));
+    expect(result.current.index).toBe(1);
+
+    rerender({ clock: () => new Date(fixed) });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+
+    expect(store.repository.getActiveTrainingSession).toHaveBeenCalledTimes(1);
+    expect(store.sessions).toHaveLength(1);
+    expect(store.getSession()).toMatchObject({ id: sessionId, currentIndex: 1 });
+    expect(result.current.index).toBe(1);
+    expect(result.current.phase).toBe("prompt");
+  });
+
+  it("uses the latest clock value for actions after a clock-function rerender", async () => {
+    const store = memoryRepository(); const api = services();
+    const { result, rerender } = renderHook(
+      ({ clock }) => useTrainingSession({
+        repository: store.repository, mode: "quick", ...api, seed: "latest-clock",
+        now: clock,
+      }),
+      { initialProps: { clock: () => new Date("2026-08-09T08:00:00.000Z") } },
+    );
+    await waitFor(() => expect(result.current.total).toBe(3));
+    const sessionId = store.getSession()!.id;
+
+    rerender({ clock: () => new Date("2026-08-09T09:00:00.000Z") });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    await act(() => result.current.grade("hard"));
+    expect(store.events[0]?.occurredAt).toBe("2026-08-09T09:00:00.000Z");
+    expect(store.getSession()?.updatedAt).toBe("2026-08-09T09:00:00.000Z");
+
+    rerender({ clock: () => new Date("2026-08-09T10:00:00.000Z") });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    await act(() => result.current.finish());
+    expect(store.repository.completeTrainingSession).toHaveBeenCalledWith(
+      sessionId,
+      new Date("2026-08-09T10:00:00.000Z"),
+    );
   });
 
   it.each([

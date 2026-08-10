@@ -46,6 +46,12 @@ function oldestReviewedOrder(phrases: Phrase[], seed: string): Phrase[] {
   });
 }
 
+function rotateOrder(phrases: Phrase[], offset: number): Phrase[] {
+  if (phrases.length === 0) return [];
+  const normalizedOffset = ((offset % phrases.length) + phrases.length) % phrases.length;
+  return [...phrases.slice(normalizedOffset), ...phrases.slice(0, normalizedOffset)];
+}
+
 function sourceFor(phrase: Phrase, nowTime: number): Exclude<TrainingSource, "new" | "requeue"> {
   if (new Date(phrase.nextReviewAt).getTime() <= nowTime) return "due";
   if (phrase.masteryLevel <= 2) return "weak";
@@ -67,10 +73,11 @@ export function selectTrainingGroup(
   const practicedTodayIds = options.practicedTodayIds ?? new Set<string>();
   const goodTodayIds = options.goodTodayIds ?? new Set<string>();
   const previousGroupIds = options.previousGroupIds ?? new Set<string>();
-  const unique = [...new Map(phrases.map((phrase) => [phrase.id, phrase])).values()]
+  const eligible = [...new Map(phrases.map((phrase) => [phrase.id, phrase])).values()]
     .filter((phrase) => !phrase.retiredAt)
     .filter((phrase) => isEligibleStage(states.get(phrase.id)))
-    .filter((phrase) => phrase.origin !== "system" || phrase.kind !== "example" || Boolean(states.get(phrase.id)?.unlockedAt))
+    .filter((phrase) => phrase.origin !== "system" || phrase.kind !== "example" || Boolean(states.get(phrase.id)?.unlockedAt));
+  const unique = eligible
     .filter((phrase) => options.mode !== "quick" || !goodTodayIds.has(phrase.id))
     .filter((phrase) => options.mode !== "quick" || !previousGroupIds.has(phrase.id));
   const selected: TrainingCandidate[] = [];
@@ -86,24 +93,33 @@ export function selectTrainingGroup(
     }
   };
 
-  const priorityPools = (pool: Phrase[]) => {
+  const priorityPools = (pool: Phrase[], matureRotation = 0) => {
     const due = pool.filter((phrase) => sourceFor(phrase, nowTime) === "due");
     const weak = pool.filter((phrase) => sourceFor(phrase, nowTime) === "weak");
     const mature = pool.filter((phrase) => sourceFor(phrase, nowTime) === "mature");
     return {
       due: seededOrder(due, orderSeed),
       weak: seededOrder(weak, orderSeed),
-      mature: oldestReviewedOrder(mature, orderSeed),
+      mature: rotateOrder(oldestReviewedOrder(mature, orderSeed), matureRotation),
     };
   };
 
   if (options.mode === "quick") {
-    const fresh = priorityPools(unique.filter((phrase) => !practicedTodayIds.has(phrase.id)));
+    const practicedMatureCount = eligible.filter((phrase) => practicedTodayIds.has(phrase.id)
+      && sourceFor(phrase, nowTime) === "mature").length;
+    const matureRotation = (options.rotationCursor ?? 0) * target - practicedMatureCount;
+    const fresh = priorityPools(
+      unique.filter((phrase) => !practicedTodayIds.has(phrase.id)),
+      matureRotation,
+    );
     add(fresh.due);
     add(fresh.weak);
     add(fresh.mature);
 
-    const practiced = priorityPools(unique.filter((phrase) => practicedTodayIds.has(phrase.id)));
+    const practiced = priorityPools(
+      unique.filter((phrase) => practicedTodayIds.has(phrase.id)),
+      matureRotation,
+    );
     add(practiced.due);
     add(practiced.weak);
     add(practiced.mature);

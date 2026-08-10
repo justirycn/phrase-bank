@@ -50,6 +50,13 @@ const shanghaiDay = (value: Date | string) => {
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime()) ? undefined : shanghaiDayFormatter.format(date);
 };
+const compareTimestampAndId = (
+  leftTimestamp: string,
+  leftId: string,
+  rightTimestamp: string,
+  rightId: string,
+) => new Date(leftTimestamp).getTime() - new Date(rightTimestamp).getTime()
+  || leftId.localeCompare(rightId);
 
 export function useTrainingSession({
   repository,
@@ -84,6 +91,12 @@ export function useTrainingSession({
   const finishingRef = useRef(false);
   const finishPromiseRef = useRef<Promise<void>>();
   const speechPreferencesRef = useRef<SpeechPreferences>({ accent: "en-US", autoSpeak: true });
+  const nowRef = useRef(now);
+  const readNow = useCallback(() => nowRef.current(), []);
+
+  useEffect(() => {
+    nowRef.current = now;
+  }, [now]);
 
   const replaceQueue = useCallback((next: TrainingCandidate[]) => {
     queueRef.current = next;
@@ -99,7 +112,7 @@ export function useTrainingSession({
     if (finishingRef.current && !whileFinishing) return Promise.resolve();
     const session = sessionRef.current;
     if (!session) return Promise.resolve();
-    const timestamp = now().toISOString();
+    const timestamp = readNow().toISOString();
     session.phraseIds = queueRef.current.map((candidate) => candidate.phrase.id);
     session.sources = queueRef.current.map((candidate) => candidate.source);
     session.currentIndex = indexRef.current;
@@ -114,7 +127,7 @@ export function useTrainingSession({
       .then(() => repository.saveTrainingSession(snapshot));
     sessionWriteRef.current = write;
     return write;
-  }, [now, repository]);
+  }, [readNow, repository]);
 
   const persistProposedIndex = useCallback(async (proposedIndex: number): Promise<boolean> => {
     if (finishingRef.current) return false;
@@ -125,7 +138,7 @@ export function useTrainingSession({
       phraseIds: queueRef.current.map((candidate) => candidate.phrase.id),
       sources: queueRef.current.map((candidate) => candidate.source),
       currentIndex: proposedIndex,
-      updatedAt: now().toISOString(),
+      updatedAt: readNow().toISOString(),
     };
     const write = sessionWriteRef.current
       .catch(() => undefined)
@@ -135,7 +148,7 @@ export function useTrainingSession({
     if (finishingRef.current) return false;
     Object.assign(session, snapshot);
     return true;
-  }, [now, repository]);
+  }, [readNow, repository]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -189,7 +202,12 @@ export function useTrainingSession({
             .filter((id) => id === currentPhraseId).length;
           const phraseEvents = events
             .filter((event) => event.sessionId === active.id && event.phraseId === currentPhraseId)
-            .sort((left, right) => left.occurredAt.localeCompare(right.occurredAt));
+            .sort((left, right) => compareTimestampAndId(
+              left.occurredAt,
+              left.id,
+              right.occurredAt,
+              right.id,
+            ));
           if (phraseEvents.length > priorOccurrences) {
             const evaluation = phraseEvents[priorOccurrences];
             evaluatedRef.current = true;
@@ -203,15 +221,18 @@ export function useTrainingSession({
         return;
       }
 
-      const started = now();
+      const started = readNow();
       const startedDay = shanghaiDay(started);
       const todayEvents = events.filter((event) => shanghaiDay(event.occurredAt) === startedDay);
-      const practicedTodayIds = new Set(todayEvents.map((event) => event.phraseId));
       const latestTodayEventByPhrase = new Map<string, TrainingEvent>();
       for (const event of todayEvents) {
         const latest = latestTodayEventByPhrase.get(event.phraseId);
-        if (!latest || event.occurredAt.localeCompare(latest.occurredAt) > 0
-          || (event.occurredAt === latest.occurredAt && event.id.localeCompare(latest.id) > 0)) {
+        if (!latest || compareTimestampAndId(
+          event.occurredAt,
+          event.id,
+          latest.occurredAt,
+          latest.id,
+        ) > 0) {
           latestTodayEventByPhrase.set(event.phraseId, event);
         }
       }
@@ -220,11 +241,16 @@ export function useTrainingSession({
         .map((event) => event.phraseId));
       const completedToday = snapshot.trainingSessions
         .filter((session) => Boolean(session.completedAt) && shanghaiDay(session.completedAt!) === startedDay)
-        .sort((left, right) => {
-          const completionDifference = left.completedAt!.localeCompare(right.completedAt!);
-          if (completionDifference) return completionDifference;
-          return left.id.localeCompare(right.id);
-        });
+        .sort((left, right) => compareTimestampAndId(
+          left.completedAt!,
+          left.id,
+          right.completedAt!,
+          right.id,
+        ));
+      const practicedTodayIds = new Set([
+        ...todayEvents.map((event) => event.phraseId),
+        ...completedToday.flatMap((session) => session.phraseIds),
+      ]);
       const previousGroupIds = new Set(completedToday.at(-1)?.phraseIds ?? []);
       const phrasesById = new Map(phrases.map((phrase) => [phrase.id, phrase]));
       const persistedNewCount = new Set(todayEvents.filter((event) => event.source === "new")
@@ -274,7 +300,7 @@ export function useTrainingSession({
       setInitializationError("训练内容暂时无法加载，请检查本地数据后重试。");
     });
     return () => { cancelled = true; };
-  }, [mode, newIntroducedToday, now, persistSession, repository, replaceIndex, replaceQueue, seed]);
+  }, [mode, newIntroducedToday, persistSession, readNow, repository, replaceIndex, replaceQueue, seed]);
 
   useEffect(() => {
     lastInteractionRef.current = Date.now();
@@ -341,7 +367,7 @@ export function useTrainingSession({
     const current = queueRef.current[indexRef.current];
     if (!session || !current) return;
     if (!pendingEventRef.current) {
-      const occurredAt = now();
+      const occurredAt = readNow();
       const activeSecondsSnapshot = session.activeSeconds;
       pendingEventRef.current = {
         activeSecondsSnapshot,
@@ -361,7 +387,7 @@ export function useTrainingSession({
     const pending = pendingEventRef.current;
     await repository.submitTrainingReview(pending.event);
     eventActiveBaseRef.current = pending.activeSecondsSnapshot;
-  }, [now, repository]);
+  }, [readNow, repository]);
 
   const resetItemState = useCallback(() => {
     setUsedHint(false);
@@ -470,7 +496,7 @@ export function useTrainingSession({
     recorder.dispose();
     const completion = (async () => {
       if (session && !session.completedAt) {
-        const finishedAt = now();
+        const finishedAt = readNow();
         await persistSession(true);
         await repository.completeTrainingSession(session.id, finishedAt);
         session.completedAt = finishedAt.toISOString();
@@ -484,7 +510,7 @@ export function useTrainingSession({
       finishPromiseRef.current = undefined;
       throw error;
     }
-  }, [now, persistSession, recorder, repository, speech]);
+  }, [persistSession, readNow, recorder, repository, speech]);
 
   return {
     phase,
