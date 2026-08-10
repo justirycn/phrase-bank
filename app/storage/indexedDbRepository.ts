@@ -2,6 +2,7 @@ import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import type { BackupEnvelope, BackupEnvelopeV2, Category, Phrase, PhraseLearningState, ReviewLog, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
 import { scheduleReview } from "../domain/review";
 import { personalPhraseDefaults, validateSystemContentPackage } from "../domain/systemContent";
+import { applyLearningResult, nextExampleToUnlock } from "../domain/learningProgress";
 import { defaultCategories } from "./seed";
 import { STARTER_PHRASES } from "./starterPhrases";
 import type { PhraseRepository } from "./repository";
@@ -108,12 +109,23 @@ export class LocalPhraseRepository implements PhraseRepository {
   }
   async submitReview(id: string, result: ReviewResult, now = new Date()) {
     const db = await this.db();
-    const tx = db.transaction(["phrases", "reviewLogs"], "readwrite");
+    const tx = db.transaction(["phrases", "reviewLogs", "phraseLearningState"], "readwrite");
     const phrase = await tx.objectStore("phrases").get(id);
     if (!phrase) throw new Error("找不到这条语言块");
     const scheduled = scheduleReview(phrase, result, now);
     await tx.objectStore("phrases").put(scheduled.phrase);
     await tx.objectStore("reviewLogs").put(scheduled.log);
+    const stateStore = tx.objectStore("phraseLearningState");
+    const currentState = await stateStore.get(id) ?? { phraseId: id, masteredDates: [], updatedAt: now.toISOString() };
+    const nextState = applyLearningResult(currentState, result, now);
+    await stateStore.put(nextState);
+    if (phrase.origin === "system") {
+      const parentId = phrase.kind === "core" ? phrase.id : phrase.parentPhraseId;
+      const examples = parentId ? await tx.objectStore("phrases").index("by-parent").getAll(parentId) : [];
+      const states = await stateStore.getAll();
+      const unlock = nextExampleToUnlock(phrase, examples, [...states.filter(({ phraseId }) => phraseId !== id), nextState]);
+      if (unlock) await stateStore.put({ ...(await stateStore.get(unlock.id))!, unlockedAt: now.toISOString(), updatedAt: now.toISOString() });
+    }
     await tx.done;
   }
   async listCategories() { return (await (await this.db()).getAll("categories")).sort((a, b) => a.createdAt.localeCompare(b.createdAt)); }
@@ -155,7 +167,7 @@ export class LocalPhraseRepository implements PhraseRepository {
   }
   async submitTrainingReview(event: TrainingEvent) {
     const db = await this.db();
-    const tx = db.transaction(["trainingEvents", "phrases", "reviewLogs"], "readwrite");
+    const tx = db.transaction(["trainingEvents", "phrases", "reviewLogs", "phraseLearningState"], "readwrite");
     const eventStore = tx.objectStore("trainingEvents");
     if (await eventStore.get(event.id)) {
       await tx.done;
@@ -171,6 +183,18 @@ export class LocalPhraseRepository implements PhraseRepository {
     const scheduled = scheduleReview(phrase, event.result, new Date(event.occurredAt));
     await phraseStore.put(scheduled.phrase);
     await tx.objectStore("reviewLogs").put(scheduled.log);
+    const stateStore = tx.objectStore("phraseLearningState");
+    const reviewTime = new Date(event.occurredAt);
+    const currentState = await stateStore.get(phrase.id) ?? { phraseId: phrase.id, masteredDates: [], updatedAt: event.occurredAt };
+    const nextState = applyLearningResult(currentState, event.result, reviewTime);
+    await stateStore.put(nextState);
+    if (phrase.origin === "system") {
+      const parentId = phrase.kind === "core" ? phrase.id : phrase.parentPhraseId;
+      const examples = parentId ? await phraseStore.index("by-parent").getAll(parentId) : [];
+      const states = await stateStore.getAll();
+      const unlock = nextExampleToUnlock(phrase, examples, [...states.filter(({ phraseId }) => phraseId !== phrase.id), nextState]);
+      if (unlock) await stateStore.put({ ...(await stateStore.get(unlock.id))!, unlockedAt: event.occurredAt, updatedAt: event.occurredAt });
+    }
     await eventStore.put(event);
     await tx.done;
   }

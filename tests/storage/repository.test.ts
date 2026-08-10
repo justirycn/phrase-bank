@@ -48,6 +48,17 @@ describe("LocalPhraseRepository", () => {
     expect(await repo.getPhrase("sys-example")).toBeUndefined();
   });
 
+  it("atomically records mastery dates and unlocks one example at a time", async () => {
+    await repo.installSystemContentPackage(contentPackage("v1"));
+    const event = (id: string, phraseId: string, occurredAt: string): TrainingEvent => ({ id, sessionId: "s", phraseId, source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt });
+    await repo.submitTrainingReview(event("core-1", "sys-core", "2026-08-09T08:00:00.000Z"));
+    await repo.submitTrainingReview(event("core-same", "sys-core", "2026-08-09T12:00:00.000Z"));
+    expect((await repo.listPhraseLearningStates()).find(({ phraseId }) => phraseId === "sys-core")?.masteredDates).toEqual(["2026-08-09"]);
+    expect((await repo.listPhraseLearningStates()).find(({ phraseId }) => phraseId === "sys-example")?.unlockedAt).toBeUndefined();
+    await repo.submitTrainingReview(event("core-2", "sys-core", "2026-08-10T08:00:00.000Z"));
+    expect((await repo.listPhraseLearningStates()).find(({ phraseId }) => phraseId === "sys-example")?.unlockedAt).toBe("2026-08-10T08:00:00.000Z");
+  });
+
   it("seeds the eight default categories once", async () => {
     expect(await repo.listCategories()).toHaveLength(8);
     expect(await repo.listPhrases()).toHaveLength(40);
