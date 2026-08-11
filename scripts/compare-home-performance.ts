@@ -1,6 +1,6 @@
 import "fake-indexeddb/auto";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { runHomeDataBenchmark } from "../tests/support/homeDataBenchmark";
 import { stopChildProcess } from "./processLifecycle";
@@ -62,17 +62,39 @@ async function measureBuild(root: string, port: number) {
   return { ...buildMetrics(root), htmlBytes: await htmlBytes(root, port) };
 }
 
+interface ComparisonReport {
+  generatedByRunner: true;
+  command: string;
+  baseline: {
+    sha: string; sourceTree: string; build: Awaited<ReturnType<typeof measureBuild>>;
+    startupSource: { exportSnapshotCallSites: number; note: string };
+    homeDataBenchmark: { available: false; reason: string };
+  };
+  current: {
+    sha: string; sourceTree: string; build: Awaited<ReturnType<typeof measureBuild>>;
+    startupSource: { exportSnapshotCallSites: number };
+    homeDataBenchmark: Awaited<ReturnType<typeof runHomeDataBenchmark>>;
+  };
+  cleanup: {
+    tempRoot: string; dependencyJunctionRemoved: boolean; tempDirectoryRemoved: boolean;
+    verifiedResidueCount?: number; worktreeRegistrationCreated?: boolean;
+  };
+}
+
 mkdirSync(shortTempRoot, { recursive: true });
+const preexistingTempDirectories = readdirSync(shortTempRoot).filter((name) => name.startsWith("phb-"));
+if (preexistingTempDirectories.length) throw new Error(`Refusing to run with pre-existing comparison directories: ${preexistingTempDirectories.join(", ")}`);
 const temp = mkdtempSync(join(shortTempRoot, "phb-"));
 const baselineRoot = join(temp, "src");
 const archive = join(temp, "baseline.tar");
 let dependencyLinkCreated = false;
-let report: unknown;
+let report: ComparisonReport | undefined;
 let runError: unknown;
 let cleanupError: unknown;
 try {
   mkdirSync(baselineRoot);
   const baselineSha = execFileSync("git", ["rev-parse", baselineRef], { cwd: projectRoot, encoding: "utf8" }).trim();
+  const baselineSourceTree = execFileSync("git", ["rev-parse", `${baselineSha}:app`], { cwd: projectRoot, encoding: "utf8" }).trim();
   execFileSync("git", ["archive", "--format=tar", `--output=${archive}`, baselineSha], { cwd: projectRoot });
   execFileSync("tar", ["-xf", archive, "-C", baselineRoot]);
   unlinkSync(archive);
@@ -82,15 +104,17 @@ try {
   const currentBuild = await measureBuild(projectRoot, 4282);
   const currentBenchmark = await runHomeDataBenchmark();
   const currentSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: projectRoot, encoding: "utf8" }).trim();
+  const currentSourceTree = execFileSync("git", ["rev-parse", "HEAD:app"], { cwd: projectRoot, encoding: "utf8" }).trim();
   report = {
+    generatedByRunner: true,
     command: "npm run benchmark:home-before-after",
     baseline: {
-      sha: baselineSha, build: baselineBuild,
+      sha: baselineSha, sourceTree: baselineSourceTree, build: baselineBuild,
       startupSource: { ...startupSourceMetrics(baselineRoot), note: "Static PhraseBankApp source count; the baseline predates the bounded home-data boundary." },
       homeDataBenchmark: { available: false, reason: "Baseline has no loadHomeData boundary, so 2,000-phrase bounded rows/service-ready are not equivalent or measurable." },
     },
-    current: { sha: currentSha, build: currentBuild, startupSource: startupSourceMetrics(projectRoot), homeDataBenchmark: currentBenchmark },
-    cleanup: { tempRoot: shortTempRoot, worktreeRegistrationCreated: false, dependencyJunctionRemoved: true, tempDirectoryRemoved: true },
+    current: { sha: currentSha, sourceTree: currentSourceTree, build: currentBuild, startupSource: startupSourceMetrics(projectRoot), homeDataBenchmark: currentBenchmark },
+    cleanup: { tempRoot: shortTempRoot, dependencyJunctionRemoved: true, tempDirectoryRemoved: true },
   };
 } catch (error) {
   runError = error;
@@ -113,4 +137,22 @@ try {
 }
 if (cleanupError) throw cleanupError;
 if (runError) throw runError;
+if (!report) throw new Error("Comparison completed without a report");
+const verifiedResidueCount = readdirSync(shortTempRoot).filter((name) => name.startsWith("phb-")).length;
+const worktreeList = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: projectRoot, encoding: "utf8" });
+report.cleanup.verifiedResidueCount = verifiedResidueCount;
+report.cleanup.worktreeRegistrationCreated = worktreeList.replaceAll("/", "\\").toLowerCase().includes(temp.toLowerCase());
+if (verifiedResidueCount !== 0) throw new Error(`Comparison left ${verifiedResidueCount} phb-* temporary directories`);
+if (report.cleanup.worktreeRegistrationCreated) throw new Error(`Comparison left a Git worktree registration for ${temp}`);
+if (process.argv.includes("--write")) {
+  const metricsPath = join(projectRoot, "docs/audits/home-heatmap-performance/metrics.json");
+  const metrics = JSON.parse(readFileSync(metricsPath, "utf8"));
+  metrics.beforeAfter = report;
+  metrics.build.before = { sha: report.baseline.sha, ...report.baseline.build };
+  metrics.build.current = { ...metrics.build.current, ...report.current.build };
+  metrics.homeDataBenchmark = { ...metrics.homeDataBenchmark, ...report.current.homeDataBenchmark };
+  const pendingPath = `${metricsPath}.pending`;
+  writeFileSync(pendingPath, `${JSON.stringify(metrics, null, 2)}\n`, "utf8");
+  renameSync(pendingPath, metricsPath);
+}
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

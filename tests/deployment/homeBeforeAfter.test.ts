@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 describe("reproducible home before/after evidence", () => {
@@ -21,8 +22,16 @@ describe("reproducible home before/after evidence", () => {
     expect(comparison.cleanup.tempDirectoryRemoved).toBe(true);
     expect(comparison.cleanup.worktreeRegistrationCreated).toBe(false);
     expect(comparison.cleanup.verifiedResidueCount).toBe(0);
+    expect(comparison.generatedByRunner).toBe(true);
+    const currentAppTree = execFileSync("git", ["rev-parse", "HEAD:app"], { cwd: process.cwd(), encoding: "utf8" }).trim();
+    expect(comparison.current.sourceTree).toBe(currentAppTree);
+    expect(comparison.baseline.sourceTree).toMatch(/^[0-9a-f]{40}$/);
     expect(metrics.build.before.homeChunkBytes).toBe(comparison.baseline.build.homeChunkBytes);
     expect(metrics.build.current.homeChunkBytes).toBe(comparison.current.build.homeChunkBytes);
     expect(metrics.homeDataBenchmark.rows).toEqual(comparison.current.homeDataBenchmark.rows);
+    const readme = readFileSync(`${process.cwd()}/docs/audits/home-heatmap-performance/README.md`, "utf8");
+    expect(readme).toContain(comparison.current.sha);
+    expect(readme).toContain(comparison.current.sourceTree);
+    expect(readme).toContain("evidence commit");
   });
 });

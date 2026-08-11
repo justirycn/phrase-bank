@@ -12,7 +12,7 @@
     "test": "vitest run",
     "test:home-performance": "npm run build && vitest run tests/deployment/homePerformance.test.ts tests/deployment/homeAuditArtifacts.test.ts tests/deployment/homeBeforeAfter.test.ts tests/support/homeBuildPerformance.test.ts tests/support/homeDataBenchmark.test.ts tests/support/processLifecycle.test.ts",
     "benchmark:home-data": "tsx scripts/measure-home-data.ts",
-    "benchmark:home-before-after": "tsx scripts/compare-home-performance.ts",
+    "benchmark:home-before-after": "tsx scripts/compare-home-performance.ts --write",
     "test:watch": "vitest",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "content:generate": "tsx scripts/generate-system-content.ts",
