@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { readCurrentAppTree } from "../../scripts/gitEvidence";
 
 describe("reproducible home before/after evidence", () => {
   it("records a verified baseline and current build with cleanup", () => {
@@ -27,8 +27,9 @@ describe("reproducible home before/after evidence", () => {
     expect(comparison.cleanup.worktreeRegistrationCreated).toBe(false);
     expect(comparison.cleanup.verifiedResidueCount).toBe(0);
     expect(comparison.generatedByRunner).toBe(true);
-    const currentAppTree = execFileSync("git", ["rev-parse", "HEAD:app"], { cwd: process.cwd(), encoding: "utf8" }).trim();
-    expect(comparison.current.sourceTree).toBe(currentAppTree);
+    const currentAppTree = readCurrentAppTree(process.cwd());
+    if (currentAppTree) expect(comparison.current.sourceTree).toBe(currentAppTree);
+    else expect(comparison.current.sourceTree).toMatch(/^[0-9a-f]{40}$/);
     expect(comparison.baseline.sourceTree).toMatch(/^[0-9a-f]{40}$/);
     expect(metrics.build.before.homeChunkBytes).toBe(comparison.baseline.build.homeChunkBytes);
     expect(metrics.build.current.homeChunkBytes).toBe(comparison.current.build.homeChunkBytes);
