@@ -74,7 +74,7 @@ describe("Qwen content pipeline", () => {
 
     const failedDir = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-failed-"));
     await expect(runQwenAgent({ client: fakeClient(responseQueue("fail")), version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1", outputDir: failedDir })).rejects.toThrow();
-    expect(await readdir(failedDir)).toEqual([]);
+    expect(await readdir(failedDir)).not.toContain("candidate-2026.08.2.json");
   });
 
   it("rejects a batch that changes stable source IDs", async () => {
@@ -108,5 +108,19 @@ describe("Qwen content pipeline", () => {
 
     await expect(buildQwenCandidate({ client, version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1" })).resolves.toMatchObject({ version: "2026.08.2" });
     expect(client.complete).toHaveBeenCalledTimes(121);
+  });
+
+  it("resumes after the last reviewed checkpoint without repeating completed calls", async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-resume-"));
+    const firstRun = responseQueue();
+    firstRun[3] = JSON.stringify({ status: "fail", issues: ["retry later"], corrections: [] });
+    await expect(runQwenAgent({ client: fakeClient(firstRun), version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1", outputDir })).rejects.toThrow("审校未通过");
+    expect(await readdir(outputDir)).toContain("checkpoint-2026.08.2.json");
+
+    const remaining = responseQueue().slice(2);
+    const resumedClient = fakeClient(remaining);
+    await expect(runQwenAgent({ client: resumedClient, version: "2026.08.2", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v1", outputDir })).resolves.toBeTruthy();
+    expect(resumedClient.complete).toHaveBeenCalledTimes(118);
+    expect(await readdir(outputDir)).not.toContain("checkpoint-2026.08.2.json");
   });
 });
