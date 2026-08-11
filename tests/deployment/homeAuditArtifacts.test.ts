@@ -34,4 +34,15 @@ describe("home performance audit evidence", () => {
     expect(readme).toContain("not Safari");
     expect(readme).toContain("not a public-network measurement");
   });
+
+  it("records the deterministic large-library benchmark and bounded rows", () => {
+    const metrics = JSON.parse(readFileSync(`${auditRoot}/metrics.json`, "utf8"));
+    expect(metrics.homeDataBenchmark.fixture).toEqual({
+      seed: 20260811, phrases: 2000, categories: 10, learningStates: 2000,
+      events: 10080, trainingSessions: 1440,
+    });
+    expect(metrics.homeDataBenchmark.calls.exportSnapshot).toBe(0);
+    expect(metrics.homeDataBenchmark.rows).toEqual({ trainingEvents: 6636, trainingSessions: 948, heatmapDays: 84 });
+    expect(metrics.homeDataBenchmark.regressionBudgetMilliseconds).toBe(5000);
+  });
 });

@@ -61,19 +61,23 @@ export function analyzeHomeBuildManifest(input: {
 
   const bootstrap = input.rscAssets.bootstrapScriptContent?.match(/import\(["']\/([^"']+\.js)["']\)/)?.[1];
   const initialFiles = [...new Set([...(homeReference.js ?? []), ...(input.clientAssets.appBootstrapPreinitModules ?? []), ...(bootstrap ? [bootstrap] : [])].map(normalize))].sort();
+  for (const file of initialFiles) {
+    if (input.sizes[file] === undefined) throw new Error(`Production manifest references missing initial asset: ${file}`);
+  }
   const screenChunks = Object.fromEntries(SCREEN_MODULES.map((module) => {
     const name = module.match(/([^/]+)\.tsx$/)?.[1];
     const chunk = (input.clientAssets.dynamicPreloads[module] ?? []).map(normalize)
       .find((file) => file.includes(`/chunks/${name}-`) && file.endsWith(".js"));
     if (!chunk) throw new Error(`Production manifest does not contain a distinct chunk for ${module}.`);
+    if (input.sizes[chunk] === undefined) throw new Error(`Production manifest references missing screen asset: ${chunk}`);
     return [module, chunk];
   }));
 
   return {
     homeChunk,
-    homeChunkBytes: input.sizes[homeChunk] ?? 0,
+    homeChunkBytes: input.sizes[homeChunk],
     initialFiles,
-    initialJavaScriptBytes: initialFiles.reduce((sum, file) => sum + (input.sizes[file] ?? 0), 0),
+    initialJavaScriptBytes: initialFiles.reduce((sum, file) => sum + input.sizes[file], 0),
     screenChunks,
   };
 }

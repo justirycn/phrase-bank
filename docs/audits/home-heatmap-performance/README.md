@@ -8,17 +8,17 @@ This is a Codex in-app browser run at a **390×844 CSS viewport**. It is **not a
 
 The explicit viewport remained 390×844 after five browser zoom shortcuts, so the attempted 200% check did not produce a verifiable 200% text-zoom state. `04-home-zoom-attempt-no-effect.jpg` is retained as evidence of that limitation, not as a passing 200% result.
 
-The browser-control surface did not expose a reliable, reversible way to inject an IndexedDB heatmap failure or a network chunk failure. Those paths are covered by automated component tests, but no visual screenshot is claimed. Initial loading is likewise covered by the deferred-storage component test; the local production transition completed too quickly to capture honestly.
+The first run did not expose a reliable, reversible way to inject an IndexedDB heatmap failure or a network chunk failure. A later temporary local audit route was prepared for skeleton/error capture and removed before commit, but the in-app browser connection was no longer available (`browsers.list()` returned no browsers). Those paths remain covered by automated component tests, but no missing visual screenshot is claimed. Initial loading is covered by the deferred-storage component test.
 
-## Build comparison
+## Current production build
 
-Both builds used the same installed dependencies and `npm run build`. The before build is detached commit `aa71730`, immediately before the non-home screen split; the after build is `abc34db`.
+The committed evidence only reports the current reproducible `npm run build`. A historical detached build was attempted, but Windows long-path cleanup left a physical temporary directory. Because that run did not satisfy the no-residue requirement, its numbers were removed rather than retained as a supported before comparison.
 
-| Uncompressed production JavaScript | Before | After | Change |
-| --- | ---: | ---: | ---: |
-| `PhraseBankApp` chunk | 163,832 B | 55,212 B | -66.3% |
-| Initial JS set from the RSC/client asset manifests | 531,262 B | 483,723 B | -8.9% |
-| Distinct non-home screen chunks | 0 | 6 | +6 |
+| Uncompressed production JavaScript | Current |
+| --- | ---: |
+| `PhraseBankApp` chunk | 55,212 B |
+| Initial JS set from the RSC/client asset manifests | 483,723 B |
+| Distinct non-home screen chunks | 6 |
 
 The enforceable limits are 63,500 B for the home coordinator and 556,500 B for initial JavaScript. They are derived from the optimized build with approximately 15% headroom. The test discovers hashed files through `vinext-client-assets.js` and `__vite_rsc_assets_manifest.js`; it does not pin hashes or absolute filenames.
 
@@ -32,6 +32,19 @@ Current screen chunks:
 - Practice: 18,221 B
 - Review: 2,557 B
 - Settings: 5,865 B
+
+## Deterministic 2,000-phrase data benchmark
+
+Run `npm run benchmark:home-data`. It creates a uniquely named fake IndexedDB database through the production `LocalPhraseRepository`, imports a deterministic fixture, then invokes the production `loadHomeData` boundary.
+
+- Seed: `20260811`
+- Fixture: 10 categories, 2,000 phrases, 2,000 learning states, 10,080 events, 1,440 sessions
+- Startup calls: each of the eight bounded/core home reads exactly once; `exportSnapshot` zero times
+- Returned bounded history: 6,636 events and 948 sessions; heatmap 84 days
+- Current service-ready observation: 117.21 ms
+- Regression ceiling: 5,000 ms
+
+The ceiling is intentionally generous so slower CI machines do not turn this into a flaky microbenchmark. It detects catastrophic unbounded/loading regressions; it is not a Web Vital. The exact deterministic counts and call contract are asserted in the full test suite.
 
 ## 390×844 CSS viewport findings
 

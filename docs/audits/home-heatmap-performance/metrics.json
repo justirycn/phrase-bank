@@ -7,11 +7,19 @@
     "limitations": ["not a real iPhone", "not Safari", "not a public-network measurement"]
   },
   "build": {
-    "beforeCommit": "aa71730",
-    "afterCommit": "abc34db",
-    "before": { "homeChunkBytes": 163832, "initialJavaScriptBytes": 531262, "nonHomeScreenChunks": 0 },
-    "after": { "homeChunkBytes": 55212, "initialJavaScriptBytes": 483723, "nonHomeScreenChunks": 6 },
+    "before": null,
+    "beforeReason": "A clean no-residue historical build was not available; unsupported historical numbers were removed.",
+    "current": { "homeChunkBytes": 55212, "initialJavaScriptBytes": 483723, "nonHomeScreenChunks": 6 },
     "budgets": { "homeChunkBytes": 63500, "initialJavaScriptBytes": 556500 }
+  },
+  "homeDataBenchmark": {
+    "command": "npm run benchmark:home-data",
+    "fixture": { "seed": 20260811, "phrases": 2000, "categories": 10, "learningStates": 2000, "events": 10080, "trainingSessions": 1440 },
+    "calls": { "listPhrases": 1, "listCategories": 1, "listDuePhrases": 1, "listTrainingEvents": 1, "listTrainingSessions": 1, "listPhraseLearningStates": 1, "getActiveTrainingSession": 1, "getActiveLearningSession": 1, "exportSnapshot": 0 },
+    "rows": { "trainingEvents": 6636, "trainingSessions": 948, "heatmapDays": 84 },
+    "serviceReadyMilliseconds": 117.2085,
+    "regressionBudgetMilliseconds": 5000,
+    "budgetNote": "The ceiling is deliberately generous; this is a regression smoke budget, not a microbenchmark or Web Vital."
   },
   "layout": {
     "innerWidth": 390,

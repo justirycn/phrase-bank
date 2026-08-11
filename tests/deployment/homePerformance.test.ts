@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   analyzeHomeBuild,
@@ -6,10 +7,40 @@ import {
   SCREEN_MODULES,
 } from "../support/homeBuildPerformance";
 
+function staticLocalDependencyGraph(entry: string) {
+  const root = process.cwd();
+  const pending = [resolve(root, entry)];
+  const visited = new Set<string>();
+  while (pending.length) {
+    const file = pending.pop()!;
+    if (visited.has(file)) continue;
+    visited.add(file);
+    const source = readFileSync(file, "utf8");
+    for (const match of source.matchAll(/(?:import|export)\s+(?:type\s+)?(?:[^"']*?\s+from\s+)?["'](\.[^"']+)["']/g)) {
+      const base = resolve(dirname(file), match[1]);
+      const target = [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`].find(existsSync);
+      if (target) pending.push(target);
+    }
+  }
+  return [...visited].map((file) => relative(root, file).replaceAll("\\", "/")).sort();
+}
+
 describe("optimized home production contract", () => {
-  it("does not export a full backup while starting the home screen", () => {
-    const source = readFileSync(`${process.cwd()}/app/PhraseBankApp.tsx`, "utf8");
-    expect(source).not.toContain("exportSnapshot(");
+  it("keeps exportSnapshot outside every home-startup dependency", () => {
+    const startupModules = staticLocalDependencyGraph("app/PhraseBankApp.tsx");
+    expect(startupModules).toEqual(expect.arrayContaining([
+      "app/PhraseBankApp.tsx", "app/hooks/useHomeData.ts", "app/services/homeData.ts",
+    ]));
+    for (const modulePath of startupModules) {
+      expect(readFileSync(`${process.cwd()}/${modulePath}`, "utf8"), modulePath).not.toMatch(/\.(?:exportSnapshot)\s*\(/);
+    }
+    expect(readFileSync(`${process.cwd()}/app/components/screens/SettingsScreen.tsx`, "utf8"))
+      .toContain("repository.exportSnapshot()");
+    const appCalls = [...startupModules, "app/components/screens/SettingsScreen.tsx"].flatMap((modulePath) => {
+      const source = readFileSync(`${process.cwd()}/${modulePath}`, "utf8");
+      return [...source.matchAll(/\b(?:repository|repo)\.exportSnapshot\(\)/g)].map(() => modulePath);
+    });
+    expect(appCalls).toEqual(["app/components/screens/SettingsScreen.tsx"]);
   });
 
 });
