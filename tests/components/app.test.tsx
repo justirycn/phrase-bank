@@ -245,7 +245,7 @@ describe("PhraseBankApp", () => {
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: /学习新句/ }));
     await user.click(await screen.findByRole("button", { name: "开始小测试" }));
-    await user.click(await screen.findByRole("button", { name: "查看答案" }));
+    await user.click(await screen.findByRole("button", { name: "开始自评" }));
     await user.click(await screen.findByRole("button", { name: /掌握/ }));
     await screen.findByRole("heading", { name: "本组学习完成" });
     await user.click(screen.getByRole("button", { name: "返回首页" }));
