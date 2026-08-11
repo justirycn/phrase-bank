@@ -98,9 +98,9 @@ export function NewPhraseLearning({ controller, onHome }: {
     </header>
 
     <main className="new-learning-card">
-      {!isStudy && <p className="eyebrow">先回想英文表达</p>}
+      {!isStudy && <p className="eyebrow">中英对照学习</p>}
       {!isStudy && <h1>{current.chinese}</h1>}
-      {showAnswer && <div className="new-learning-answer">
+      <div className="new-learning-answer">
         {isStudy && <h1 className="new-learning-english">{current.english}</h1>}
         {!isStudy && <h2 className="new-learning-english">{current.english}</h2>}
         {isStudy && <p className="new-learning-chinese">{current.chinese}</p>}
@@ -118,7 +118,7 @@ export function NewPhraseLearning({ controller, onHome }: {
             </li>)}
           </ol>
         </section>}
-      </div>}
+      </div>
     </main>
 
     {(controller.error || status) && <p className="new-learning-status" role="status">
@@ -133,7 +133,7 @@ export function NewPhraseLearning({ controller, onHome }: {
         {index + 1 >= controller.total ? "开始小测试" : "下一句"}
       </button>}
       {!isStudy && !controller.revealed && <button type="button" className="primary" disabled={disabled} onClick={() => { void run(controller.reveal); }}>
-        查看答案
+        开始自评
       </button>}
       {!isStudy && controller.revealed && <div className="new-learning-grades" aria-label="自我评分">
         <button type="button" disabled={disabled} onClick={() => grade("again")}>不会</button>

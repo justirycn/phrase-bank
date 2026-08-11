@@ -63,7 +63,7 @@ describe("NewPhraseLearning", () => {
     expect(screen.queryByText("使用场景")).not.toBeInTheDocument();
   });
 
-  it("keeps test answers out of the DOM until the controller reveals and rerenders", async () => {
+  it("keeps new-phrase learning bilingual before self-rating", async () => {
     const user = userEvent.setup();
     const reveal = vi.fn(async () => undefined);
     function Harness() {
@@ -77,10 +77,10 @@ describe("NewPhraseLearning", () => {
     render(<Harness />);
     expect(screen.getByText("5 / 5")).toBeVisible();
     expect(screen.getByText(phrase.chinese)).toBeVisible();
-    expect(screen.queryByText(phrase.english)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: phrase.english })).toBeVisible();
     expect(screen.queryByText(phrase.intent)).not.toBeInTheDocument();
     expect(screen.queryByText("例句")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "查看答案" }));
+    await user.click(screen.getByRole("button", { name: "开始自评" }));
     expect(reveal).toHaveBeenCalledOnce();
     expect(screen.getByRole("heading", { name: phrase.english })).toBeVisible();
     expect(screen.getByRole("button", { name: "重听标准发音" })).toBeVisible();
@@ -123,7 +123,7 @@ describe("NewPhraseLearning", () => {
     const user = userEvent.setup();
     const hidden = controller({ phase: "test", busy: true });
     const view = render(<NewPhraseLearning controller={hidden} onHome={vi.fn()} />);
-    const reveal = screen.getByRole("button", { name: "查看答案" });
+    const reveal = screen.getByRole("button", { name: "开始自评" });
     expect(reveal).toBeDisabled();
     await user.click(reveal);
     expect(hidden.reveal).not.toHaveBeenCalled();
