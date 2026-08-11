@@ -10,6 +10,7 @@
     "build": "vinext build",
     "start": "vinext start",
     "test": "vitest run",
+    "test:home-performance": "npm run build && vitest run tests/deployment/homePerformance.test.ts tests/deployment/homeAuditArtifacts.test.ts tests/support/homeBuildPerformance.test.ts",
     "test:watch": "vitest",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "content:generate": "tsx scripts/generate-system-content.ts",
