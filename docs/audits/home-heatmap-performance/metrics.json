@@ -145,6 +145,18 @@
     184,
     185
   ],
+  "visualAcceptance": {
+    "environment": "local Chrome extension production server",
+    "cssViewport": { "width": 390, "height": 844 },
+    "notClaims": ["not IAB", "not Safari", "not a real iPhone", "not a public-network measurement"],
+    "states": {
+      "skeleton": { "statusVisible": true, "horizontalOverflow": false, "scrollWidth": 390, "clientWidth": 390 },
+      "heatmapError": { "retryVisible": true, "enabledEntryCount": 3, "horizontalOverflow": false, "entryBottoms": [393, 487, 548] },
+      "heatmapRetry": { "cellCount": 84, "columns": 12, "horizontalOverflow": false, "firstCellAccessibleName": "5月18日，未学习" },
+      "cssEquivalent200": { "auditLabelVisible": true, "browserZoom": false, "enabledEntryCount": 3, "horizontalOverflow": false, "scrollHeight": 1763 },
+      "realNonHomeReturn": { "screen": "library", "returnedHome": true, "cellCount": 84, "enabledNavActions": 4, "horizontalOverflow": false, "bottomNavigationHeightCssPx": 76, "bottomNavigationAtViewportBottom": true, "mainBottomPaddingCssPx": 88 }
+    }
+  },
   "localHttp": {
     "cold": [
       {

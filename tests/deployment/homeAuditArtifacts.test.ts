@@ -25,6 +25,28 @@ describe("home performance audit evidence", () => {
     expect(jpegDimensions("02-library-fallback-390x844.jpg")).toEqual({ width: 390, height: 844 });
     expect(jpegDimensions("03-library-loaded-390x844.jpg")).toEqual({ width: 375, height: 812 });
     expect(jpegDimensions("04-home-zoom-attempt-no-effect.jpg")).toEqual({ width: 375, height: 812 });
+    expect(jpegDimensions("05-initial-skeleton-chrome-390x844.jpg")).toEqual({ width: 390, height: 844 });
+    for (const name of [
+      "06-heatmap-error-chrome-390x844.jpg",
+      "07-heatmap-retry-chrome-390x844.jpg",
+      "08-css-equivalent-200-chrome-390x844.jpg",
+      "09-real-library-screen-chrome-390x844.jpg",
+      "10-real-home-return-chrome-390x844.jpg",
+    ]) expect(jpegDimensions(name)).toEqual({ width: 375, height: 812 });
+  });
+
+  it("records honest Chrome-only visual acceptance observations", () => {
+    const metrics = JSON.parse(readFileSync(`${auditRoot}/metrics.json`, "utf8"));
+    expect(metrics.visualAcceptance.environment).toEqual("local Chrome extension production server");
+    expect(metrics.visualAcceptance.cssViewport).toEqual({ width: 390, height: 844 });
+    expect(metrics.visualAcceptance.notClaims).toEqual(expect.arrayContaining(["not IAB", "not Safari", "not a real iPhone"]));
+    expect(metrics.visualAcceptance.states).toEqual(expect.objectContaining({
+      skeleton: expect.objectContaining({ statusVisible: true }),
+      heatmapError: expect.objectContaining({ retryVisible: true, enabledEntryCount: 3 }),
+      heatmapRetry: expect.objectContaining({ cellCount: 84 }),
+      cssEquivalent200: expect.objectContaining({ auditLabelVisible: true, browserZoom: false }),
+      realNonHomeReturn: expect.objectContaining({ returnedHome: true }),
+    }));
   });
 
   it("discloses the local viewport and non-device limitations", () => {

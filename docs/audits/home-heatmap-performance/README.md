@@ -76,3 +76,20 @@ The browser screenshot backend returned JPEG bytes even though the initial filen
 | `04-home-zoom-attempt-no-effect.jpg` | Zoom attempt; viewport unchanged | 375×812 |
 
 The machine-readable observations are in `metrics.json`.
+
+## Completed local Chrome visual acceptance
+
+Captures `05` through `10` were recorded against the local production server with the connected Chrome extension at a 390x844 CSS viewport. This added evidence is **not IAB**, **not Safari**, **not a real iPhone**, and **not a public-network measurement**.
+
+A temporary local-only audit route rendered the production components and styles in deterministic initial-loading, heatmap-error/retry, and CSS-equivalent 200% states. It was removed before the final production build and commit. The 200% state used an explicitly labelled `font-size: 200%` audit wrapper; it is not browser zoom. The non-home return evidence used the real, unmodified `PhraseBankApp`, navigating from home to the lazy-loaded library and back to home.
+
+| File | State | Raw export size |
+| --- | --- | ---: |
+| `05-initial-skeleton-chrome-390x844.jpg` | Initial loading status | 390x844 |
+| `06-heatmap-error-chrome-390x844.jpg` | Heatmap error; retry visible and three entries enabled | 375x812 |
+| `07-heatmap-retry-chrome-390x844.jpg` | Retry restored 84 cells in 12 columns | 375x812 |
+| `08-css-equivalent-200-chrome-390x844.jpg` | CSS-equivalent 200% audit; not browser zoom | 375x812 |
+| `09-real-library-screen-chrome-390x844.jpg` | Real `PhraseBankApp` non-home library | 375x812 |
+| `10-real-home-return-chrome-390x844.jpg` | Real library-to-home return | 375x812 |
+
+Every measured Chrome state had no horizontal overflow. The fixed 76 px bottom navigation ended at the viewport bottom and the home main area retained 88 px bottom padding. All four navigation actions and all three home learning/review/practice entries were enabled in the inspected states. The heatmap exposed 84 list items with date-and-learning-state accessible names, including `5月18日，未学习`.
