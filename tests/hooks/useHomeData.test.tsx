@@ -128,6 +128,32 @@ describe("useHomeData", () => {
     window.removeEventListener("unhandledrejection", unhandled);
   });
 
+  it("safely ignores a resolved home load after unmount", async () => {
+    const repo = repository();
+    const pending = deferred<HomeData>();
+    vi.spyOn(homeDataService, "loadHomeData").mockReturnValueOnce(pending.promise);
+    const unhandled = vi.fn();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    window.addEventListener("unhandledrejection", unhandled);
+    try {
+      const hook = renderHook(() => useHomeData(repo));
+      hook.unmount();
+      pending.resolve(data("late success"));
+      await pending.promise;
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      expect(unhandled).not.toHaveBeenCalled();
+      const unmountedUpdateWarnings = consoleError.mock.calls.filter((arguments_) =>
+        arguments_.some((value) => typeof value === "string"
+          && /(?:state update|update).*(?:unmounted|unmount)|unmounted.*(?:state update|update)/i.test(value)),
+      );
+      expect(unmountedUpdateWarnings).toEqual([]);
+    } finally {
+      window.removeEventListener("unhandledrejection", unhandled);
+      consoleError.mockRestore();
+    }
+  });
+
   it("keeps an isolated initial heatmap error out of controller error", async () => {
     vi.spyOn(homeDataService, "loadHomeData").mockResolvedValueOnce(data("core", { heatmapError: "学习足迹暂时无法加载" }));
     const repo = repository();
