@@ -4,10 +4,13 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSyn
 import { basename, join, relative } from "node:path";
 import { runHomeDataBenchmark } from "../tests/support/homeDataBenchmark";
 import { stopChildProcess } from "./processLifecycle";
+import { assertCleanAppTree } from "./performanceEvidenceGuard";
 
 const baselineRef = "aa717301";
 const projectRoot = process.cwd();
 const shortTempRoot = "C:\\Temp";
+const appStatus = execFileSync("git", ["status", "--porcelain", "--untracked-files=all", "--", "app"], { cwd: projectRoot, encoding: "utf8" });
+assertCleanAppTree(appStatus);
 
 const vinextCli = join(projectRoot, "node_modules/vinext/dist/cli.js");
 function parseDefaultExport(path: string) {

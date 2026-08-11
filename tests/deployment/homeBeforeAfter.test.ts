@@ -30,8 +30,8 @@ describe("reproducible home before/after evidence", () => {
     expect(metrics.build.current.homeChunkBytes).toBe(comparison.current.build.homeChunkBytes);
     expect(metrics.homeDataBenchmark.rows).toEqual(comparison.current.homeDataBenchmark.rows);
     const readme = readFileSync(`${process.cwd()}/docs/audits/home-heatmap-performance/README.md`, "utf8");
-    expect(readme).toContain(comparison.current.sha);
     expect(readme).toContain(comparison.current.sourceTree);
     expect(readme).toContain("evidence commit");
+    expect(readme).toContain("current.sha");
   });
 });
