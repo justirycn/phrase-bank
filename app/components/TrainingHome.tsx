@@ -4,7 +4,7 @@ import { AppIcon } from "./AppIcon";
 import { LearningHeatmap } from "./LearningHeatmap";
 import { WeeklySummary, type WeeklyFocusPhrase } from "./WeeklySummary";
 
-export function TrainingHome({ dailySummary, streak, weeklySummary, focusPhrases, learnedToday, nextLearningCount, themeName, activeLearning, activeRemaining, dueCount, practiceCount, heatmapDays = [], heatmapError, onRetryHeatmap, onStartLearning, onStartStandard, onStartQuick }: {
+export function TrainingHome({ dailySummary, streak, weeklySummary, focusPhrases, learnedToday, nextLearningCount, themeName, activeLearning, activeRemaining, dueCount, practiceCount, heatmapDays, heatmapError, onRetryHeatmap, onStartLearning, onStartStandard, onStartQuick }: {
   dailySummary: DailyTrainingResult; streak: TrainingStreak; weeklySummary: WeeklySummaryType;
   focusPhrases?: WeeklyFocusPhrase[];
   learnedToday: number; nextLearningCount: number; themeName?: string; activeLearning?: boolean; activeRemaining?: number; dueCount: number; practiceCount: number;
@@ -23,6 +23,6 @@ export function TrainingHome({ dailySummary, streak, weeklySummary, focusPhrases
       <button className="quick-start" onClick={onStartQuick}><AppIcon name="play" size={21} />三分钟速练 <small>{practiceCount} 句已学可练 · 每组最多 3 句</small></button>
     </div>
     <WeeklySummary streak={streak} summary={weeklySummary} focusPhrases={focusPhrases} />
-    <LearningHeatmap days={heatmapDays} error={heatmapError} onRetry={onRetryHeatmap} />
+    {heatmapDays !== undefined || heatmapError ? <LearningHeatmap days={heatmapDays ?? []} error={heatmapError} onRetry={onRetryHeatmap} /> : null}
   </div>;
 }

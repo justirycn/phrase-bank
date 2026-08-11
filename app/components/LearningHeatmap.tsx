@@ -1,8 +1,10 @@
 import type { LearningHeatmapDay } from "../domain/learningHeatmap";
 
 export function heatmapDayLabel(day: LearningHeatmapDay): string {
-  const [, month = "", date = ""] = day.date.split("-");
-  const calendarLabel = `${Number(month)}月${Number(date)}日`;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day.date);
+  const parsed = match ? new Date(`${day.date}T00:00:00Z`) : undefined;
+  const valid = parsed && !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === day.date;
+  const calendarLabel = valid && match ? `${Number(match[2])}月${Number(match[3])}日` : "日期未知";
   if (day.future) return `${calendarLabel}，未来日期`;
   return day.count === 0 ? `${calendarLabel}，未学习` : `${calendarLabel}，完成${day.count}句`;
 }

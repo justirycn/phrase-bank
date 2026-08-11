@@ -4,7 +4,10 @@ import type { LearningHeatmapDay } from "../../app/domain/learningHeatmap";
 import { LearningHeatmap } from "../../app/components/LearningHeatmap";
 
 const day = (date: string, count: number, level: LearningHeatmapDay["level"], future = false): LearningHeatmapDay => ({ date, count, level, future });
-const days = Array.from({ length: 84 }, (_, index) => day(`2026-08-${String(index + 1).padStart(2, "0")}`, 0, 0));
+const days = Array.from({ length: 84 }, (_, index) => {
+  const date = new Date(Date.UTC(2026, 5, 1 + index)).toISOString().slice(0, 10);
+  return day(date, 0, 0);
+});
 
 describe("LearningHeatmap", () => {
   it("renders the compact 12-week footprint", () => {
@@ -49,5 +52,16 @@ describe("LearningHeatmap", () => {
     expect(screen.queryByRole("listitem")).not.toBeInTheDocument();
     rerender(<LearningHeatmap days={days.slice(0, 1)} />);
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
+  });
+
+  it("uses a safe label for malformed or impossible calendar dates", () => {
+    render(<LearningHeatmap days={[
+      day("not-a-date", 0, 0),
+      day("2026-02-30", 2, 1),
+      day("2026-00-10", 0, 0, true),
+    ]} />);
+    expect(screen.getByLabelText("日期未知，未学习")).toBeInTheDocument();
+    expect(screen.getByLabelText("日期未知，完成2句")).toBeInTheDocument();
+    expect(screen.getByLabelText("日期未知，未来日期")).toBeInTheDocument();
   });
 });

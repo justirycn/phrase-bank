@@ -11,6 +11,12 @@ const base = {
 };
 
 describe("TrainingHome heatmap", () => {
+  it("hides the footprint until heatmap props are supplied", () => {
+    render(<TrainingHome {...base} heatmapDays={undefined} heatmapError={undefined} />);
+    expect(screen.queryByRole("region", { name: "最近 12 周学习足迹" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "学习足迹" })).not.toBeInTheDocument();
+  });
+
   it("renders it after the weekly summary and preserves all entries", () => {
     const { container } = render(<TrainingHome {...base} heatmapDays={[{ date: "2026-08-10", count: 0, level: 0, future: false }]} />);
     const weekly = container.querySelector(".weekly-summary");
