@@ -21,6 +21,23 @@ interface PhraseBankDb extends DBSchema {
   learningSessions: { key: string; value: LearningSessionRecord; indexes: { "by-updated": string } };
 }
 
+const ACTIVE_TRAINING_SESSION_KEY = "activeTrainingSessionId";
+const ACTIVE_LEARNING_SESSION_KEY = "activeLearningSessionId";
+
+interface ActiveSessionCursor {
+  value: { id: string; completedAt?: string };
+  continue(): Promise<ActiveSessionCursor | null>;
+}
+
+async function newestActiveSessionId(openCursor: () => Promise<ActiveSessionCursor | null>) {
+  let cursor = await openCursor();
+  while (cursor) {
+    if (!cursor.value.completedAt) return cursor.value.id;
+    cursor = await cursor.continue();
+  }
+  return undefined;
+}
+
 function cursorAfterDeletion(phraseIds: string[], cursor: number, deletedIds: Set<string>) {
   return phraseIds.slice(0, Math.min(cursor, phraseIds.length)).filter((id) => !deletedIds.has(id)).length;
 }
@@ -96,7 +113,7 @@ export class LocalPhraseRepository implements PhraseRepository {
 
   private db() {
     if (!this.dbPromise) {
-      this.dbPromise = openDB<PhraseBankDb>(this.dbName, 4, {
+      this.dbPromise = openDB<PhraseBankDb>(this.dbName, 5, {
         async upgrade(db, oldVersion, _newVersion, transaction) {
           if (oldVersion < 1) {
             const phrases = db.createObjectStore("phrases", { keyPath: "id" });
@@ -152,6 +169,13 @@ export class LocalPhraseRepository implements PhraseRepository {
               cursor = await cursor.continue();
             }
           }
+          if (oldVersion < 5) {
+            const metadata = transaction.objectStore("metadata");
+            const activeTrainingId = await newestActiveSessionId(() => transaction.objectStore("trainingSessions").index("by-updated").openCursor(null, "prev"));
+            const activeLearningId = await newestActiveSessionId(() => transaction.objectStore("learningSessions").index("by-updated").openCursor(null, "prev"));
+            if (activeTrainingId) await metadata.put({ key: ACTIVE_TRAINING_SESSION_KEY, value: activeTrainingId });
+            if (activeLearningId) await metadata.put({ key: ACTIVE_LEARNING_SESSION_KEY, value: activeLearningId });
+          }
         },
       });
     }
@@ -205,7 +229,7 @@ export class LocalPhraseRepository implements PhraseRepository {
   async savePhrase(phrase: Phrase) { await (await this.db()).put("phrases", phrase); }
   async deletePhrase(id: string) {
     const db = await this.db();
-    const tx = db.transaction(["phrases", "phraseLearningState", "reviewLogs", "trainingEvents", "trainingSessions", "learningSessions"], "readwrite");
+    const tx = db.transaction(["phrases", "phraseLearningState", "reviewLogs", "trainingEvents", "trainingSessions", "learningSessions", "metadata"], "readwrite");
     try {
       const phraseStore = tx.objectStore("phrases");
       const deletedIds = new Set([id]);
@@ -264,6 +288,13 @@ export class LocalPhraseRepository implements PhraseRepository {
         assertValidLearningSession(remapped);
         await learningStore.put(remapped);
       }
+      const metadata = tx.objectStore("metadata");
+      const activeTrainingId = await newestActiveSessionId(() => trainingStore.index("by-updated").openCursor(null, "prev"));
+      const activeLearningId = await newestActiveSessionId(() => learningStore.index("by-updated").openCursor(null, "prev"));
+      if (activeTrainingId) await metadata.put({ key: ACTIVE_TRAINING_SESSION_KEY, value: activeTrainingId });
+      else await metadata.delete(ACTIVE_TRAINING_SESSION_KEY);
+      if (activeLearningId) await metadata.put({ key: ACTIVE_LEARNING_SESSION_KEY, value: activeLearningId });
+      else await metadata.delete(ACTIVE_LEARNING_SESSION_KEY);
       await tx.done;
     } catch (error) {
       try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }
@@ -341,19 +372,44 @@ export class LocalPhraseRepository implements PhraseRepository {
           : undefined;
     return (await this.db()).getAllFromIndex("trainingEvents", "by-occurred", range);
   }
-  async saveTrainingSession(session: TrainingSessionRecord) { await (await this.db()).put("trainingSessions", session); }
+  async saveTrainingSession(session: TrainingSessionRecord) {
+    const db = await this.db();
+    const tx = db.transaction(["trainingSessions", "metadata"], "readwrite");
+    const store = tx.objectStore("trainingSessions");
+    await store.put(session);
+    const activeId = await newestActiveSessionId(() => store.index("by-updated").openCursor(null, "prev"));
+    if (activeId) await tx.objectStore("metadata").put({ key: ACTIVE_TRAINING_SESSION_KEY, value: activeId });
+    else await tx.objectStore("metadata").delete(ACTIVE_TRAINING_SESSION_KEY);
+    await tx.done;
+  }
+  async listTrainingSessions(from?: Date, to?: Date) {
+    const range = from && to
+      ? IDBKeyRange.bound(from.toISOString(), to.toISOString())
+      : from
+        ? IDBKeyRange.lowerBound(from.toISOString())
+        : to
+          ? IDBKeyRange.upperBound(to.toISOString())
+          : undefined;
+    return (await this.db()).getAllFromIndex("trainingSessions", "by-updated", range);
+  }
   async getActiveTrainingSession() {
-    const sessions = await (await this.db()).getAllFromIndex("trainingSessions", "by-updated");
-    return sessions.reverse().find((session) => !session.completedAt);
+    const db = await this.db();
+    const pointer = await db.get("metadata", ACTIVE_TRAINING_SESSION_KEY);
+    if (!pointer) return undefined;
+    const session = await db.get("trainingSessions", pointer.value);
+    return session && !session.completedAt ? session : undefined;
   }
   async completeTrainingSession(id: string, completedAt: Date) {
     const db = await this.db();
-    const tx = db.transaction("trainingSessions", "readwrite");
+    const tx = db.transaction(["trainingSessions", "metadata"], "readwrite");
     const store = tx.objectStore("trainingSessions");
     const session = await store.get(id);
     if (!session) throw new Error("找不到训练会话");
     const timestamp = completedAt.toISOString();
     await store.put({ ...session, completedAt: timestamp, updatedAt: timestamp });
+    const activeId = await newestActiveSessionId(() => store.index("by-updated").openCursor(null, "prev"));
+    if (activeId) await tx.objectStore("metadata").put({ key: ACTIVE_TRAINING_SESSION_KEY, value: activeId });
+    else await tx.objectStore("metadata").delete(ACTIVE_TRAINING_SESSION_KEY);
     await tx.done;
   }
   async submitTrainingReview(event: TrainingEvent) {
@@ -409,7 +465,7 @@ export class LocalPhraseRepository implements PhraseRepository {
   async savePhraseLearningState(state: PhraseLearningState) { await (await this.db()).put("phraseLearningState", state); }
   async saveLearningSession(session: LearningSessionRecord) {
     const db = await this.db();
-    const tx = db.transaction(["learningSessions", "phrases", "categories"], "readwrite");
+    const tx = db.transaction(["learningSessions", "phrases", "categories", "metadata"], "readwrite");
     try {
       const store = tx.objectStore("learningSessions");
       const [sessions, phraseKeys, categoryKeys] = await Promise.all([
@@ -427,6 +483,9 @@ export class LocalPhraseRepository implements PhraseRepository {
       const resultingActiveCount = otherActive.length + (session.completedAt ? 0 : 1);
       if (resultingActiveCount > 1) throw new Error("已有进行中的学习会话");
       await store.put(session);
+      const activeId = await newestActiveSessionId(() => store.index("by-updated").openCursor(null, "prev"));
+      if (activeId) await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEY, value: activeId });
+      else await tx.objectStore("metadata").delete(ACTIVE_LEARNING_SESSION_KEY);
       await tx.done;
     } catch (error) {
       try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }
@@ -435,12 +494,15 @@ export class LocalPhraseRepository implements PhraseRepository {
     }
   }
   async getActiveLearningSession() {
-    const sessions = await (await this.db()).getAllFromIndex("learningSessions", "by-updated");
-    return sessions.reverse().find((session) => !session.completedAt);
+    const db = await this.db();
+    const pointer = await db.get("metadata", ACTIVE_LEARNING_SESSION_KEY);
+    if (!pointer) return undefined;
+    const session = await db.get("learningSessions", pointer.value);
+    return session && !session.completedAt ? session : undefined;
   }
   async completeLearningSession(id: string, completedAt: Date) {
     const db = await this.db();
-    const tx = db.transaction("learningSessions", "readwrite");
+    const tx = db.transaction(["learningSessions", "metadata"], "readwrite");
     const store = tx.objectStore("learningSessions");
     const session = await store.get(id);
     if (!session) throw new Error("找不到学习会话");
@@ -452,11 +514,14 @@ export class LocalPhraseRepository implements PhraseRepository {
     assertValidLearningSession(completed);
     assertMonotonicLearningSession(session, completed);
     await store.put(completed);
+    const activeId = await newestActiveSessionId(() => store.index("by-updated").openCursor(null, "prev"));
+    if (activeId) await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEY, value: activeId });
+    else await tx.objectStore("metadata").delete(ACTIVE_LEARNING_SESSION_KEY);
     await tx.done;
   }
   async submitFirstLearningReview(event: TrainingEvent, nextSession: LearningSessionRecord) {
     const db = await this.db();
-    const tx = db.transaction(["trainingEvents", "phrases", "reviewLogs", "phraseLearningState", "learningSessions"], "readwrite");
+    const tx = db.transaction(["trainingEvents", "phrases", "reviewLogs", "phraseLearningState", "learningSessions", "metadata"], "readwrite");
     try {
       assertValidLearningSession(nextSession);
       const eventStore = tx.objectStore("trainingEvents");
@@ -489,6 +554,7 @@ export class LocalPhraseRepository implements PhraseRepository {
         if (!canCatchUp) throw new Error("首次测试记录状态不一致");
         assertMonotonicLearningSession(session, nextSession);
         await sessionStore.put(nextSession);
+        await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEY, value: nextSession.id });
         await tx.done;
         return;
       }
@@ -538,6 +604,7 @@ export class LocalPhraseRepository implements PhraseRepository {
       }
       await eventStore.put(event);
       await sessionStore.put(nextSession);
+      await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEY, value: nextSession.id });
       await tx.done;
     } catch (error) {
       try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }
@@ -648,6 +715,12 @@ export class LocalPhraseRepository implements PhraseRepository {
       await put("trainingSessions", normalized.trainingSessions);
       await put("phraseLearningState", normalized.phraseLearningStates);
       await put("learningSessions", normalized.learningSessions);
+      const activeTrainingId = await newestActiveSessionId(() => tx.objectStore("trainingSessions").index("by-updated").openCursor(null, "prev"));
+      const activeLearningId = await newestActiveSessionId(() => tx.objectStore("learningSessions").index("by-updated").openCursor(null, "prev"));
+      if (activeTrainingId) await tx.objectStore("metadata").put({ key: ACTIVE_TRAINING_SESSION_KEY, value: activeTrainingId });
+      else await tx.objectStore("metadata").delete(ACTIVE_TRAINING_SESSION_KEY);
+      if (activeLearningId) await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEY, value: activeLearningId });
+      else await tx.objectStore("metadata").delete(ACTIVE_LEARNING_SESSION_KEY);
       if (normalized.activeSystemContentVersion) await tx.objectStore("metadata").put({ key: "activeSystemContentVersion", value: normalized.activeSystemContentVersion });
       await tx.done;
     } catch (error) {
