@@ -15,6 +15,7 @@ function homeRepository() {
 
 afterEach(() => {
   vi.doUnmock("../../app/components/screens/LibraryScreen");
+  vi.doUnmock("../../app/components/screens/AddPhraseScreen");
   vi.resetModules();
 });
 
@@ -57,5 +58,24 @@ describe("non-home screen loading", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(loadLibrary).toHaveBeenCalledTimes(2);
     consoleError.mockRestore();
+  }, 10_000);
+
+  it("keeps the newest screen when an older pending screen finishes after a quick switch", async () => {
+    const user = userEvent.setup();
+    let resolveLibrary!: (module: Record<string, unknown>) => void;
+    vi.doMock("../../app/components/screens/LibraryScreen", () => new Promise<Record<string, unknown>>((resolve) => { resolveLibrary = resolve; }));
+    vi.doMock("../../app/components/screens/AddPhraseScreen", () => ({ default: () => <h1>当前添加页</h1> }));
+    const { PhraseBankApp } = await import("../../app/PhraseBankApp");
+
+    render(<PhraseBankApp repository={homeRepository()} />);
+    await user.click(await screen.findByRole("button", { name: "句库" }));
+    expect(await screen.findByRole("status", { name: "正在打开句库" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "添加" }));
+    expect(await screen.findByRole("heading", { name: "当前添加页" })).toBeVisible();
+
+    resolveLibrary({ default: () => <h1>过期句库</h1> });
+    await Promise.resolve();
+    expect(screen.getByRole("heading", { name: "当前添加页" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "过期句库" })).not.toBeInTheDocument();
   }, 10_000);
 });

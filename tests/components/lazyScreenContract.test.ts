@@ -17,4 +17,18 @@ describe("non-home screen chunk contract", () => {
     expect(new Set(specifiers).size).toBe(6);
     expect(source).not.toContain("NonHomeScreens");
   });
+
+  it("shares one speech service across lazy learning and practice without sharing the recorder", () => {
+    const learning = readFileSync(`${process.cwd()}/app/components/screens/LearningScreen.tsx`, "utf8");
+    const practice = readFileSync(`${process.cwd()}/app/components/screens/PracticeScreen.tsx`, "utf8");
+    const sharedSpeech = readFileSync(`${process.cwd()}/app/components/screens/screenSpeech.ts`, "utf8");
+
+    expect(learning).toContain('from "./screenSpeech"');
+    expect(practice).toContain('from "./screenSpeech"');
+    expect(learning).not.toContain("new BrowserSpeechService");
+    expect(practice).not.toContain("new BrowserSpeechService");
+    expect(sharedSpeech.match(/new BrowserSpeechService/g)).toHaveLength(1);
+    expect(learning).not.toContain("TemporaryRecorder");
+    expect(practice).toContain("new TemporaryRecorder");
+  });
 });
