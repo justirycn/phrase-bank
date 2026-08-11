@@ -62,6 +62,29 @@ describe("buildLearningHeatmap", () => {
     expect(days.find((day) => day.date === "2026-08-11")?.count).toBe(1);
   });
 
+  it("ignores runtime-corrupted fields without hiding valid events", () => {
+    const corruptedPhraseId = {
+      ...event("bad-phrase", "placeholder", "2026-08-11T07:00:00.000Z"),
+      phraseId: 42,
+    } as unknown as TrainingEvent;
+    const corruptedOccurredAt = {
+      ...event("bad-date", "bad-date", "2026-08-11T07:00:00.000Z"),
+      occurredAt: {},
+    } as unknown as TrainingEvent;
+    const events = [
+      corruptedPhraseId,
+      corruptedOccurredAt,
+      event("valid-among-corruption", "kept", "2026-08-11T07:59:00.000Z"),
+    ];
+
+    expect(() => buildLearningHeatmap(
+      events,
+      new Date("2026-08-11T08:00:00.000Z"),
+    )).not.toThrow();
+    const days = buildLearningHeatmap(events, new Date("2026-08-11T08:00:00.000Z"));
+    expect(days.find((day) => day.date === "2026-08-11")?.count).toBe(1);
+  });
+
   it("counts persisted events independently of every source and review result variant", () => {
     const fixtures: Array<[TrainingSource, ReviewResult]> = [
       ["due", "again"],

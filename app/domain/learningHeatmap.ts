@@ -62,7 +62,8 @@ export function buildLearningHeatmap(
   const phraseIdsByDate = new Map<string, Set<string>>();
 
   for (const event of events) {
-    const phraseId = event.phraseId?.trim();
+    if (typeof event.phraseId !== "string" || typeof event.occurredAt !== "string") continue;
+    const phraseId = event.phraseId.trim();
     if (!phraseId) continue;
     const occurredAt = new Date(event.occurredAt);
     if (Number.isNaN(occurredAt.getTime()) || occurredAt.getTime() > now.getTime()) continue;
