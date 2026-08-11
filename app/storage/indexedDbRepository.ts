@@ -342,6 +342,16 @@ export class LocalPhraseRepository implements PhraseRepository {
     return (await this.db()).getAllFromIndex("trainingEvents", "by-occurred", range);
   }
   async saveTrainingSession(session: TrainingSessionRecord) { await (await this.db()).put("trainingSessions", session); }
+  async listTrainingSessions(from?: Date, to?: Date) {
+    const range = from && to
+      ? IDBKeyRange.bound(from.toISOString(), to.toISOString())
+      : from
+        ? IDBKeyRange.lowerBound(from.toISOString())
+        : to
+          ? IDBKeyRange.upperBound(to.toISOString())
+          : undefined;
+    return (await this.db()).getAllFromIndex("trainingSessions", "by-updated", range);
+  }
   async getActiveTrainingSession() {
     const sessions = await (await this.db()).getAllFromIndex("trainingSessions", "by-updated");
     return sessions.reverse().find((session) => !session.completedAt);

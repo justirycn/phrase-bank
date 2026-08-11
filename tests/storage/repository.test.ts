@@ -211,6 +211,25 @@ describe("LocalPhraseRepository", () => {
     await expect(repo.completeTrainingSession("missing", completedAt)).rejects.toThrow();
   });
 
+  it("lists training sessions in inclusive updated-at ranges using index order", async () => {
+    const session = (id: string, updatedAt: string): TrainingSessionRecord => ({
+      id, mode: "quick", startedAt: updatedAt, updatedAt, phraseIds: [], currentIndex: 0, activeSeconds: 0,
+    });
+    await repo.saveTrainingSession(session("after", "2026-08-07T11:00:00.000Z"));
+    await repo.saveTrainingSession(session("from", "2026-08-07T09:00:00.000Z"));
+    await repo.saveTrainingSession(session("before", "2026-08-07T07:00:00.000Z"));
+    await repo.saveTrainingSession(session("to", "2026-08-07T10:00:00.000Z"));
+    await repo.saveTrainingSession(session("middle", "2026-08-07T09:30:00.000Z"));
+
+    const from = new Date("2026-08-07T09:00:00.000Z");
+    const to = new Date("2026-08-07T10:00:00.000Z");
+    expect((await repo.listTrainingSessions()).map(({ id }) => id)).toEqual(["before", "from", "middle", "to", "after"]);
+    expect((await repo.listTrainingSessions(from)).map(({ id }) => id)).toEqual(["from", "middle", "to", "after"]);
+    expect((await repo.listTrainingSessions(undefined, to)).map(({ id }) => id)).toEqual(["before", "from", "middle", "to"]);
+    expect((await repo.listTrainingSessions(from, to)).map(({ id }) => id)).toEqual(["from", "middle", "to"]);
+    expect((await repo.listTrainingSessions(from, from)).map(({ id }) => id)).toEqual(["from"]);
+  });
+
   it("persists speech preferences and falls back for corrupt metadata", async () => {
     expect(await repo.getSpeechPreferences()).toEqual({ accent: "en-US", autoSpeak: true });
     await repo.saveSpeechPreferences({ accent: "en-GB", autoSpeak: false });

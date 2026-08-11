@@ -15,6 +15,7 @@ export interface PhraseRepository {
   saveTrainingEvent(event: TrainingEvent): Promise<void>;
   listTrainingEvents(from?: Date, to?: Date): Promise<TrainingEvent[]>;
   saveTrainingSession(session: TrainingSessionRecord): Promise<void>;
+  listTrainingSessions(from?: Date, to?: Date): Promise<TrainingSessionRecord[]>;
   getActiveTrainingSession(): Promise<TrainingSessionRecord | undefined>;
   completeTrainingSession(id: string, completedAt: Date): Promise<void>;
   getSpeechPreferences(): Promise<SpeechPreferences>;
