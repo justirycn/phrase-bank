@@ -74,6 +74,36 @@ describe("useHomeData", () => {
     expect(result.current.error).toBe("本地数据暂时无法刷新，你仍然可以继续使用。");
   });
 
+  it("hides data from the previous repository while the replacement loads", async () => {
+    const a = repository(); const b = repository();
+    const replacement = deferred<HomeData>();
+    vi.spyOn(homeDataService, "loadHomeData")
+      .mockResolvedValueOnce(data("repository A"))
+      .mockReturnValueOnce(replacement.promise);
+    const hook = renderHook(({ repo }) => useHomeData(repo), { initialProps: { repo: a } });
+    await waitFor(() => expect(hook.result.current.data).toEqual(data("repository A")));
+
+    hook.rerender({ repo: b });
+
+    expect(hook.result.current).toMatchObject({ data: undefined, loading: true, error: "" });
+    replacement.resolve(data("repository B"));
+    await waitFor(() => expect(hook.result.current.data).toEqual(data("repository B")));
+  });
+
+  it("reports an initial error without stale data when a replacement repository fails", async () => {
+    const a = repository(); const b = repository();
+    vi.spyOn(homeDataService, "loadHomeData")
+      .mockResolvedValueOnce(data("repository A"))
+      .mockRejectedValueOnce(new Error("repository B unavailable"));
+    const hook = renderHook(({ repo }) => useHomeData(repo), { initialProps: { repo: a } });
+    await waitFor(() => expect(hook.result.current.data).toEqual(data("repository A")));
+
+    hook.rerender({ repo: b });
+
+    await waitFor(() => expect(hook.result.current.error).toBe("本地数据暂时无法打开，请刷新后重试。"));
+    expect(hook.result.current).toMatchObject({ data: undefined, loading: false });
+  });
+
   it("ignores late completion from a replaced repository", async () => {
     const a = repository(); const b = repository();
     const old = deferred<HomeData>(); const current = deferred<HomeData>();
@@ -121,11 +151,14 @@ describe("useHomeData", () => {
     const pending = deferred<HomeData>();
     vi.spyOn(homeDataService, "loadHomeData").mockReturnValueOnce(pending.promise);
     const unhandled = vi.fn(); window.addEventListener("unhandledrejection", unhandled);
-    const hook = renderHook(() => useHomeData(repository()));
-    hook.unmount(); pending.reject(new Error("late"));
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(unhandled).not.toHaveBeenCalled();
-    window.removeEventListener("unhandledrejection", unhandled);
+    try {
+      const hook = renderHook(() => useHomeData(repository()));
+      hook.unmount(); pending.reject(new Error("late"));
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("unhandledrejection", unhandled);
+    }
   });
 
   it("safely ignores a resolved home load after unmount", async () => {
