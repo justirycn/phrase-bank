@@ -46,3 +46,44 @@ describe("mobile phrase typography", () => {
     expect(primaryRule).toMatch(/color:#fff/);
   });
 });
+
+describe("iPhone new phrase learning styles", () => {
+  it("reserves the learning action tray and bottom safe area", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+
+    expect(css).toMatch(/\.new-phrase-learning\s*\{[^}]*padding-bottom:\s*calc\(196px \+ env\(safe-area-inset-bottom\)\)/s);
+    expect(css).toMatch(/\.new-learning-actions\s*\{[^}]*padding:[^;}]*calc\(16px \+ env\(safe-area-inset-bottom\)\)/s);
+  });
+
+  it("keeps learning controls comfortably tappable without iOS input zoom", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+
+    expect(css).toMatch(/\.new-learning-close\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s);
+    expect(css).toMatch(/\.new-learning-actions button\s*\{[^}]*min-height:\s*56px/s);
+    expect(css).toMatch(/\.new-learning-state-actions button[^}]*min-height:\s*44px/s);
+    expect(css).toMatch(/input,\s*textarea,\s*select\s*\{[^}]*font-size:\s*16px/s);
+  });
+
+  it("wraps long learning copy at every flex and grid boundary", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+    const english = css.match(/\.new-learning-english\s*\{([^}]*)\}/)?.[1] ?? "";
+
+    expect(english).toMatch(/white-space:\s*normal/);
+    expect(english).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(css).toMatch(/\.new-learning-card,\s*\.new-learning-answer[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/\.new-learning-chinese,[^}]*overflow-wrap:\s*anywhere/s);
+  });
+
+  it("stacks all three home entries cleanly on the iPhone width", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+    expect(css).toMatch(/@media\s*\(max-width:\s*390px\)\s*\{[\s\S]*?\.training-entry\s*\{[^}]*grid-template-columns:\s*1fr[\s\S]*?\.training-entry button\s*\{[^}]*width:\s*100%/);
+    expect(css).toMatch(/\.learning-start\s*\{[^}]*min-height:\s*88px/s);
+    expect(css).toMatch(/\.training-entry button > span\s*\{[^}]*min-width:\s*0/s);
+  });
+
+  it("removes learning motion when reduced motion is requested", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+
+    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.new-phrase-learning[^}]*animation:\s*none/s);
+  });
+});
