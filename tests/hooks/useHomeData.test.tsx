@@ -147,6 +147,44 @@ describe("useHomeData", () => {
     expect(result.current.data).toEqual(data("second"));
   });
 
+  it.each(["core-first", "heatmap-first"] as const)(
+    "preserves refreshed core data when an overlapping heatmap retry settles %s",
+    async (settlementOrder) => {
+      const repo = repository();
+      const core = deferred<HomeData>();
+      const heatmap = deferred<TrainingEvent[]>();
+      const clock = () => new Date("2026-08-10T12:00:00.000Z");
+      const original = data("old core", { heatmapError: "学习足迹暂时无法加载" });
+      const refreshed = data("new core", { categories: [{ id: "new category" }] as HomeData["categories"] });
+      const recoveredEvents = [event("recovered")];
+      vi.spyOn(homeDataService, "loadHomeData")
+        .mockResolvedValueOnce(original)
+        .mockReturnValueOnce(core.promise);
+      vi.mocked(repo.listTrainingEvents).mockReturnValueOnce(heatmap.promise);
+      const { result } = renderHook(() => useHomeData(repo, clock));
+      await waitFor(() => expect(result.current.data).toBe(original));
+
+      let refreshing!: Promise<void>; let retryingHeatmap!: Promise<void>;
+      act(() => {
+        refreshing = result.current.refresh();
+        retryingHeatmap = result.current.retryHeatmap();
+      });
+      if (settlementOrder === "core-first") {
+        core.resolve(refreshed); await act(() => refreshing);
+        heatmap.resolve(recoveredEvents); await act(() => retryingHeatmap);
+      } else {
+        heatmap.resolve(recoveredEvents); await act(() => retryingHeatmap);
+        core.resolve(refreshed); await act(() => refreshing);
+      }
+
+      expect(result.current.data?.phrases).toBe(refreshed.phrases);
+      expect(result.current.data?.categories).toBe(refreshed.categories);
+      expect(result.current.data?.events).toBe(recoveredEvents);
+      expect(result.current.data?.heatmapError).toBe("");
+      expect(result.current.data?.heatmap).toHaveLength(84);
+    },
+  );
+
   it("settles pending work after unmount without unhandled rejection", async () => {
     const pending = deferred<HomeData>();
     vi.spyOn(homeDataService, "loadHomeData").mockReturnValueOnce(pending.promise);
