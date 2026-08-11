@@ -7,17 +7,37 @@
     "limitations": ["not a real iPhone", "not Safari", "not a public-network measurement"]
   },
   "build": {
-    "before": null,
-    "beforeReason": "A clean no-residue historical build was not available; unsupported historical numbers were removed.",
+    "before": { "sha": "aa7173012058873031713ef3a9e81702a778d83b", "homeChunkBytes": 163832, "initialJavaScriptBytes": 531266, "htmlBytes": 446625 },
     "current": { "homeChunkBytes": 55212, "initialJavaScriptBytes": 483723, "nonHomeScreenChunks": 6 },
     "budgets": { "homeChunkBytes": 63500, "initialJavaScriptBytes": 556500 }
+  },
+  "beforeAfter": {
+    "command": "npm run benchmark:home-before-after",
+    "baseline": {
+      "sha": "aa7173012058873031713ef3a9e81702a778d83b",
+      "build": { "homeChunkBytes": 163832, "initialJavaScriptBytes": 531266, "htmlBytes": 446625 },
+      "startupSource": { "exportSnapshotCallSites": 1 },
+      "homeDataBenchmark": { "available": false, "reason": "The baseline predates loadHomeData, so bounded rows and service-ready duration have no equivalent boundary." }
+    },
+    "current": {
+      "sha": "ead3b862d9f8bb72237bfd38c9e8fb0b9008e2ab",
+      "build": { "homeChunkBytes": 55212, "initialJavaScriptBytes": 483723, "htmlBytes": 446904 },
+      "startupSource": { "exportSnapshotCallSites": 0 },
+      "homeDataBenchmark": {
+        "fixture": { "seed": 20260811, "phrases": 2000, "categories": 10, "learningStates": 2000, "events": 10080, "trainingSessions": 1440 },
+        "calls": { "listPhrases": 1, "listCategories": 1, "listDuePhrases": 1, "listTrainingEvents": 1, "listTrainingSessions": 1, "listPhraseLearningStates": 1, "getActiveTrainingSession": 1, "getActiveLearningSession": 1, "exportSnapshot": 0 },
+        "rows": { "trainingEvents": 6636, "trainingSessions": 948, "heatmapDays": 84 },
+        "serviceReadyMilliseconds": 151.14
+      }
+    },
+    "cleanup": { "tempRoot": "C:\\Temp", "worktreeRegistrationCreated": false, "dependencyJunctionRemoved": true, "tempDirectoryRemoved": true, "verifiedResidueCount": 0 }
   },
   "homeDataBenchmark": {
     "command": "npm run benchmark:home-data",
     "fixture": { "seed": 20260811, "phrases": 2000, "categories": 10, "learningStates": 2000, "events": 10080, "trainingSessions": 1440 },
     "calls": { "listPhrases": 1, "listCategories": 1, "listDuePhrases": 1, "listTrainingEvents": 1, "listTrainingSessions": 1, "listPhraseLearningStates": 1, "getActiveTrainingSession": 1, "getActiveLearningSession": 1, "exportSnapshot": 0 },
     "rows": { "trainingEvents": 6636, "trainingSessions": 948, "heatmapDays": 84 },
-    "serviceReadyMilliseconds": 117.2085,
+    "serviceReadyMilliseconds": 151.14,
     "regressionBudgetMilliseconds": 5000,
     "budgetNote": "The ceiling is deliberately generous; this is a regression smoke budget, not a microbenchmark or Web Vital."
   },

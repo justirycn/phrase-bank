@@ -10,17 +10,20 @@ The explicit viewport remained 390×844 after five browser zoom shortcuts, so th
 
 The first run did not expose a reliable, reversible way to inject an IndexedDB heatmap failure or a network chunk failure. A later temporary local audit route was prepared for skeleton/error capture and removed before commit, but the in-app browser connection was no longer available (`browsers.list()` returned no browsers). Those paths remain covered by automated component tests, but no missing visual screenshot is claimed. Initial loading is covered by the deferred-storage component test.
 
-## Current production build
+## Reproducible before/after production build
 
-The committed evidence only reports the current reproducible `npm run build`. A historical detached build was attempted, but Windows long-path cleanup left a physical temporary directory. Because that run did not satisfy the no-residue requirement, its numbers were removed rather than retained as a supported before comparison.
+Run `npm run benchmark:home-before-after`. The command resolves exact baseline SHA `aa7173012058873031713ef3a9e81702a778d83b`, exports it without registering a Git worktree into a unique `C:\Temp\phb-*` directory, links the existing dependency installation as a junction, and uses the same vinext CLI for both builds. It starts vinext directly as one Node child, terminates it, waits for `exit`, removes the dependency junction, removes the unique temporary directory, then verifies that directory is gone.
 
-| Uncompressed production JavaScript | Current |
-| --- | ---: |
-| `PhraseBankApp` chunk | 55,212 B |
-| Initial JS set from the RSC/client asset manifests | 483,723 B |
-| Distinct non-home screen chunks | 6 |
+| Production metric | Baseline | Current | Change |
+| --- | ---: | ---: | ---: |
+| `PhraseBankApp` chunk | 163,832 B | 55,212 B | -66.3% |
+| Initial JS set from manifests | 531,266 B | 483,723 B | -8.9% |
+| Local uncompressed HTML/RSC response | 446,625 B | 446,904 B | +0.1% |
+| Startup `exportSnapshot()` call sites | 1 | 0 | removed |
 
 The enforceable limits are 63,500 B for the home coordinator and 556,500 B for initial JavaScript. They are derived from the optimized build with approximately 15% headroom. The test discovers hashed files through `vinext-client-assets.js` and `__vite_rsc_assets_manifest.js`; it does not pin hashes or absolute filenames.
+
+The command was run repeatedly after the lifecycle fix. Every completed verification run ended with zero `C:\Temp\phb-*` residue; the final run reported the exact build values above and a current 2,000-phrase service-ready observation of 151.14 ms. The baseline has no `loadHomeData` boundary, so bounded rows and service-ready duration are explicitly unavailable rather than compared under a false equivalent. Deferred skeleton-to-home behavior is asserted by the React hook/component tests; no wall-clock test-render duration is published because jsdom scheduling is not a stable performance metric.
 
 Run the reproducible build-and-budget gate with `npm run test:home-performance`. Ordinary `npm test` still works in a clean checkout without `dist`; only the build-dependent assertions are skipped when no production manifest exists.
 
@@ -41,7 +44,7 @@ Run `npm run benchmark:home-data`. It creates a uniquely named fake IndexedDB da
 - Fixture: 10 categories, 2,000 phrases, 2,000 learning states, 10,080 events, 1,440 sessions
 - Startup calls: each of the eight bounded/core home reads exactly once; `exportSnapshot` zero times
 - Returned bounded history: 6,636 events and 948 sessions; heatmap 84 days
-- Current service-ready observation: 117.21 ms
+- Current service-ready observation: 151.14 ms
 - Regression ceiling: 5,000 ms
 
 The ceiling is intentionally generous so slower CI machines do not turn this into a flaky microbenchmark. It detects catastrophic unbounded/loading regressions; it is not a Web Vital. The exact deterministic counts and call contract are asserted in the full test suite.
