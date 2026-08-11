@@ -270,7 +270,7 @@ describe("PhraseBankApp", () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: "添加" }));
-    const learnFirst = screen.getByRole("checkbox", { name: /先在.*学习新句.*认识/ });
+    const learnFirst = await screen.findByRole("checkbox", { name: /先在.*学习新句.*认识/ });
     expect(learnFirst).toBeChecked();
     await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Newest personal phrase");
     await user.type(screen.getByRole("textbox", { name: "中文含义" }), "新的个人句子");
