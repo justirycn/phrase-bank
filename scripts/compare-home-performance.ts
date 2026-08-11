@@ -5,8 +5,9 @@ import { basename, join, relative } from "node:path";
 import { runHomeDataBenchmark } from "../tests/support/homeDataBenchmark";
 import { stopChildProcess } from "./processLifecycle";
 import { assertCleanAppTree } from "./performanceEvidenceGuard";
+import { analyzeStartupSource, type StartupSourceMetrics } from "./startupDependencyMetrics";
 
-const baselineRef = "aa717301";
+const baselineRef = "3e20260";
 const projectRoot = process.cwd();
 const shortTempRoot = "C:\\Temp";
 const appStatus = execFileSync("git", ["status", "--porcelain", "--untracked-files=all", "--", "app"], { cwd: projectRoot, encoding: "utf8" });
@@ -40,10 +41,6 @@ function buildMetrics(root: string) {
   for (const file of initial) if (allSizes[file] === undefined) throw new Error(`Missing initial asset ${file}`);
   return { homeChunkBytes: allSizes[homeChunk], initialJavaScriptBytes: initial.reduce((sum, file) => sum + allSizes[file], 0) };
 }
-function startupSourceMetrics(root: string) {
-  const source = readFileSync(join(root, "app/PhraseBankApp.tsx"), "utf8");
-  return { exportSnapshotCallSites: [...source.matchAll(/\.(?:exportSnapshot)\s*\(/g)].length };
-}
 async function htmlBytes(root: string, port: number) {
   let server: ChildProcess | undefined;
   try {
@@ -70,12 +67,12 @@ interface ComparisonReport {
   command: string;
   baseline: {
     sha: string; sourceTree: string; build: Awaited<ReturnType<typeof measureBuild>>;
-    startupSource: { exportSnapshotCallSites: number; note: string };
+    startupSource: StartupSourceMetrics & { note: string };
     homeDataBenchmark: { available: false; reason: string };
   };
   current: {
     sha: string; sourceTree: string; build: Awaited<ReturnType<typeof measureBuild>>;
-    startupSource: { exportSnapshotCallSites: number };
+    startupSource: StartupSourceMetrics;
     homeDataBenchmark: Awaited<ReturnType<typeof runHomeDataBenchmark>>;
   };
   cleanup: {
@@ -113,10 +110,10 @@ try {
     command: "npm run benchmark:home-before-after",
     baseline: {
       sha: baselineSha, sourceTree: baselineSourceTree, build: baselineBuild,
-      startupSource: { ...startupSourceMetrics(baselineRoot), note: "Static PhraseBankApp source count; the baseline predates the bounded home-data boundary." },
-      homeDataBenchmark: { available: false, reason: "Baseline has no loadHomeData boundary, so 2,000-phrase bounded rows/service-ready are not equivalent or measurable." },
+      startupSource: { ...analyzeStartupSource(baselineRoot), note: "Counted only exportSnapshot call sites inside startup refresh/loadHomeData functions reachable through the eager startup dependency graph; inline Settings export actions are excluded." },
+      homeDataBenchmark: { available: false, reason: "Baseline predates the production loadHomeData benchmark boundary and its repository API/fixture contract is not equivalent, so bounded rows and service-ready duration are unavailable." },
     },
-    current: { sha: currentSha, sourceTree: currentSourceTree, build: currentBuild, startupSource: startupSourceMetrics(projectRoot), homeDataBenchmark: currentBenchmark },
+    current: { sha: currentSha, sourceTree: currentSourceTree, build: currentBuild, startupSource: analyzeStartupSource(projectRoot), homeDataBenchmark: currentBenchmark },
     cleanup: { tempRoot: shortTempRoot, dependencyJunctionRemoved: true, tempDirectoryRemoved: true },
   };
 } catch (error) {

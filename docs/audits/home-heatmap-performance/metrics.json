@@ -15,14 +15,14 @@
   },
   "build": {
     "before": {
-      "sha": "aa7173012058873031713ef3a9e81702a778d83b",
-      "homeChunkBytes": 163832,
-      "initialJavaScriptBytes": 531266,
+      "sha": "3e2026060494ba8108a6da45ab7bd15e88882758",
+      "homeChunkBytes": 157491,
+      "initialJavaScriptBytes": 524925,
       "htmlBytes": 446625
     },
     "current": {
-      "homeChunkBytes": 55212,
-      "initialJavaScriptBytes": 483723,
+      "homeChunkBytes": 57292,
+      "initialJavaScriptBytes": 485803,
       "nonHomeScreenChunks": 6,
       "htmlBytes": 446904
     },
@@ -35,32 +35,89 @@
     "generatedByRunner": true,
     "command": "npm run benchmark:home-before-after",
     "baseline": {
-      "sha": "aa7173012058873031713ef3a9e81702a778d83b",
-      "sourceTree": "5676453b4b06c3d6f2772e49ef4440d7eacfb677",
+      "sha": "3e2026060494ba8108a6da45ab7bd15e88882758",
+      "sourceTree": "c05481d8e96f2f2a1ce5bdf889def71e058e90e5",
       "build": {
-        "homeChunkBytes": 163832,
-        "initialJavaScriptBytes": 531266,
+        "homeChunkBytes": 157491,
+        "initialJavaScriptBytes": 524925,
         "htmlBytes": 446625
       },
       "startupSource": {
+        "files": [
+          "app/PhraseBankApp.tsx",
+          "app/components/AppIcon.tsx",
+          "app/components/NewPhraseLearning.tsx",
+          "app/components/SpeakingPractice.tsx",
+          "app/components/TrainingHome.tsx",
+          "app/components/WeeklySummary.tsx",
+          "app/domain/bundledSystemContent.ts",
+          "app/domain/learningProgress.ts",
+          "app/domain/learningSelection.ts",
+          "app/domain/review.ts",
+          "app/domain/systemContent.ts",
+          "app/domain/trainingSelection.ts",
+          "app/domain/trainingStats.ts",
+          "app/domain/types.ts",
+          "app/domain/validation.ts",
+          "app/hooks/useNewPhraseLearning.ts",
+          "app/hooks/useTrainingSession.ts",
+          "app/services/recorder.ts",
+          "app/services/speech.ts",
+          "app/services/systemContentInstaller.ts",
+          "app/storage/backup.ts",
+          "app/storage/indexedDbRepository.ts",
+          "app/storage/repository.ts",
+          "app/storage/seed.ts",
+          "app/storage/starterPhrases.ts"
+        ],
         "exportSnapshotCallSites": 1,
-        "note": "Static PhraseBankApp source count; the baseline predates the bounded home-data boundary."
+        "callSites": [
+          {
+            "file": "app/PhraseBankApp.tsx",
+            "functionName": "refresh"
+          }
+        ],
+        "note": "Counted only exportSnapshot call sites inside startup refresh/loadHomeData functions reachable through the eager startup dependency graph; inline Settings export actions are excluded."
       },
       "homeDataBenchmark": {
         "available": false,
-        "reason": "Baseline has no loadHomeData boundary, so 2,000-phrase bounded rows/service-ready are not equivalent or measurable."
+        "reason": "Baseline predates the production loadHomeData benchmark boundary and its repository API/fixture contract is not equivalent, so bounded rows and service-ready duration are unavailable."
       }
     },
     "current": {
-      "sha": "c8bc763867161338cff11609e8d4075e2f606201",
-      "sourceTree": "c91e8fc5e86461e388dc169f1ec7e276d114a435",
+      "sha": "fbf60545c9072493fefc09efcb15f43c4abccf44",
+      "sourceTree": "385e4f1d607ae62e14799604a4b9b7a10c6f0669",
       "build": {
-        "homeChunkBytes": 55212,
-        "initialJavaScriptBytes": 483723,
+        "homeChunkBytes": 57292,
+        "initialJavaScriptBytes": 485803,
         "htmlBytes": 446904
       },
       "startupSource": {
-        "exportSnapshotCallSites": 0
+        "files": [
+          "app/PhraseBankApp.tsx",
+          "app/components/AppIcon.tsx",
+          "app/components/LearningHeatmap.tsx",
+          "app/components/TrainingHome.tsx",
+          "app/components/WeeklySummary.tsx",
+          "app/domain/bundledSystemContent.ts",
+          "app/domain/learningHeatmap.ts",
+          "app/domain/learningProgress.ts",
+          "app/domain/learningSelection.ts",
+          "app/domain/review.ts",
+          "app/domain/systemContent.ts",
+          "app/domain/trainingStats.ts",
+          "app/domain/types.ts",
+          "app/hooks/useHomeData.ts",
+          "app/services/homeData.ts",
+          "app/services/systemContentInstaller.ts",
+          "app/storage/backup.ts",
+          "app/storage/indexedDbRepository.ts",
+          "app/storage/repository.ts",
+          "app/storage/seed.ts",
+          "app/storage/starterPhrases.ts"
+        ],
+        "exportSnapshotCallSites": 0,
+        "callSites": []
       },
       "homeDataBenchmark": {
         "fixture": {
@@ -82,12 +139,18 @@
           "getActiveLearningSession": 1,
           "exportSnapshot": 0
         },
+        "requests": {
+          "activeTrainingSession": 1,
+          "activeLearningSession": 1
+        },
         "rows": {
           "trainingEvents": 6636,
           "trainingSessions": 948,
+          "activeTrainingSessions": 0,
+          "activeLearningSessions": 0,
           "heatmapDays": 84
         },
-        "serviceReadyMilliseconds": 126.86869999999908
+        "serviceReadyMilliseconds": 138.05559999999969
       }
     },
     "cleanup": {
@@ -122,11 +185,17 @@
     "rows": {
       "trainingEvents": 6636,
       "trainingSessions": 948,
+      "activeTrainingSessions": 0,
+      "activeLearningSessions": 0,
       "heatmapDays": 84
     },
-    "serviceReadyMilliseconds": 126.86869999999908,
+    "serviceReadyMilliseconds": 138.05559999999969,
     "regressionBudgetMilliseconds": 5000,
-    "budgetNote": "The ceiling is deliberately generous; this is a regression smoke budget, not a microbenchmark or Web Vital."
+    "budgetNote": "The ceiling is deliberately generous; this is a regression smoke budget, not a microbenchmark or Web Vital.",
+    "requests": {
+      "activeTrainingSession": 1,
+      "activeLearningSession": 1
+    }
   },
   "layout": {
     "innerWidth": 390,
@@ -147,16 +216,77 @@
   ],
   "visualAcceptance": {
     "environment": "local Chrome extension production server",
-    "cssViewport": { "width": 390, "height": 844 },
-    "notClaims": ["not IAB", "not Safari", "not a real iPhone", "not a public-network measurement"],
+    "cssViewport": {
+      "width": 390,
+      "height": 844
+    },
+    "notClaims": [
+      "not IAB",
+      "not Safari",
+      "not a real iPhone",
+      "not a public-network measurement"
+    ],
     "states": {
-      "skeleton": { "statusVisible": true, "horizontalOverflow": false, "scrollWidth": 390, "clientWidth": 390 },
-      "heatmapError": { "retryVisible": true, "enabledEntryCount": 3, "horizontalOverflow": false, "entryBottoms": [393, 487, 548] },
-      "heatmapRetry": { "cellCount": 84, "columns": 12, "horizontalOverflow": false, "firstCellAccessibleName": "5月18日，未学习" },
-      "cssEquivalent200": { "auditLabelVisible": true, "browserZoom": false, "enabledEntryCount": 3, "horizontalOverflow": false, "scrollHeight": 1763 },
-      "realNonHomeReturn": { "screen": "library", "returnedHome": true, "cellCount": 84, "enabledNavActions": 4, "horizontalOverflow": false, "bottomNavigationHeightCssPx": 76, "bottomNavigationAtViewportBottom": true, "mainBottomPaddingCssPx": 88 },
-      "heatmapErrorFocused": { "errorAndRetryInViewport": true, "horizontalOverflow": false, "scrollY": 477, "statusTop": 622.734375, "retryBottom": 690.734375, "capture": "uncropped full-page JPEG" },
-      "cssEquivalent200HeatmapFocused": { "labelAndHeatmapInViewport": true, "cellCount": 84, "columns": 12, "gridTemplateColumns": "21.4062px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px", "firstAccessibleName": "5月18日，未学习", "horizontalOverflow": false, "browserZoom": false, "scrollY": 919, "labelTop": 0, "heatmapTop": 406.40625, "capture": "uncropped full-page JPEG" }
+      "skeleton": {
+        "statusVisible": true,
+        "horizontalOverflow": false,
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "heatmapError": {
+        "retryVisible": true,
+        "enabledEntryCount": 3,
+        "horizontalOverflow": false,
+        "entryBottoms": [
+          393,
+          487,
+          548
+        ]
+      },
+      "heatmapRetry": {
+        "cellCount": 84,
+        "columns": 12,
+        "horizontalOverflow": false,
+        "firstCellAccessibleName": "5月18日，未学习"
+      },
+      "cssEquivalent200": {
+        "auditLabelVisible": true,
+        "browserZoom": false,
+        "enabledEntryCount": 3,
+        "horizontalOverflow": false,
+        "scrollHeight": 1763
+      },
+      "realNonHomeReturn": {
+        "screen": "library",
+        "returnedHome": true,
+        "cellCount": 84,
+        "enabledNavActions": 4,
+        "horizontalOverflow": false,
+        "bottomNavigationHeightCssPx": 76,
+        "bottomNavigationAtViewportBottom": true,
+        "mainBottomPaddingCssPx": 88
+      },
+      "heatmapErrorFocused": {
+        "errorAndRetryInViewport": true,
+        "horizontalOverflow": false,
+        "scrollY": 477,
+        "statusTop": 622.734375,
+        "retryBottom": 690.734375,
+        "capture": "uncropped full-page JPEG"
+      },
+      "cssEquivalent200HeatmapFocused": {
+        "labelAndHeatmapInViewport": true,
+        "cellCount": 84,
+        "columns": 12,
+        "gridTemplateColumns": "21.4062px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px",
+        "firstAccessibleName": "5月18日，未学习",
+        "horizontalOverflow": false,
+        "browserZoom": false,
+        "scrollY": 919,
+        "labelTop": 0,
+        "heatmapTop": 406.40625,
+        "capture": "uncropped full-page JPEG"
+      }
     }
   },
   "localHttp": {

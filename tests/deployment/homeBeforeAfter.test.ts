@@ -8,7 +8,7 @@ describe("reproducible home before/after evidence", () => {
     const comparison = metrics.beforeAfter;
     expect(comparison.command).toBe("npm run benchmark:home-before-after");
     expect(comparison.baseline.sha).toMatch(/^[0-9a-f]{40}$/);
-    expect(comparison.baseline.sha.startsWith("aa717301")).toBe(true);
+    expect(comparison.baseline.sha.startsWith("3e20260")).toBe(true);
     for (const side of [comparison.baseline, comparison.current]) {
       expect(side.build.htmlBytes).toBeGreaterThan(0);
       expect(side.build.initialJavaScriptBytes).toBeGreaterThan(0);
@@ -17,6 +17,10 @@ describe("reproducible home before/after evidence", () => {
     expect(comparison.current.homeDataBenchmark.fixture.phrases).toBe(2000);
     expect(comparison.current.homeDataBenchmark.calls.exportSnapshot).toBe(0);
     expect(comparison.baseline.startupSource.exportSnapshotCallSites).toBe(1);
+    expect(comparison.baseline.startupSource.callSites).toEqual([
+      expect.objectContaining({ file: "app/PhraseBankApp.tsx", functionName: "refresh" }),
+    ]);
+    expect(comparison.baseline.startupSource.note).toContain("startup dependency graph");
     expect(comparison.current.startupSource.exportSnapshotCallSites).toBe(0);
     expect(comparison.baseline.homeDataBenchmark.available).toBe(false);
     expect(comparison.cleanup.tempDirectoryRemoved).toBe(true);
@@ -31,6 +35,8 @@ describe("reproducible home before/after evidence", () => {
     expect(metrics.homeDataBenchmark.rows).toEqual(comparison.current.homeDataBenchmark.rows);
     const readme = readFileSync(`${process.cwd()}/docs/audits/home-heatmap-performance/README.md`, "utf8");
     expect(readme).toContain(comparison.current.sourceTree);
+    expect(readme).toContain(comparison.baseline.sha);
+    expect(readme).toContain("startup dependency graph");
     expect(readme).toContain("evidence commit");
     expect(readme).toContain("current.sha");
   });

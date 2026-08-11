@@ -73,7 +73,7 @@ describe("home performance audit evidence", () => {
       events: 10080, trainingSessions: 1440,
     });
     expect(metrics.homeDataBenchmark.calls.exportSnapshot).toBe(0);
-    expect(metrics.homeDataBenchmark.rows).toEqual({ trainingEvents: 6636, trainingSessions: 948, heatmapDays: 84 });
+    expect(metrics.homeDataBenchmark.rows).toEqual({ trainingEvents: 6636, trainingSessions: 948, activeTrainingSessions: 0, activeLearningSessions: 0, heatmapDays: 84 });
     expect(metrics.homeDataBenchmark.regressionBudgetMilliseconds).toBe(5000);
   });
 });

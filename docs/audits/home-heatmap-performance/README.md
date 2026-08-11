@@ -12,16 +12,18 @@ The first run did not expose a reliable, reversible way to inject an IndexedDB h
 
 ## Reproducible before/after production build
 
-Run `npm run benchmark:home-before-after`. The command resolves exact baseline SHA `aa7173012058873031713ef3a9e81702a778d83b`, exports it without registering a Git worktree into a unique `C:\Temp\phb-*` directory, links the existing dependency installation as a junction, and uses the same vinext CLI for both builds. It starts vinext directly as one Node child, terminates it, waits for `exit`, removes the dependency junction, removes the unique temporary directory, then verifies that directory is gone.
+Run `npm run benchmark:home-before-after`. The command resolves true pre-feature baseline SHA `3e2026060494ba8108a6da45ab7bd15e88882758`, exports it without registering a Git worktree into a unique `C:\Temp\phb-*` directory, links the existing dependency installation as a junction, and uses the same vinext CLI for both builds. It starts vinext directly as one Node child, terminates it, waits for `exit`, removes the dependency junction, removes the unique temporary directory, then verifies that directory is gone.
 
-The generated current measurement records stable application source tree `c91e8fc5e86461e388dc169f1ec7e276d114a435`. The `current.sha` value in `metrics.json` is a runner-generated informational field and changes when the command is rerun after an evidence commit; README and tests intentionally do not pin it. Tests compare only the recorded source tree with `git rev-parse HEAD:app`, so evidence-only commits do not create a self-referential identity loop. Before creating any temporary directory or updating metrics, the runner rejects tracked or untracked changes under `app/`.
+The generated current measurement records stable application source tree `385e4f1d607ae62e14799604a4b9b7a10c6f0669`. The `current.sha` value in `metrics.json` is a runner-generated informational field and changes when the command is rerun after an evidence commit; README and tests intentionally do not pin it. Tests compare only the recorded source tree with `git rev-parse HEAD:app`, so evidence-only commits do not create a self-referential identity loop. Before creating any temporary directory or updating metrics, the runner rejects tracked or untracked changes under `app/`.
 
 | Production metric | Baseline | Current | Change |
 | --- | ---: | ---: | ---: |
-| `PhraseBankApp` chunk | 163,832 B | 55,212 B | -66.3% |
-| Initial JS set from manifests | 531,266 B | 483,723 B | -8.9% |
+| `PhraseBankApp` chunk | 157,491 B | 57,292 B | -63.6% |
+| Initial JS set from manifests | 524,925 B | 485,803 B | -7.5% |
 | Local uncompressed HTML/RSC response | 446,625 B | 446,904 B | +0.1% |
 | Startup `exportSnapshot()` call sites | 1 | 0 | removed |
+
+The startup call-site metric follows eager local imports from `PhraseBankApp` and inspects only the startup `refresh` / `loadHomeData` functions. At the baseline it identifies `PhraseBankApp.refresh`; it deliberately excludes the separate inline Settings export action. This is a startup dependency graph metric, not a whole-file text count.
 
 The enforceable limits are 63,500 B for the home coordinator and 556,500 B for initial JavaScript. They are derived from the optimized build with approximately 15% headroom. The test discovers hashed files through `vinext-client-assets.js` and `__vite_rsc_assets_manifest.js`; it does not pin hashes or absolute filenames.
 
