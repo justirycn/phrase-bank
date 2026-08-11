@@ -109,7 +109,10 @@ describe("iPhone learning visual audit artifacts", () => {
     const metrics = JSON.parse(await readFile(`${auditDirectory}/metrics.json`, "utf8"));
     expect(metrics.viewport).toEqual({ width: 390, height: 844 });
     expect(metrics.states).toHaveLength(8);
-    for (const state of metrics.states) expect(state.docScrollWidth).toBeLessThanOrEqual(390);
+    for (const state of metrics.states) {
+      expect(state.docScrollWidth).toBeLessThanOrEqual(390);
+      expect(state.overlayCount).toBe(0);
+    }
     expect(metrics.zoom200.docScrollWidth).toBeLessThanOrEqual(metrics.zoom200.docClientWidth);
     expect(metrics.zoom200.actionRect.left).toBeGreaterThanOrEqual(0);
     expect(metrics.zoom200.actionRect.right).toBeLessThanOrEqual(metrics.zoom200.docClientWidth);
