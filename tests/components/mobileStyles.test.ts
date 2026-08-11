@@ -2,6 +2,21 @@ import { readFile, readdir } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("mobile phrase typography", () => {
+  it("fits the complete 12-week heatmap without horizontal overflow", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+    const grid = css.match(/\.heatmap-grid\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(grid).toMatch(/grid-template-columns:\s*repeat\(12,minmax\(0,1fr\)\)/);
+    expect(grid).toMatch(/grid-template-rows:\s*repeat\(7,minmax\(0,1fr\)\)/);
+    expect(grid).toMatch(/grid-auto-flow:\s*column/);
+    expect(grid).toMatch(/width:\s*100%/);
+    expect(grid).toMatch(/max-width:\s*100%/);
+    expect(grid).toMatch(/min-width:\s*0/);
+    expect(grid).toMatch(/overflow:\s*hidden/);
+    expect(css).toMatch(/\.learning-heatmap[^}]*min-width:\s*0/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*430px\)[\s\S]*?\.learning-heatmap/);
+    expect(css).toMatch(/@media\s*\(max-width:\s*390px\)[\s\S]*?\.heatmap-grid/);
+  });
+
   it("keeps long English phrases wrappable without clipping", async () => {
     const css = await readFile("app/globals.css", "utf8");
     const rule = css.match(/\.phrase-english\s*\{([^}]*)\}/)?.[1] ?? "";

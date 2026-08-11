@@ -1497,3 +1497,14 @@ select {
     overflow-wrap: anywhere;
   }
 }
+/* Compact, read-only learning footprint. */
+.learning-heatmap{width:100%;max-width:100%;min-width:0;margin:24px 0;padding:20px;background:var(--ivory,#faf6ed);border:1px solid rgba(27,67,50,.14);border-radius:22px;overflow:hidden;color:var(--forest,#173f30)}
+.heatmap-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;min-width:0;margin-bottom:16px}.heatmap-heading h2,.heatmap-heading p{margin:0;min-width:0;overflow-wrap:anywhere}.heatmap-heading p{font-size:.78rem;color:#697069}
+.heatmap-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));grid-template-rows:repeat(7,minmax(0,1fr));grid-auto-flow:column;width:100%;max-width:100%;min-width:0;overflow:hidden;gap:5px;margin:0;padding:0;list-style:none}
+.heatmap-grid li,.heatmap-legend i{display:block;min-width:0;aspect-ratio:1;border-radius:3px;background:rgba(27,67,50,.08)}
+.heatmap-grid .level-1,.heatmap-legend .level-1{background:rgba(27,67,50,.24)}.heatmap-grid .level-2,.heatmap-legend .level-2{background:rgba(27,67,50,.43)}.heatmap-grid .level-3,.heatmap-legend .level-3{background:rgba(27,67,50,.67)}.heatmap-grid .level-4,.heatmap-legend .level-4{background:var(--forest,#173f30)}
+.heatmap-grid .future{background:transparent;box-shadow:inset 0 0 0 1px rgba(27,67,50,.08)}
+.heatmap-legend{display:flex;align-items:center;justify-content:flex-end;gap:5px;margin-top:12px;font-size:.72rem;color:#697069}.heatmap-legend i{width:12px;flex:0 0 12px}
+.heatmap-error{min-width:0;color:#697069}.heatmap-error p{overflow-wrap:anywhere}.heatmap-error button{min-height:44px;padding:0 16px;border:1px solid rgba(27,67,50,.2);border-radius:12px;background:transparent;color:var(--forest,#173f30);font-weight:700}
+@media (max-width:430px){.learning-heatmap{padding:16px}}
+@media (max-width:390px){.heatmap-grid{gap:4px}}
