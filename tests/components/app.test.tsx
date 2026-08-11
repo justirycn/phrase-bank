@@ -6,6 +6,9 @@ import type { BackupEnvelopeV4, Category, Phrase, PhraseLearningState, ReviewRes
 
 class MemoryRepository {
   phrases: Phrase[] = [];
+  initializeAttempts = 0;
+  initializePromise?: Promise<void>;
+  failInitialize = false;
   failPhraseReads = false;
   failPhraseSave = false;
   phraseSaveAttempts = 0;
@@ -13,7 +16,7 @@ class MemoryRepository {
   savePhraseImpl?: (phrase: Phrase) => Promise<void>;
   phraseReadAttempts = 0;
   categories: Category[] = [{ id: "daily", name: "日常", isDefault: true, createdAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-07T00:00:00.000Z" }];
-  async initialize() {}
+  async initialize() { this.initializeAttempts += 1; if (this.initializePromise) await this.initializePromise; if (this.failInitialize) throw new Error("initialize failed"); }
   async listPhrases() { this.phraseReadAttempts += 1; if (this.failPhraseReads) throw new Error("db failed"); return [...this.phrases]; }
   async listCategories() { return [...this.categories]; }
   async listDuePhrases() { return [...this.phrases]; }
@@ -84,6 +87,38 @@ function learnedState(phraseId: string): PhraseLearningState {
 }
 
 describe("PhraseBankApp", () => {
+  it("waits for storage initialization before reading home data", async () => {
+    let resolveInitialize!: () => void;
+    const repo = new MemoryRepository();
+    repo.initializePromise = new Promise<void>((resolve) => { resolveInitialize = resolve; });
+
+    render(<PhraseBankApp repository={repo as never} />);
+
+    expect(await screen.findByText("正在打开你的语言块…")).toBeVisible();
+    expect(repo.phraseReadAttempts).toBe(0);
+    expect(repo.exportSnapshotAttempts).toBe(0);
+    resolveInitialize();
+    expect(await screen.findByRole("region", { name: "最近 12 周学习足迹" })).toBeVisible();
+    expect(repo.phraseReadAttempts).toBe(1);
+    expect(repo.exportSnapshotAttempts).toBe(0);
+  });
+
+  it("shows a recoverable initial error without home reads when storage initialization fails", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.failInitialize = true;
+
+    render(<PhraseBankApp repository={repo as never} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("本地数据暂时无法打开，请刷新后重试。");
+    expect(repo.phraseReadAttempts).toBe(0);
+    expect(repo.exportSnapshotAttempts).toBe(0);
+    repo.failInitialize = false;
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("region", { name: "最近 12 周学习足迹" })).toBeVisible();
+    expect(repo.initializeAttempts).toBe(2);
+    expect(repo.phraseReadAttempts).toBe(1);
+  });
+
   it("loads the home screen and learning heatmap without exporting a full snapshot", async () => {
     const repo = new MemoryRepository();
     repo.events.push({ id: "heatmap-event", sessionId: "s1", phraseId: "p1", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 10, occurredAt: new Date().toISOString() });
