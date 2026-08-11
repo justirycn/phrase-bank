@@ -26,6 +26,9 @@ describe("2,000 phrase home-data benchmark", () => {
     });
     expect(report.rows.trainingEvents).toBe(6_636);
     expect(report.rows.trainingSessions).toBe(948);
+    expect(report.requests).toEqual({ activeTrainingSession: 1, activeLearningSession: 1 });
+    expect(report.rows.activeTrainingSessions).toBe(0);
+    expect(report.rows.activeLearningSessions).toBe(0);
     expect(report.rows.heatmapDays).toBe(84);
     expect(report.serviceReadyMilliseconds).toBeLessThan(5_000);
   }, 30_000);

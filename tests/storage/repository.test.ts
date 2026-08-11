@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocalPhraseRepository } from "../../app/storage/indexedDbRepository";
 import { createNewPhrase } from "../../app/domain/review";
 import type { BackupEnvelopeV1, BackupEnvelopeV2, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewLog, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
@@ -230,6 +230,99 @@ describe("LocalPhraseRepository", () => {
     expect((await repo.listTrainingSessions(from, from)).map(({ id }) => id)).toEqual(["from"]);
   });
 
+  it("reads active sessions without unbounded index getAll scans across large histories", async () => {
+    const base = await repo.exportSnapshot();
+    const completedTraining = Array.from({ length: 500 }, (_, index): TrainingSessionRecord => ({
+      id: `completed-training-${index}`, mode: "quick",
+      startedAt: new Date(Date.UTC(2025, 0, 1, 0, index)).toISOString(),
+      updatedAt: new Date(Date.UTC(2025, 0, 1, 0, index)).toISOString(),
+      completedAt: new Date(Date.UTC(2025, 0, 1, 0, index)).toISOString(),
+      phraseIds: [], currentIndex: 0, activeSeconds: 1,
+    }));
+    const activeTraining: TrainingSessionRecord = {
+      id: "bounded-active-training", mode: "quick", startedAt: "2026-08-11T07:00:00.000Z",
+      updatedAt: "2026-08-11T08:00:00.000Z", phraseIds: [], currentIndex: 0, activeSeconds: 2,
+    };
+    const olderActiveTraining: TrainingSessionRecord = {
+      ...activeTraining, id: "older-active-training", updatedAt: "2026-08-10T08:00:00.000Z",
+    };
+    const completedLearning = Array.from({ length: 500 }, (_, index) => learningSession({
+      id: `completed-learning-${index}`, phase: "test", studyIndex: 1, testIndex: 1,
+      startedAt: new Date(Date.UTC(2025, 0, 1, 0, index)).toISOString(),
+      updatedAt: new Date(Date.UTC(2025, 0, 1, 0, index)).toISOString(),
+      completedAt: new Date(Date.UTC(2025, 0, 1, 0, index)).toISOString(),
+    }));
+    const activeLearning = learningSession({
+      id: "bounded-active-learning", phase: "study", studyIndex: 0, testIndex: 0,
+      startedAt: "2026-08-11T07:00:00.000Z", updatedAt: "2026-08-11T08:00:00.000Z",
+    });
+    await repo.importSnapshot({
+      ...base,
+      trainingSessions: [...completedTraining, olderActiveTraining, activeTraining],
+      learningSessions: [...completedLearning, activeLearning],
+    }, "overwrite");
+
+    const indexGetAll = vi.spyOn(IDBIndex.prototype, "getAll");
+    expect(await repo.getActiveTrainingSession()).toEqual(activeTraining);
+    expect(await repo.getActiveLearningSession()).toEqual(activeLearning);
+    expect(indexGetAll).not.toHaveBeenCalled();
+    indexGetAll.mockRestore();
+  });
+
+  it("backfills active session pointers when upgrading an existing v4 database", async () => {
+    globalThis.indexedDB = new IDBFactory();
+    const dbName = `phrase-bank-v4-active-${crypto.randomUUID()}`;
+    const request = indexedDB.open(dbName, 4);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      db.createObjectStore("metadata", { keyPath: "key" });
+      const training = db.createObjectStore("trainingSessions", { keyPath: "id" });
+      training.createIndex("by-updated", "updatedAt");
+      const learning = db.createObjectStore("learningSessions", { keyPath: "id" });
+      learning.createIndex("by-updated", "updatedAt");
+    };
+    const oldDb = await new Promise<IDBDatabase>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const write = oldDb.transaction(["trainingSessions", "learningSessions"], "readwrite");
+    const activeTraining: TrainingSessionRecord = {
+      id: "migrated-active-training", mode: "quick", startedAt: "2026-08-11T07:00:00.000Z",
+      updatedAt: "2026-08-11T08:00:00.000Z", phraseIds: [], currentIndex: 0, activeSeconds: 0,
+    };
+    const activeLearning = learningSession({
+      id: "migrated-active-learning", phase: "study", studyIndex: 0, testIndex: 0,
+      startedAt: "2026-08-11T07:00:00.000Z", updatedAt: "2026-08-11T08:00:00.000Z",
+    });
+    write.objectStore("trainingSessions").put(activeTraining);
+    write.objectStore("learningSessions").put(activeLearning);
+    await new Promise<void>((resolve, reject) => { write.oncomplete = () => resolve(); write.onerror = () => reject(write.error); });
+    oldDb.close();
+
+    const migrated = new LocalPhraseRepository(dbName);
+    expect(await migrated.getActiveTrainingSession()).toEqual(activeTraining);
+    expect(await migrated.getActiveLearningSession()).toEqual(activeLearning);
+    const reopened = indexedDB.open(dbName);
+    const upgraded = await new Promise<IDBDatabase>((resolve, reject) => {
+      reopened.onsuccess = () => resolve(reopened.result);
+      reopened.onerror = () => reject(reopened.error);
+    });
+    const metadata = upgraded.transaction("metadata").objectStore("metadata");
+    const pointers = await Promise.all([
+      new Promise<{ key: string; value: string } | undefined>((resolve, reject) => {
+        const read = metadata.get("activeTrainingSessionId"); read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error);
+      }),
+      new Promise<{ key: string; value: string } | undefined>((resolve, reject) => {
+        const read = metadata.get("activeLearningSessionId"); read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error);
+      }),
+    ]);
+    expect(pointers).toEqual([
+      { key: "activeTrainingSessionId", value: activeTraining.id },
+      { key: "activeLearningSessionId", value: activeLearning.id },
+    ]);
+    upgraded.close();
+  });
+
   it("persists speech preferences and falls back for corrupt metadata", async () => {
     expect(await repo.getSpeechPreferences()).toEqual({ accent: "en-US", autoSpeak: true });
     await repo.saveSpeechPreferences({ accent: "en-GB", autoSpeak: false });
@@ -243,7 +336,7 @@ describe("LocalPhraseRepository", () => {
     const dbName = `phrase-bank-${crypto.randomUUID()}`;
     const corruptRepo = new LocalPhraseRepository(dbName);
     await corruptRepo.initialize();
-    const request = indexedDB.open(dbName, 4);
+    const request = indexedDB.open(dbName, 5);
     const db = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
     const tx = db.transaction("metadata", "readwrite");
     tx.objectStore("metadata").put({ key: "speechPreferences", value: "{" });
@@ -309,7 +402,7 @@ describe("LocalPhraseRepository", () => {
     expect(await migrated.getPhrase(phrase.id)).toEqual({ ...phrase, origin: "personal", kind: "standalone" });
     expect(await migrated.listCategories()).toContainEqual(category);
     expect((await migrated.exportSnapshot()).reviewLogs).toContainEqual(log);
-    const reopened = indexedDB.open(dbName, 4);
+    const reopened = indexedDB.open(dbName, 5);
     const upgradedDb = await new Promise<IDBDatabase>((resolve, reject) => { reopened.onsuccess = () => resolve(reopened.result); reopened.onerror = () => reject(reopened.error); });
     const metadata = await new Promise<Array<{ key: string; value: string }>>((resolve, reject) => { const read = upgradedDb.transaction("metadata").objectStore("metadata").getAll(); read.onsuccess = () => resolve(read.result); read.onerror = () => reject(read.error); });
     expect(metadata).toEqual([...originalMetadata].sort((a, b) => a.key.localeCompare(b.key)));
@@ -541,7 +634,7 @@ describe("LocalPhraseRepository", () => {
       consecutiveGood: 0, masteredDates: [], updatedAt: timestamp,
     });
     expect(await migrated.getPhraseLearningState("system-new")).toMatchObject({ stage: "unseen", consecutiveGood: 0, unlockedAt: timestamp });
-    const reopened = indexedDB.open(dbName, 4);
+    const reopened = indexedDB.open(dbName, 5);
     const upgraded = await new Promise<IDBDatabase>((resolve, reject) => { reopened.onsuccess = () => resolve(reopened.result); reopened.onerror = () => reject(reopened.error); });
     expect(upgraded.objectStoreNames.contains("learningSessions")).toBe(true);
     expect(Array.from(upgraded.transaction("learningSessions").objectStore("learningSessions").indexNames)).toContain("by-updated");
@@ -723,7 +816,7 @@ describe("LocalPhraseRepository", () => {
     const dbName = `invalid-category-session-${crypto.randomUUID()}`;
     const corruptRepo = new LocalPhraseRepository(dbName);
     await corruptRepo.initialize();
-    const request = indexedDB.open(dbName, 4);
+    const request = indexedDB.open(dbName, 5);
     const rawDb = await new Promise<IDBDatabase>((resolve, reject) => {
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);

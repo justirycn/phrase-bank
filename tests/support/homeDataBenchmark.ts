@@ -69,7 +69,8 @@ export async function runHomeDataBenchmark() {
   await base.importSnapshot(fixture, "overwrite");
   const names = ["listPhrases", "listCategories", "listDuePhrases", "listTrainingEvents", "listTrainingSessions", "listPhraseLearningStates", "getActiveTrainingSession", "getActiveLearningSession", "exportSnapshot"] as const;
   const calls = Object.fromEntries(names.map((name) => [name, 0])) as Record<(typeof names)[number], number>;
-  const rows = { trainingEvents: 0, trainingSessions: 0, heatmapDays: 0 };
+  const rows = { trainingEvents: 0, trainingSessions: 0, activeTrainingSessions: 0, activeLearningSessions: 0, heatmapDays: 0 };
+  const requests = { activeTrainingSession: 0, activeLearningSession: 0 };
   const repository = new Proxy(base, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
@@ -79,6 +80,14 @@ export async function runHomeDataBenchmark() {
         const result = await value.apply(target, args);
         if (property === "listTrainingEvents") rows.trainingEvents = result.length;
         if (property === "listTrainingSessions") rows.trainingSessions = result.length;
+        if (property === "getActiveTrainingSession") {
+          requests.activeTrainingSession += 1;
+          rows.activeTrainingSessions = result ? 1 : 0;
+        }
+        if (property === "getActiveLearningSession") {
+          requests.activeLearningSession += 1;
+          rows.activeLearningSessions = result ? 1 : 0;
+        }
         return result;
       };
     },
@@ -92,6 +101,6 @@ export async function runHomeDataBenchmark() {
       seed: HOME_BENCHMARK_SEED, phrases: fixture.phrases.length, categories: fixture.categories.length,
       learningStates: fixture.phraseLearningStates.length, events: fixture.trainingEvents.length,
       trainingSessions: fixture.trainingSessions.length,
-    }, calls, rows, serviceReadyMilliseconds,
+    }, calls, requests, rows, serviceReadyMilliseconds,
   };
 }
