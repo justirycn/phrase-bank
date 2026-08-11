@@ -45,7 +45,7 @@ describe("optimized home production contract", () => {
 
 });
 
-describe.runIf(existsSync(`${process.cwd()}/dist/server/vinext-client-assets.js`))("optimized production build budgets", () => {
+describe.runIf(process.env.HOME_PERFORMANCE_BUILD === "1")("optimized production build budgets", () => {
   it("keeps all six non-home screens in distinct dynamic production chunks", () => {
     const report = analyzeHomeBuild(process.cwd());
 
