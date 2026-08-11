@@ -76,9 +76,10 @@ describe("iPhone new phrase learning styles", () => {
 
   it("stacks all three home entries cleanly on the iPhone width", async () => {
     const css = await readFile("app/globals.css", "utf8");
-    expect(css).toMatch(/@media\s*\(max-width:\s*390px\)\s*\{[\s\S]*?\.training-entry\s*\{[^}]*grid-template-columns:\s*1fr[\s\S]*?\.training-entry button\s*\{[^}]*width:\s*100%/);
-    expect(css).toMatch(/\.learning-start\s*\{[^}]*min-height:\s*88px/s);
+    expect(css).toMatch(/\.training-entry\s*\{[^}]*grid-template-columns:\s*1fr/);
+    expect(css).toMatch(/\.training-entry button\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*overflow-wrap:\s*anywhere/s);
     expect(css).toMatch(/\.training-entry button > span\s*\{[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/\.learning-start\s*\{[^}]*min-height:\s*88px/s);
   });
 
   it("removes learning motion when reduced motion is requested", async () => {
@@ -91,8 +92,9 @@ describe("iPhone new phrase learning styles", () => {
     const css = await readFile("app/globals.css", "utf8");
 
     expect(css).toMatch(/\.new-phrase-learning\s*\{[^}]*container-type:\s*inline-size/s);
+    expect(css).toMatch(/\.app-main:has\(> \.new-phrase-learning\)\s*\{[^}]*container-type:\s*inline-size/s);
     expect(css).toMatch(/@container\s*\(max-width:\s*240px\)\s*\{[\s\S]*?\.new-learning-grades\s*\{[^}]*grid-template-columns:\s*1fr/s);
-    expect(css).toMatch(/@container\s*\(max-width:\s*240px\)[\s\S]*?\.phase-test\s+\.new-learning-card\s*\{[^}]*padding-bottom:\s*420px/s);
+    expect(css).toMatch(/@container\s*\(max-width:\s*240px\)[\s\S]*?\.new-phrase-learning\.phase-test\s*\{[^}]*padding-bottom:\s*calc\(420px \+ env\(safe-area-inset-bottom\)\)/s);
     expect(css).toMatch(/@container\s*\(max-width:\s*240px\)[\s\S]*?\.new-learning-actions\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0/s);
     expect(css).toMatch(/@container\s*\(max-width:\s*240px\)[\s\S]*?\.new-learning-actions button\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s);
   });

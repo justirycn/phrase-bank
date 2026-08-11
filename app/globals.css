@@ -1253,6 +1253,9 @@ label.settings-action:focus-within {
   color: var(--ink);
   overflow-wrap: anywhere;
 }
+.app-main:has(> .new-phrase-learning) {
+  container-type: inline-size;
+}
 .new-learning-head {
   display: flex;
   align-items: center;
@@ -1479,8 +1482,8 @@ select {
 }
 
 @container (max-width: 240px) {
-  .phase-test .new-learning-card {
-    padding-bottom: 420px;
+  .new-phrase-learning.phase-test {
+    padding-bottom: calc(420px + env(safe-area-inset-bottom));
   }
   .new-learning-actions {
     width: 100%;
