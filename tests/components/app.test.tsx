@@ -22,6 +22,8 @@ class MemoryRepository {
   async submitReview(id: string, result: ReviewResult) { void id; void result; }
   events: TrainingEvent[] = [];
   sessions: TrainingSessionRecord[] = [];
+  exportSnapshotAttempts = 0;
+  failTrainingEventReads = false;
   preferences: SpeechPreferences = { accent: "en-US", autoSpeak: false };
   failPreferenceLoad = false;
   failPreferenceSave = false;
@@ -33,7 +35,8 @@ class MemoryRepository {
   async getPhrase(id: string) { return this.phrases.find((phrase) => phrase.id === id); }
   async submitTrainingReview(event: TrainingEvent) { this.events.push(event); }
   async saveTrainingEvent(event: TrainingEvent) { this.events = [...this.events.filter((item) => item.id !== event.id), event]; }
-  async listTrainingEvents() { return [...this.events]; }
+  async listTrainingEvents() { if (this.failTrainingEventReads) throw new Error("event read failed"); return [...this.events]; }
+  async listTrainingSessions() { return [...this.sessions]; }
   async saveTrainingSession(session: TrainingSessionRecord) { this.sessions = [...this.sessions.filter((item) => item.id !== session.id), session]; }
   async getActiveTrainingSession() { return this.sessions.find((session) => !session.completedAt); }
   async completeTrainingSession(id: string, completedAt: Date) { this.sessions = this.sessions.map((session) => session.id === id ? { ...session, completedAt: completedAt.toISOString() } : session); }
@@ -55,7 +58,7 @@ class MemoryRepository {
   async rollbackSystemContentPackage() {}
   async saveCategory(category: Category) { this.categories.push(category); }
   async deleteCategoryAndMigrate() {}
-  async exportSnapshot(): Promise<BackupEnvelopeV4> { return { format: "personal-phrase-bank", version: 4, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [], trainingEvents: this.events, trainingSessions: this.sessions, phraseLearningStates: this.learningStates, learningSessions: this.learningSessions }; }
+  async exportSnapshot(): Promise<BackupEnvelopeV4> { this.exportSnapshotAttempts += 1; return { format: "personal-phrase-bank", version: 4, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [], trainingEvents: this.events, trainingSessions: this.sessions, phraseLearningStates: this.learningStates, learningSessions: this.learningSessions }; }
   async importSnapshot() {}
 }
 
@@ -81,6 +84,36 @@ function learnedState(phraseId: string): PhraseLearningState {
 }
 
 describe("PhraseBankApp", () => {
+  it("loads the home screen and learning heatmap without exporting a full snapshot", async () => {
+    const repo = new MemoryRepository();
+    repo.events.push({ id: "heatmap-event", sessionId: "s1", phraseId: "p1", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 10, occurredAt: new Date().toISOString() });
+
+    render(<PhraseBankApp repository={repo as never} />);
+
+    expect(await screen.findByRole("region", { name: "最近 12 周学习足迹" })).toBeVisible();
+    expect(repo.exportSnapshotAttempts).toBe(0);
+  });
+
+  it("keeps home actions usable when the heatmap read fails and retries only the heatmap", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.failTrainingEventReads = true;
+    repo.phrases = [makePhrase()];
+    repo.learningStates = [learnedState("p1")];
+    render(<PhraseBankApp repository={repo as never} />);
+
+    expect(await screen.findByText("学习足迹暂时无法加载")).toBeVisible();
+    expect(screen.getByRole("button", { name: /学习新句/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /今日复习/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /三分钟速练/ })).toBeEnabled();
+
+    repo.failTrainingEventReads = false;
+    repo.events.push({ id: "retry-event", sessionId: "s1", phraseId: "p1", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 10, occurredAt: new Date().toISOString() });
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByRole("region", { name: "最近 12 周学习足迹" })).toBeVisible();
+    expect(screen.queryByText("学习足迹暂时无法加载")).not.toBeInTheDocument();
+    expect(repo.exportSnapshotAttempts).toBe(0);
+  });
+
   it("counts and reviews only due phrases that are learned or mastered", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     repo.phrases = [

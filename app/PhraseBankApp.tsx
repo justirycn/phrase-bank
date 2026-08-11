@@ -5,13 +5,14 @@ import { AppIcon } from "./components/AppIcon";
 import { NewPhraseLearning } from "./components/NewPhraseLearning";
 import { SpeakingPractice } from "./components/SpeakingPractice";
 import { TrainingHome } from "./components/TrainingHome";
-import type { Category, LearningStage, Phrase, PhraseInput, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingEvent, TrainingMode, TrainingSessionRecord } from "./domain/types";
+import type { Category, LearningStage, Phrase, PhraseInput, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingMode } from "./domain/types";
 import { createNewPhrase } from "./domain/review";
 import { DAILY_NEW_PHRASE_LIMIT, previewLearningGroup } from "./domain/learningSelection";
 import { calculateStreak, summarizeDailyTraining, summarizeWeek } from "./domain/trainingStats";
 import { validateCategoryName, validatePhraseInput, type PhraseErrors } from "./domain/validation";
 import { useTrainingSession } from "./hooks/useTrainingSession";
 import { useNewPhraseLearning } from "./hooks/useNewPhraseLearning";
+import { useHomeData } from "./hooks/useHomeData";
 import { TemporaryRecorder } from "./services/recorder";
 import { BrowserSpeechService } from "./services/speech";
 import { installBundledSystemContent } from "./services/systemContentInstaller";
@@ -39,24 +40,19 @@ function Empty({ title, detail, action }: { title: string; detail: string; actio
 export function PhraseBankApp({ repository, contentInstaller }: { repository?: Repository; contentInstaller?: (repository: Repository) => Promise<unknown> }) {
   const repo = repository ?? defaultRepository;
   const [screen, setScreen] = useState<Screen>("home");
-  const [phrases, setPhrases] = useState<Phrase[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [due, setDue] = useState<Phrase[]>([]);
-  const [trainingEvents, setTrainingEvents] = useState<TrainingEvent[]>([]);
-  const [trainingSessions, setTrainingSessions] = useState<TrainingSessionRecord[]>([]);
-  const [learningStates, setLearningStates] = useState<PhraseLearningState[]>([]);
-  const [activeLearningSession, setActiveLearningSession] = useState<LearningSessionRecord>();
+  const home = useHomeData(repo);
+  const phrases = home.data?.phrases ?? [];
+  const categories = home.data?.categories ?? [];
+  const due = home.data?.duePhrases ?? [];
+  const trainingEvents = home.data?.events ?? [];
+  const trainingSessions = home.data?.trainingSessions ?? [];
+  const learningStates = home.data?.learningStates ?? [];
+  const activeLearningSession = home.data?.activeLearningSession;
   const [trainingMode, setTrainingMode] = useState<TrainingMode>("standard");
   const [trainingRun, setTrainingRun] = useState(0);
-  const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
-
-  const refresh = useCallback(async () => {
-    if (!repo) return;
-    const [nextPhrases, nextCategories, nextDue, nextEvents, nextLearningStates, snapshot] = await Promise.all([repo.listPhrases(), repo.listCategories(), repo.listDuePhrases(), repo.listTrainingEvents(), repo.listPhraseLearningStates(), repo.exportSnapshot()]);
-    setPhrases(nextPhrases); setCategories(nextCategories); setDue(nextDue); setTrainingEvents(nextEvents); setLearningStates(nextLearningStates); setTrainingSessions(snapshot.trainingSessions); setActiveLearningSession(snapshot.learningSessions?.find((session) => !session.completedAt));
-  }, [repo]);
+  const refresh = home.refresh;
 
   useEffect(() => {
     if (!repo) return;
@@ -66,9 +62,9 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
       if (installer) {
         try { await installer(repo); }
         catch { setNotice("系统句库暂时无法更新，个人句子和已有训练仍可正常使用。"); }
+        await refresh();
       }
-      await refresh();
-    })().catch(() => setError("本地数据暂时无法打开，请刷新后重试。" )).finally(() => setLoading(false));
+    })().catch(() => setError("本地数据暂时无法打开，请刷新后重试。"));
   }, [contentInstaller, repo, refresh, repository]);
 
   const go = (next: Screen) => { setNotice(""); setError(""); setScreen(next); window.scrollTo?.(0, 0); };
@@ -91,8 +87,9 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
     try { await refresh(); } catch { setError("句子已保存，但列表暂时无法刷新。"); }
     setNotice("已收入你的句库");
     setScreen("library");
-  }, [refresh]);
-  if (loading) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
+  }, [refresh, setError, setNotice, setScreen]);
+  if (screen === "home" && home.loading && !home.data) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
+  if (screen === "home" && home.error && !home.data) return <main className="loading"><p role="alert">{home.error}</p><button onClick={() => { void home.retry(); }}>重试</button></main>;
   const today = shanghaiDate();
   const dailySummary = summarizeDailyTraining(today, trainingEvents, trainingSessions);
   const trainingDays = [...new Set(trainingEvents.map((event) => shanghaiTimestampDate(event.occurredAt)))].map((date) => summarizeDailyTraining(date, trainingEvents, trainingSessions));
@@ -114,9 +111,9 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
 
   return <div className="app-shell">
     <main className="app-main">
-      {error && <div className="toast error" role="alert">{error}</div>}
+      {(error || home.error) && <div className="toast error" role="alert">{error || home.error}</div>}
       {notice && <div className="toast" role="status">{notice}</div>}
-      {screen === "home" && <TrainingHome dailySummary={dailySummary} streak={calculateStreak(trainingDays, today)} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} activeLearning={Boolean(activeLearningSession)} activeRemaining={activeRemaining} dueCount={eligibleDue.length} practiceCount={learnedEligibleCount} onStartLearning={() => go("learn")} onStartStandard={() => go("review")} onStartQuick={() => startTraining("quick")} />}
+      {screen === "home" && <TrainingHome dailySummary={dailySummary} streak={calculateStreak(trainingDays, today)} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} activeLearning={Boolean(activeLearningSession)} activeRemaining={activeRemaining} dueCount={eligibleDue.length} practiceCount={learnedEligibleCount} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onStartLearning={() => go("learn")} onStartStandard={() => go("review")} onStartQuick={() => startTraining("quick")} />}
       {screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={saveAddedPhrase} onRetryState={retryAddedPhraseState} onComplete={completeAddedPhrase} />}
       {screen === "learn" && repo && defaultSpeech && <LearningSession repository={repo} speech={defaultSpeech} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}
