@@ -81,6 +81,38 @@ function learnedState(phraseId: string): PhraseLearningState {
 }
 
 describe("PhraseBankApp", () => {
+  it("counts and reviews only due phrases that are learned or mastered", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.phrases = [
+      makePhrase({ id: "missing", english: "Missing state" }),
+      makePhrase({ id: "unseen", english: "Unseen due" }),
+      makePhrase({ id: "learning", english: "Learning due" }),
+      makePhrase({ id: "learned", english: "Learned due", chinese: "已学习提示" }),
+      makePhrase({ id: "mastered", english: "Mastered due", chinese: "已掌握提示" }),
+    ];
+    repo.learningStates = [
+      { ...learnedState("unseen"), stage: "unseen" },
+      { ...learnedState("learning"), stage: "learning" },
+      learnedState("learned"),
+      { ...learnedState("mastered"), stage: "mastered" },
+    ];
+    render(<PhraseBankApp repository={repo as never} />);
+    const review = await screen.findByRole("button", { name: /今日复习/ });
+    expect(review).toHaveTextContent("2 句待复习");
+    await user.click(review);
+    expect(await screen.findByText("已学习提示")).toBeVisible();
+    expect(screen.getByText("1 / 2")).toBeVisible();
+    expect(screen.queryByText("Missing state")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "显示英文答案" }));
+    await user.click(screen.getByRole("button", { name: /掌握/ }));
+    expect(await screen.findByText("已掌握提示")).toBeVisible();
+    expect(screen.getByText("2 / 2")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "显示英文答案" }));
+    await user.click(screen.getByRole("button", { name: /掌握/ }));
+    expect(await screen.findByRole("heading", { name: "今天完成了" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "回到首页" }));
+    expect(await screen.findByRole("button", { name: /今日复习/ })).toHaveTextContent("2 句待复习");
+  });
   it("shows separate new learning, review, and quick practice entries with real counts", async () => {
     const repo = new MemoryRepository();
     repo.phrases = [
@@ -90,7 +122,7 @@ describe("PhraseBankApp", () => {
     repo.learningStates = [learnedState("learned")];
     render(<PhraseBankApp repository={repo as never} />);
     expect(await screen.findByRole("button", { name: /学习新句/ })).toHaveTextContent("0 / 15");
-    expect(screen.getByRole("button", { name: /今日复习/ })).toHaveTextContent("2");
+    expect(screen.getByRole("button", { name: /今日复习/ })).toHaveTextContent("1");
     expect(screen.getByRole("button", { name: /三分钟速练/ })).toHaveTextContent("1");
   });
 
@@ -407,7 +439,7 @@ describe("PhraseBankApp", () => {
     expect(screen.getByRole("button", { name: /今日复习/ })).toBeVisible();
   });
 
-  it("starts standard practice with Chinese before English", async () => {
+  it("starts daily review with Chinese before English", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     repo.phrases.push(makePhrase({ chinese: "我还没决定。", english: "I haven't decided yet." }));
     repo.learningStates = repo.phrases.map(({ id }) => learnedState(id));
@@ -415,7 +447,7 @@ describe("PhraseBankApp", () => {
     await user.click(await screen.findByRole("button", { name: /今日复习/ }));
     expect(await screen.findByText("我还没决定。")).toBeVisible();
     expect(screen.queryByText("I haven't decided yet.")).not.toBeInTheDocument();
-    expect(repo.sessions[0]?.mode).toBe("standard");
+    expect(screen.getByText("1 / 1")).toBeVisible();
   });
 
   it("starts a three-item quick group", async () => {

@@ -142,6 +142,7 @@ describe("LocalPhraseRepository", () => {
     const now = new Date("2026-08-07T08:00:00.000Z");
     const phrase = createNewPhrase({ english: "Review", chinese: "复习", categoryId: "daily" }, now);
     await repo.savePhrase(phrase);
+    await repo.savePhraseLearningState({ phraseId: phrase.id, stage: "learned", firstSeenAt: now.toISOString(), firstTestedAt: now.toISOString(), consecutiveGood: 0, masteredDates: [], updatedAt: now.toISOString() });
     await repo.submitReview(phrase.id, "good", now);
     expect((await repo.getPhrase(phrase.id))?.reviewStep).toBe(1);
     expect((await repo.exportSnapshot()).reviewLogs).toHaveLength(1);
@@ -308,6 +309,32 @@ describe("LocalPhraseRepository", () => {
     expect((await migrated.listTrainingEvents()).map(({ id }) => id)).toContain("new-event");
     await migrated.saveSpeechPreferences({ accent: "en-GB", autoSpeak: false });
     expect(await migrated.getSpeechPreferences()).toEqual({ accent: "en-GB", autoSpeak: false });
+  });
+
+  it("rejects missing, unseen, and learning phrases from standalone review without any writes", async () => {
+    const now = new Date("2026-08-07T08:00:00.000Z");
+    for (const stage of ["missing", "unseen", "learning"] as const) {
+      const phrase = { ...createNewPhrase({ english: `Blocked ${stage}`, chinese: stage, categoryId: "daily" }, now), id: `blocked-${stage}` };
+      await repo.savePhrase(phrase);
+      if (stage !== "missing") await repo.savePhraseLearningState({ phraseId: phrase.id, stage, consecutiveGood: 0, masteredDates: [], updatedAt: now.toISOString() });
+      const before = await repo.exportSnapshot();
+      await expect(repo.submitReview(phrase.id, "good", now)).rejects.toThrow("尚未完成新句学习");
+      const after = await repo.exportSnapshot();
+      expect(after.phrases).toEqual(before.phrases);
+      expect(after.reviewLogs).toEqual(before.reviewLogs);
+      expect(after.phraseLearningStates).toEqual(before.phraseLearningStates);
+      expect(after.trainingEvents).toEqual(before.trainingEvents);
+    }
+  });
+
+  it("allows a mastered phrase into standalone review", async () => {
+    const now = new Date("2026-08-07T08:00:00.000Z");
+    const phrase = { ...createNewPhrase({ english: "Mastered review", chinese: "已掌握复习", categoryId: "daily" }, now), id: "mastered-review" };
+    await repo.savePhrase(phrase);
+    await repo.savePhraseLearningState({ phraseId: phrase.id, stage: "mastered", firstSeenAt: now.toISOString(), firstTestedAt: now.toISOString(), consecutiveGood: 3, masteredDates: ["2026-08-07"], updatedAt: now.toISOString() });
+    await repo.submitReview(phrase.id, "good", now);
+    expect(await repo.getPhrase(phrase.id)).toMatchObject({ reviewStep: 1, lastReviewedAt: now.toISOString() });
+    expect((await repo.exportSnapshot()).reviewLogs.filter(({ phraseId }) => phraseId === phrase.id)).toHaveLength(1);
   });
 
   it("persists legal phrase states and learning-session CRUD in updated order", async () => {

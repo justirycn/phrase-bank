@@ -280,11 +280,16 @@ export class LocalPhraseRepository implements PhraseRepository {
     const tx = db.transaction(["phrases", "reviewLogs", "phraseLearningState"], "readwrite");
     const phrase = await tx.objectStore("phrases").get(id);
     if (!phrase) throw new Error("找不到这条语言块");
+    const stateStore = tx.objectStore("phraseLearningState");
+    const currentState = await stateStore.get(id);
+    if (currentState?.stage !== "learned" && currentState?.stage !== "mastered") {
+      try { tx.abort(); } catch { /* Transaction may already be inactive. */ }
+      try { await tx.done; } catch { /* Preserve the domain error. */ }
+      throw new Error("这句话尚未完成新句学习，不能进入复习");
+    }
     const scheduled = scheduleReview(phrase, result, now);
     await tx.objectStore("phrases").put(scheduled.phrase);
     await tx.objectStore("reviewLogs").put(scheduled.log);
-    const stateStore = tx.objectStore("phraseLearningState");
-    const currentState = await stateStore.get(id);
     const nextState = reviewedState(currentState, scheduled.phrase, result, now);
     await stateStore.put(nextState);
     if (phrase.origin === "system") {
