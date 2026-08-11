@@ -154,7 +154,9 @@
       "heatmapError": { "retryVisible": true, "enabledEntryCount": 3, "horizontalOverflow": false, "entryBottoms": [393, 487, 548] },
       "heatmapRetry": { "cellCount": 84, "columns": 12, "horizontalOverflow": false, "firstCellAccessibleName": "5月18日，未学习" },
       "cssEquivalent200": { "auditLabelVisible": true, "browserZoom": false, "enabledEntryCount": 3, "horizontalOverflow": false, "scrollHeight": 1763 },
-      "realNonHomeReturn": { "screen": "library", "returnedHome": true, "cellCount": 84, "enabledNavActions": 4, "horizontalOverflow": false, "bottomNavigationHeightCssPx": 76, "bottomNavigationAtViewportBottom": true, "mainBottomPaddingCssPx": 88 }
+      "realNonHomeReturn": { "screen": "library", "returnedHome": true, "cellCount": 84, "enabledNavActions": 4, "horizontalOverflow": false, "bottomNavigationHeightCssPx": 76, "bottomNavigationAtViewportBottom": true, "mainBottomPaddingCssPx": 88 },
+      "heatmapErrorFocused": { "errorAndRetryInViewport": true, "horizontalOverflow": false, "scrollY": 477, "statusTop": 622.734375, "retryBottom": 690.734375, "capture": "uncropped full-page JPEG" },
+      "cssEquivalent200HeatmapFocused": { "labelAndHeatmapInViewport": true, "cellCount": 84, "columns": 12, "gridTemplateColumns": "21.4062px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px", "firstAccessibleName": "5月18日，未学习", "horizontalOverflow": false, "browserZoom": false, "scrollY": 919, "labelTop": 0, "heatmapTop": 406.40625, "capture": "uncropped full-page JPEG" }
     }
   },
   "localHttp": {

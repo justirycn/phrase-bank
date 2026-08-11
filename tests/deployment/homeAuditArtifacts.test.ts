@@ -33,6 +33,8 @@ describe("home performance audit evidence", () => {
       "09-real-library-screen-chrome-390x844.jpg",
       "10-real-home-return-chrome-390x844.jpg",
     ]) expect(jpegDimensions(name)).toEqual({ width: 375, height: 812 });
+    expect(jpegDimensions("11-heatmap-error-focused-chrome-390x844.jpg")).toEqual({ width: 375, height: 1321 });
+    expect(jpegDimensions("12-css-equivalent-200-heatmap-focused-chrome-390x844.jpg")).toEqual({ width: 375, height: 1763 });
   });
 
   it("records honest Chrome-only visual acceptance observations", () => {
@@ -46,6 +48,13 @@ describe("home performance audit evidence", () => {
       heatmapRetry: expect.objectContaining({ cellCount: 84 }),
       cssEquivalent200: expect.objectContaining({ auditLabelVisible: true, browserZoom: false }),
       realNonHomeReturn: expect.objectContaining({ returnedHome: true }),
+    }));
+    expect(metrics.visualAcceptance.states.heatmapErrorFocused).toEqual(expect.objectContaining({
+      errorAndRetryInViewport: true,
+    }));
+    expect(metrics.visualAcceptance.states.cssEquivalent200HeatmapFocused).toEqual(expect.objectContaining({
+      labelAndHeatmapInViewport: true, cellCount: 84, columns: 12,
+      horizontalOverflow: false, browserZoom: false,
     }));
   });
 
