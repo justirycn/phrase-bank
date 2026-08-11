@@ -580,10 +580,14 @@ describe("PhraseBankApp", () => {
   it("loads speech preferences and persists auto reading and accent changes", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     repo.preferences = { accent: "en-GB", autoSpeak: true };
+    let resolveLoad!: (value: SpeechPreferences) => void;
+    repo.preferenceLoad = new Promise((resolve) => { resolveLoad = resolve; });
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: "设置" }));
 
     const autoSpeak = await screen.findByRole("checkbox", { name: "自动朗读答案" });
+    resolveLoad(repo.preferences);
+    await vi.waitFor(() => expect(autoSpeak).toBeEnabled());
     expect(autoSpeak).toBeChecked();
     expect(screen.getByRole("radio", { name: "英式英语" })).toBeChecked();
     expect(screen.getByRole("radio", { name: "美式英语" })).not.toBeChecked();

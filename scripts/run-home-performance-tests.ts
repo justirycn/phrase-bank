@@ -11,6 +11,7 @@ const files = [
   "tests/support/performanceEvidenceGuard.test.ts",
   "tests/support/startupDependencyMetrics.test.ts",
   "tests/support/performanceGateIsolation.test.ts",
+  "tests/support/gitEvidence.test.ts",
 ];
 const result = spawnSync(process.execPath, [join(process.cwd(), "node_modules/vitest/vitest.mjs"), "run", ...files], {
   cwd: process.cwd(), stdio: "inherit", env: { ...process.env, HOME_PERFORMANCE_BUILD: "1" },
