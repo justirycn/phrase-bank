@@ -1,0 +1,23 @@
+{
+  "viewport": { "width": 390, "height": 844 },
+  "states": [
+    { "file": "01-home.png", "state": "home", "docScrollWidth": 390, "overlayCount": 0 },
+    { "file": "02-study.png", "state": "study", "docScrollWidth": 390, "overlayCount": 0 },
+    { "file": "03-fifth.png", "state": "fifth", "innerWidth": 390, "innerHeight": 844, "docScrollWidth": 390, "docClientWidth": 390, "overlayCount": 0 },
+    { "file": "04-hidden.png", "state": "hidden", "docScrollWidth": 390, "overlayCount": 0 },
+    { "file": "05-revealed.png", "state": "revealed", "innerWidth": 390, "innerHeight": 844, "docScrollWidth": 390, "docClientWidth": 390, "overlayCount": 0 },
+    { "file": "06-error.png", "state": "error", "docScrollWidth": 390, "overlayCount": 0 },
+    { "file": "07-complete.png", "state": "complete", "docScrollWidth": 390, "overlayCount": 0 },
+    { "file": "08-library.png", "state": "library", "docScrollWidth": 390, "overlayCount": 0 }
+  ],
+  "zoom200": {
+    "innerWidth": 390,
+    "innerHeight": 844,
+    "viewportHeight": 844,
+    "docClientWidth": 375,
+    "docScrollWidth": 375,
+    "bodyScrollWidth": 375,
+    "docScrollHeight": 4621,
+    "actionRect": { "left": 40, "right": 335, "top": 700, "bottom": 812 }
+  }
+}

@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("mobile phrase typography", () => {
@@ -85,5 +85,35 @@ describe("iPhone new phrase learning styles", () => {
     const css = await readFile("app/globals.css", "utf8");
 
     expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.new-phrase-learning[^}]*animation:\s*none/s);
+  });
+});
+
+describe("iPhone learning visual audit artifacts", () => {
+  const auditDirectory = "docs/audits/iphone13pro-learning";
+
+  it("keeps exactly eight genuine 390 by 844 PNG captures", async () => {
+    const expected = ["01-home.png", "02-study.png", "03-fifth.png", "04-hidden.png", "05-revealed.png", "06-error.png", "07-complete.png", "08-library.png"];
+    const actual = (await readdir(auditDirectory)).filter((name) => name.endsWith(".png")).sort();
+    expect(actual).toEqual(expected);
+
+    for (const name of actual) {
+      const image = await readFile(`${auditDirectory}/${name}`);
+      expect(image.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      expect(image.subarray(12, 16).toString("ascii")).toBe("IHDR");
+      expect(image.readUInt32BE(16)).toBe(390);
+      expect(image.readUInt32BE(20)).toBe(844);
+    }
+  });
+
+  it("records executable viewport and 200 percent reachability evidence", async () => {
+    const metrics = JSON.parse(await readFile(`${auditDirectory}/metrics.json`, "utf8"));
+    expect(metrics.viewport).toEqual({ width: 390, height: 844 });
+    expect(metrics.states).toHaveLength(8);
+    for (const state of metrics.states) expect(state.docScrollWidth).toBeLessThanOrEqual(390);
+    expect(metrics.zoom200.docScrollWidth).toBeLessThanOrEqual(metrics.zoom200.docClientWidth);
+    expect(metrics.zoom200.actionRect.left).toBeGreaterThanOrEqual(0);
+    expect(metrics.zoom200.actionRect.right).toBeLessThanOrEqual(metrics.zoom200.docClientWidth);
+    expect(metrics.zoom200.actionRect.top).toBeGreaterThanOrEqual(0);
+    expect(metrics.zoom200.actionRect.bottom).toBeLessThanOrEqual(metrics.zoom200.viewportHeight);
   });
 });
