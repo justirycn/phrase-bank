@@ -14,7 +14,7 @@ function homeRepository() {
 }
 
 afterEach(() => {
-  vi.doUnmock("../../app/components/NonHomeScreens");
+  vi.doUnmock("../../app/components/screens/LibraryScreen");
   vi.resetModules();
 });
 
@@ -23,7 +23,7 @@ describe("non-home screen loading", () => {
     const user = userEvent.setup();
     let resolveScreens!: (module: Record<string, unknown>) => void;
     const loadScreens = vi.fn(() => new Promise<Record<string, unknown>>((resolve) => { resolveScreens = resolve; }));
-    vi.doMock("../../app/components/NonHomeScreens", loadScreens);
+    vi.doMock("../../app/components/screens/LibraryScreen", loadScreens);
     const { PhraseBankApp } = await import("../../app/PhraseBankApp");
     const repository = homeRepository();
 
@@ -35,21 +35,27 @@ describe("non-home screen loading", () => {
     expect(loadScreens).toHaveBeenCalledTimes(1);
     expect(await screen.findByRole("status", { name: "正在打开句库" })).toBeVisible();
 
-    resolveScreens({ Library: () => <h1>延迟句库</h1> });
+    resolveScreens({ default: () => <h1>延迟句库</h1> });
     expect(await screen.findByRole("heading", { name: "延迟句库" })).toBeVisible();
   }, 10_000);
 
-  it("offers a reload action when a non-home screen chunk cannot load", async () => {
+  it("retries a failed screen loader and clears the error when the second load succeeds", async () => {
     const user = userEvent.setup();
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    vi.doMock("../../app/components/NonHomeScreens", () => Promise.reject(new Error("chunk unavailable")));
+    const loadLibrary = vi.fn()
+      .mockRejectedValueOnce(new Error("chunk unavailable"))
+      .mockResolvedValueOnce({ default: () => <h1>重试后的句库</h1> });
+    vi.doMock("../../app/components/screens/LibraryScreen", loadLibrary);
     const { PhraseBankApp } = await import("../../app/PhraseBankApp");
 
     render(<PhraseBankApp repository={homeRepository()} />);
     await user.click(await screen.findByRole("button", { name: "句库" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("界面暂时无法加载，请重试。");
-    expect(screen.getByRole("button", { name: "重新加载" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "重新加载" }));
+    expect(await screen.findByRole("heading", { name: "重试后的句库" })).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(loadLibrary).toHaveBeenCalledTimes(2);
     consoleError.mockRestore();
   }, 10_000);
 });

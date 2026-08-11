@@ -22,24 +22,34 @@ const mondayOf = (date: string) => { const value = new Date(`${date}T00:00:00.00
 
 export type AddSaveResult = { status: "saved" } | { status: "partial"; state: PhraseLearningState };
 
-const loadNonHomeScreens = () => import("./components/NonHomeScreens");
-const Library = lazy(() => loadNonHomeScreens().then((module) => ({ default: module.Library })));
-const AddPhrase = lazy(() => loadNonHomeScreens().then((module) => ({ default: module.AddPhrase })));
-const LearningSession = lazy(() => loadNonHomeScreens().then((module) => ({ default: module.LearningSession })));
-const Review = lazy(() => loadNonHomeScreens().then((module) => ({ default: module.Review })));
-const PracticeSession = lazy(() => loadNonHomeScreens().then((module) => ({ default: module.PracticeSession })));
-const Settings = lazy(() => loadNonHomeScreens().then((module) => ({ default: module.Settings })));
+const loadLibraryScreen = () => import("./components/screens/LibraryScreen");
+const loadAddPhraseScreen = () => import("./components/screens/AddPhraseScreen");
+const loadSettingsScreen = () => import("./components/screens/SettingsScreen");
+const loadReviewScreen = () => import("./components/screens/ReviewScreen");
+const loadPracticeScreen = () => import("./components/screens/PracticeScreen");
+const loadLearningScreen = () => import("./components/screens/LearningScreen");
+
+function createLazyScreens() {
+  return {
+    Library: lazy(loadLibraryScreen),
+    AddPhrase: lazy(loadAddPhraseScreen),
+    Settings: lazy(loadSettingsScreen),
+    Review: lazy(loadReviewScreen),
+    PracticeSession: lazy(loadPracticeScreen),
+    LearningSession: lazy(loadLearningScreen),
+  };
+}
 
 function ScreenLoading({ screen }: { screen: Screen }) {
   const label = screen === "library" ? "句库" : screen === "add" ? "添加句子" : screen === "settings" ? "设置" : screen === "learn" ? "新句学习" : "训练";
   return <div className="screen-loading" role="status" aria-label={`正在打开${label}`}><div className="pulse" /><p>正在打开{label}…</p></div>;
 }
 
-class ScreenLoadBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+class ScreenLoadBoundary extends Component<{ children: ReactNode; onRetry: () => void }, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
   render() {
-    if (this.state.failed) return <div className="loading"><p role="alert">界面暂时无法加载，请重试。</p><button onClick={() => window.location.reload()}>重新加载</button></div>;
+    if (this.state.failed) return <div className="loading"><p role="alert">界面暂时无法加载，请重试。</p><button onClick={() => { this.setState({ failed: false }); this.props.onRetry(); }}>重新加载</button></div>;
     return this.props.children;
   }
 }
@@ -62,6 +72,8 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
   const [trainingRun, setTrainingRun] = useState(0);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [lazyScreens, setLazyScreens] = useState(createLazyScreens);
+  const { Library, AddPhrase, LearningSession, Review, PracticeSession, Settings } = lazyScreens;
   const refresh = home.refresh;
 
   useEffect(() => {
@@ -130,7 +142,7 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
       {(error || home.error) && <div className="toast error" role="alert">{error || home.error}</div>}
       {notice && <div className="toast" role="status">{notice}</div>}
       {screen === "home" && <TrainingHome dailySummary={dailySummary} streak={calculateStreak(trainingDays, today)} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} activeLearning={Boolean(activeLearningSession)} activeRemaining={activeRemaining} dueCount={eligibleDue.length} practiceCount={learnedEligibleCount} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onStartLearning={() => go("learn")} onStartStandard={() => go("review")} onStartQuick={() => startTraining("quick")} />}
-      <ScreenLoadBoundary key={screen}><Suspense fallback={<ScreenLoading screen={screen} />}>{screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
+      <ScreenLoadBoundary key={screen} onRetry={() => setLazyScreens(createLazyScreens())}><Suspense fallback={<ScreenLoading screen={screen} />}>{screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={saveAddedPhrase} onRetryState={retryAddedPhraseState} onComplete={completeAddedPhrase} />}
       {screen === "learn" && repo && <LearningSession repository={repo} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}
       {screen === "review" && <Review phrases={eligibleDue} onBack={() => go("home")} onGrade={async (id, result) => { if (!repo) return; await repo.submitReview(id, result); await refresh(); }} />}

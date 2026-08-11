@@ -272,7 +272,7 @@ describe("PhraseBankApp", () => {
     await user.click(await screen.findByRole("button", { name: "添加" }));
     const learnFirst = await screen.findByRole("checkbox", { name: /先在.*学习新句.*认识/ });
     expect(learnFirst).toBeChecked();
-    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Newest personal phrase");
+    await user.type(await screen.findByRole("textbox", { name: "英文表达" }), "Newest personal phrase");
     await user.type(screen.getByRole("textbox", { name: "中文含义" }), "新的个人句子");
     await user.click(screen.getByRole("button", { name: "保存语言块" }));
     expect(repo.learningStates).toHaveLength(0);
@@ -282,7 +282,7 @@ describe("PhraseBankApp", () => {
     await user.click(screen.getByRole("button", { name: /关闭学习并返回首页/ }));
     await user.click(screen.getByRole("button", { name: "添加" }));
 
-    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Already familiar phrase");
+    await user.type(await screen.findByRole("textbox", { name: "英文表达" }), "Already familiar phrase");
     await user.type(screen.getByRole("textbox", { name: "中文含义" }), "已经熟悉的句子");
     await user.click(screen.getByRole("checkbox", { name: /先在.*学习新句.*认识/ }));
     await user.click(screen.getByRole("button", { name: "保存语言块" }));
@@ -294,7 +294,7 @@ describe("PhraseBankApp", () => {
     const user = userEvent.setup(); const repo = new MemoryRepository(); repo.failPhraseSave = true;
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: "添加" }));
-    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Unsaved phrase");
+    await user.type(await screen.findByRole("textbox", { name: "英文表达" }), "Unsaved phrase");
     await user.type(screen.getByRole("textbox", { name: "中文含义" }), "未保存句子");
     await user.click(screen.getByRole("button", { name: "保存语言块" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("句子保存失败");
@@ -307,7 +307,7 @@ describe("PhraseBankApp", () => {
     repo.savePhraseImpl = () => new Promise<void>((_resolve, reject) => { rejectSave = reject; });
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: "添加" }));
-    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Only once");
+    await user.type(await screen.findByRole("textbox", { name: "英文表达" }), "Only once");
     await user.type(screen.getByRole("textbox", { name: "中文含义" }), "只保存一次");
     const form = screen.getByRole("button", { name: "保存语言块" }).closest("form")!;
     fireEvent.submit(form); fireEvent.submit(form);
@@ -329,7 +329,7 @@ describe("PhraseBankApp", () => {
     repoA.savePhraseImpl = (phrase) => new Promise<void>((resolve) => { pendingPhrase = phrase; resolveA = () => { repoA.phrases.push(phrase); resolve(); }; });
     const view = render(<PhraseBankApp repository={repoA as never} />);
     await user.click(await screen.findByRole("button", { name: "添加" }));
-    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Old pending save");
+    await user.type(await screen.findByRole("textbox", { name: "英文表达" }), "Old pending save");
     await user.type(screen.getByRole("textbox", { name: "中文含义" }), "旧仓库等待保存");
     await user.click(screen.getByRole("button", { name: "保存语言块" }));
     const readsA = repoA.phraseReadAttempts;
@@ -348,7 +348,7 @@ describe("PhraseBankApp", () => {
     repo.savePhraseImpl = (phrase) => new Promise<void>((resolve) => { pending = phrase; resolveSave = () => { repo.phrases.push(phrase); resolve(); }; });
     const view = render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: "添加" }));
-    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Unmount pending");
+    await user.type(await screen.findByRole("textbox", { name: "英文表达" }), "Unmount pending");
     await user.type(screen.getByRole("textbox", { name: "中文含义" }), "卸载等待保存");
     await user.click(screen.getByRole("button", { name: "保存语言块" }));
     const reads = repo.phraseReadAttempts;
@@ -362,7 +362,7 @@ describe("PhraseBankApp", () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: "添加" }));
-    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Partially saved phrase");
+    await user.type(await screen.findByRole("textbox", { name: "英文表达" }), "Partially saved phrase");
     await user.type(screen.getByRole("textbox", { name: "中文含义" }), "部分保存句子");
     await user.click(screen.getByRole("checkbox", { name: /先在.*学习新句.*认识/ }));
     repo.failLearningStateSave = true; repo.failPhraseReads = true;
@@ -380,7 +380,7 @@ describe("PhraseBankApp", () => {
     const user = userEvent.setup(); const repoA = new MemoryRepository(); const repoB = new MemoryRepository(); repoA.failLearningStateSave = true;
     const view = render(<PhraseBankApp repository={repoA as never} />);
     await user.click(await screen.findByRole("button", { name: "添加" }));
-    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Portable retry");
+    await user.type(await screen.findByRole("textbox", { name: "英文表达" }), "Portable retry");
     await user.type(screen.getByRole("textbox", { name: "中文含义" }), "可迁移重试");
     await user.click(screen.getByRole("checkbox", { name: /先在.*学习新句.*认识/ }));
     await user.click(screen.getByRole("button", { name: "保存语言块" }));
@@ -399,7 +399,7 @@ describe("PhraseBankApp", () => {
     const user = userEvent.setup(); const repoA = new MemoryRepository(); const repoB = new MemoryRepository(); repoA.failLearningStateSave = true;
     const view = render(<PhraseBankApp repository={repoA as never} />);
     await user.click(await screen.findByRole("button", { name: "添加" }));
-    await user.type(screen.getByRole("textbox", { name: "英文表达" }), "Pending portable retry");
+    await user.type(await screen.findByRole("textbox", { name: "英文表达" }), "Pending portable retry");
     await user.type(screen.getByRole("textbox", { name: "中文含义" }), "等待迁移重试");
     await user.click(screen.getByRole("checkbox", { name: /先在.*学习新句.*认识/ }));
     await user.click(screen.getByRole("button", { name: "保存语言块" }));
@@ -435,7 +435,7 @@ describe("PhraseBankApp", () => {
     ];
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: "句库" }));
-    await user.click(screen.getByRole("tab", { name: "系统句库" }));
+    await user.click(await screen.findByRole("tab", { name: "系统句库" }));
     for (const label of ["未学习", "学习中", "已学习", "已掌握"]) expect(screen.getByRole("button", { name: label })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "未学习" }));
     expect(screen.getByText("Unseen system")).toBeVisible();
@@ -468,9 +468,9 @@ describe("PhraseBankApp", () => {
     ];
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: /句库/ }));
-    expect(screen.getByText("My phrase")).toBeVisible();
+    expect(await screen.findByText("My phrase")).toBeVisible();
     expect(screen.queryByText("System phrase")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("tab", { name: "系统句库" }));
+    await user.click(await screen.findByRole("tab", { name: "系统句库" }));
     expect(screen.getByText("System phrase")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "复制到我的句子" }));
     expect(repo.phrases.filter(({ english, origin }) => english === "System phrase" && origin === "personal")).toHaveLength(1);
@@ -482,7 +482,7 @@ describe("PhraseBankApp", () => {
     repo.phrases = Array.from({ length: 60 }, (_, index) => makePhrase({ id: `system-${index}`, english: `System phrase ${index}`, origin: "system", kind: "core", subcategory: "planning", cefrLevel: "B1" }));
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: /句库/ }));
-    await user.click(screen.getByRole("tab", { name: "系统句库" }));
+    await user.click(await screen.findByRole("tab", { name: "系统句库" }));
     expect(screen.getAllByRole("listitem")).toHaveLength(50);
     await user.click(screen.getByRole("button", { name: "再显示 10 条" }));
     expect(screen.getAllByRole("listitem")).toHaveLength(60);
