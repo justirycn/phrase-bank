@@ -1247,6 +1247,7 @@ label.settings-action:focus-within {
   width: min(100%, 680px);
   min-height: 100dvh;
   margin: 0 auto;
+  container-type: inline-size;
   padding: 18px 22px;
   padding-bottom: calc(196px + env(safe-area-inset-bottom));
   color: var(--ink);
@@ -1465,12 +1466,6 @@ select {
 }
 
 @media (max-width: 390px) {
-  .training-entry {
-    grid-template-columns: 1fr;
-  }
-  .training-entry button {
-    width: 100%;
-  }
   .new-phrase-learning {
     padding-inline: 20px;
   }
@@ -1483,11 +1478,19 @@ select {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .new-phrase-learning,
-  .new-phrase-learning * {
-    animation: none !important;
-    transition: none !important;
-    scroll-behavior: auto !important;
+@container (max-width: 240px) {
+  .phase-test .new-learning-card {
+    padding-bottom: 420px;
+  }
+  .new-learning-actions {
+    width: 100%;
+    min-width: 0;
+  }
+  .new-learning-grades {
+    grid-template-columns: 1fr;
+  }
+  .new-learning-actions button {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 }

@@ -84,11 +84,21 @@ describe("iPhone new phrase learning styles", () => {
   it("removes learning motion when reduced motion is requested", async () => {
     const css = await readFile("app/globals.css", "utf8");
 
-    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?\.new-phrase-learning[^}]*animation:\s*none/s);
+    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\*\s*\{[^}]*animation:\s*none\s*!important/s);
+  });
+
+  it("stacks the tallest revealed tray in a 200 percent equivalent container", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+
+    expect(css).toMatch(/\.new-phrase-learning\s*\{[^}]*container-type:\s*inline-size/s);
+    expect(css).toMatch(/@container\s*\(max-width:\s*240px\)\s*\{[\s\S]*?\.new-learning-grades\s*\{[^}]*grid-template-columns:\s*1fr/s);
+    expect(css).toMatch(/@container\s*\(max-width:\s*240px\)[\s\S]*?\.phase-test\s+\.new-learning-card\s*\{[^}]*padding-bottom:\s*420px/s);
+    expect(css).toMatch(/@container\s*\(max-width:\s*240px\)[\s\S]*?\.new-learning-actions\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/@container\s*\(max-width:\s*240px\)[\s\S]*?\.new-learning-actions button\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s);
   });
 });
 
-describe("iPhone learning visual audit artifacts", () => {
+describe("checked-in iPhone learning audit artifact integrity", () => {
   const auditDirectory = "docs/audits/iphone13pro-learning";
 
   it("keeps exactly eight genuine 390 by 844 PNG captures", async () => {
@@ -105,7 +115,7 @@ describe("iPhone learning visual audit artifacts", () => {
     }
   });
 
-  it("records executable viewport and 200 percent reachability evidence", async () => {
+  it("validates the checked-in viewport sample schema and integrity", async () => {
     const metrics = JSON.parse(await readFile(`${auditDirectory}/metrics.json`, "utf8"));
     expect(metrics.viewport).toEqual({ width: 390, height: 844 });
     expect(metrics.states).toHaveLength(8);

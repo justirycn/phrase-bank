@@ -26,6 +26,6 @@ Across all captures, the 20–22px horizontal gutters, anywhere wrapping, touch 
 
 ## 200% text-equivalent check
 
-A temporary audit-only outer wrapper used CSS `zoom: 2` on the study state to approximate a 200% text/layout scale. At that scale the browser reported `documentElement.clientWidth=375`, `documentElement.scrollWidth=375`, and `scrollHeight=4621`, with no horizontal overflow. The “下一句” control remained reachable with a bounding rectangle from x=40 to x=335 and y=700 to y=812. The temporary route and zoom wrapper were removed after the audit and are not part of the committed application.
+A temporary audit-only outer wrapper used CSS `zoom: 2` on the **study state** to approximate a 200% text/layout scale. At that scale the browser reported `documentElement.clientWidth=375`, `documentElement.scrollWidth=375`, and `scrollHeight=4621`, with no horizontal overflow. The “下一句” control remained reachable with a bounding rectangle from x=40 to x=335 and y=700 to y=812. The temporary route and zoom wrapper were removed after the audit and are not part of the committed application.
 
-The captured viewport, per-state overflow/overlay results, and 200% reachability measurements are also stored in `metrics.json` and asserted by the mobile audit test.
+`metrics.json` is a checked-in record of that one browser sampling run. The artifact-integrity test validates its schema and detects accidental edits; it does not rerun browser layout and cannot automatically detect a current-code visual regression. A CSS container contract now structurally stacks the highest revealed-answer tray at a 200%-equivalent narrow width, but a future browser QA pass should still sample that revealed state directly.
