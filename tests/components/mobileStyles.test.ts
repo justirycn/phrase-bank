@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 describe("mobile phrase typography", () => {
@@ -44,5 +44,91 @@ describe("mobile phrase typography", () => {
     expect(primaryRule).toMatch(/width:100%/);
     expect(primaryRule).toMatch(/background:var\(--forest/);
     expect(primaryRule).toMatch(/color:#fff/);
+  });
+});
+
+describe("iPhone new phrase learning styles", () => {
+  it("reserves the learning action tray and bottom safe area", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+
+    expect(css).toMatch(/\.new-phrase-learning\s*\{[^}]*padding-bottom:\s*calc\(196px \+ env\(safe-area-inset-bottom\)\)/s);
+    expect(css).toMatch(/\.new-learning-actions\s*\{[^}]*padding:[^;}]*calc\(16px \+ env\(safe-area-inset-bottom\)\)/s);
+  });
+
+  it("keeps learning controls comfortably tappable without iOS input zoom", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+
+    expect(css).toMatch(/\.new-learning-close\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/s);
+    expect(css).toMatch(/\.new-learning-actions button\s*\{[^}]*min-height:\s*56px/s);
+    expect(css).toMatch(/\.new-learning-state-actions button[^}]*min-height:\s*44px/s);
+    expect(css).toMatch(/input,\s*textarea,\s*select\s*\{[^}]*font-size:\s*16px/s);
+  });
+
+  it("wraps long learning copy at every flex and grid boundary", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+    const english = css.match(/\.new-learning-english\s*\{([^}]*)\}/)?.[1] ?? "";
+
+    expect(english).toMatch(/white-space:\s*normal/);
+    expect(english).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(css).toMatch(/\.new-learning-card,\s*\.new-learning-answer[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/\.new-learning-chinese,[^}]*overflow-wrap:\s*anywhere/s);
+  });
+
+  it("stacks all three home entries cleanly on the iPhone width", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+    expect(css).toMatch(/\.training-entry\s*\{[^}]*grid-template-columns:\s*1fr/);
+    expect(css).toMatch(/\.training-entry button\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*overflow-wrap:\s*anywhere/s);
+    expect(css).toMatch(/\.training-entry button > span\s*\{[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/\.learning-start\s*\{[^}]*min-height:\s*88px/s);
+  });
+
+  it("removes learning motion when reduced motion is requested", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+
+    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[^}]*\*\s*\{[^}]*animation:\s*none\s*!important/s);
+  });
+
+  it("stacks the tallest revealed tray in a 200 percent equivalent container", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+
+    expect(css).toMatch(/\.new-phrase-learning\s*\{[^}]*container-type:\s*inline-size/s);
+    expect(css).toMatch(/\.app-main:has\(> \.new-phrase-learning\)\s*\{[^}]*container-type:\s*inline-size/s);
+    expect(css).toMatch(/@container\s*\(max-width:\s*240px\)\s*\{[\s\S]*?\.new-learning-grades\s*\{[^}]*grid-template-columns:\s*1fr/s);
+    expect(css).toMatch(/@container\s*\(max-width:\s*240px\)[\s\S]*?\.new-phrase-learning\.phase-test\s*\{[^}]*padding-bottom:\s*calc\(420px \+ env\(safe-area-inset-bottom\)\)/s);
+    expect(css).toMatch(/@container\s*\(max-width:\s*240px\)[\s\S]*?\.new-learning-actions\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/@container\s*\(max-width:\s*240px\)[\s\S]*?\.new-learning-actions button\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s);
+  });
+});
+
+describe("checked-in iPhone learning audit artifact integrity", () => {
+  const auditDirectory = "docs/audits/iphone13pro-learning";
+
+  it("keeps exactly eight genuine 390 by 844 PNG captures", async () => {
+    const expected = ["01-home.png", "02-study.png", "03-fifth.png", "04-hidden.png", "05-revealed.png", "06-error.png", "07-complete.png", "08-library.png"];
+    const actual = (await readdir(auditDirectory)).filter((name) => name.endsWith(".png")).sort();
+    expect(actual).toEqual(expected);
+
+    for (const name of actual) {
+      const image = await readFile(`${auditDirectory}/${name}`);
+      expect(image.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+      expect(image.subarray(12, 16).toString("ascii")).toBe("IHDR");
+      expect(image.readUInt32BE(16)).toBe(390);
+      expect(image.readUInt32BE(20)).toBe(844);
+    }
+  });
+
+  it("validates the checked-in viewport sample schema and integrity", async () => {
+    const metrics = JSON.parse(await readFile(`${auditDirectory}/metrics.json`, "utf8"));
+    expect(metrics.viewport).toEqual({ width: 390, height: 844 });
+    expect(metrics.states).toHaveLength(8);
+    for (const state of metrics.states) {
+      expect(state.docScrollWidth).toBeLessThanOrEqual(390);
+      expect(state.overlayCount).toBe(0);
+    }
+    expect(metrics.zoom200.docScrollWidth).toBeLessThanOrEqual(metrics.zoom200.docClientWidth);
+    expect(metrics.zoom200.actionRect.left).toBeGreaterThanOrEqual(0);
+    expect(metrics.zoom200.actionRect.right).toBeLessThanOrEqual(metrics.zoom200.docClientWidth);
+    expect(metrics.zoom200.actionRect.top).toBeGreaterThanOrEqual(0);
+    expect(metrics.zoom200.actionRect.bottom).toBeLessThanOrEqual(metrics.zoom200.viewportHeight);
   });
 });

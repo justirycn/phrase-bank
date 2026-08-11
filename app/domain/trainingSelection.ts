@@ -11,6 +11,9 @@ export interface TrainingSelectionOptions {
   seed: string;
   newIntroducedToday: number;
   practicedTodayIds?: ReadonlySet<string>;
+  goodTodayIds?: ReadonlySet<string>;
+  previousGroupIds?: ReadonlySet<string>;
+  rotationCursor?: number;
   personalNewIntroducedToday?: number;
   systemNewIntroducedToday?: number;
   learningStates?: PhraseLearningState[];
@@ -33,171 +36,107 @@ function seededOrder(phrases: Phrase[], seed: string): Phrase[] {
   });
 }
 
+function oldestReviewedOrder(phrases: Phrase[], seed: string): Phrase[] {
+  return [...phrases].sort((left, right) => {
+    const reviewedDifference = new Date(left.lastReviewedAt ?? left.createdAt).getTime()
+      - new Date(right.lastReviewedAt ?? right.createdAt).getTime();
+    if (reviewedDifference) return reviewedDifference;
+    const hashDifference = stableHash(`${seed}${left.id}`) - stableHash(`${seed}${right.id}`);
+    return hashDifference || left.id.localeCompare(right.id);
+  });
+}
+
+function rotateOrder(phrases: Phrase[], offset: number): Phrase[] {
+  if (phrases.length === 0) return [];
+  const normalizedOffset = ((offset % phrases.length) + phrases.length) % phrases.length;
+  return [...phrases.slice(normalizedOffset), ...phrases.slice(0, normalizedOffset)];
+}
+
+function sourceFor(phrase: Phrase, nowTime: number): Exclude<TrainingSource, "new" | "requeue"> {
+  if (new Date(phrase.nextReviewAt).getTime() <= nowTime) return "due";
+  if (phrase.masteryLevel <= 2) return "weak";
+  return "mature";
+}
+
+function isEligibleStage(state: PhraseLearningState | undefined): boolean {
+  return state?.stage === "learned" || state?.stage === "mastered";
+}
+
 export function selectTrainingGroup(
   phrases: Phrase[],
   options: TrainingSelectionOptions,
 ): TrainingCandidate[] {
-  if (options.personalNewIntroducedToday !== undefined || options.systemNewIntroducedToday !== undefined || options.learningStates !== undefined) {
-    return selectPrioritizedGroup(phrases, options);
-  }
-  const uniquePhrases = [...new Map(phrases.map((phrase) => [phrase.id, phrase])).values()];
-  const reviewed = uniquePhrases.filter((phrase) => phrase.lastReviewedAt !== undefined);
-  const newPhrases = uniquePhrases.filter((phrase) => phrase.lastReviewedAt === undefined);
+  const target = options.mode === "quick" ? 3 : 10;
   const nowTime = options.now.getTime();
-  const due = reviewed.filter((phrase) => new Date(phrase.nextReviewAt).getTime() <= nowTime);
-  const future = reviewed.filter((phrase) => new Date(phrase.nextReviewAt).getTime() > nowTime);
-  const weak = future.filter((phrase) => phrase.masteryLevel <= 1);
-  const mature = future.filter((phrase) => phrase.masteryLevel === 3);
-  const levelTwo = future.filter((phrase) => phrase.masteryLevel === 2);
-  const allocation = options.mode === "quick"
-    ? { target: 3, due: 2, weak: 1, mature: 0 }
-    : { target: 10, due: 6, weak: 2, mature: 2 };
+  const orderSeed = `${options.seed}:${options.rotationCursor ?? 0}`;
+  const states = new Map((options.learningStates ?? []).map((state) => [state.phraseId, state]));
+  const practicedTodayIds = options.practicedTodayIds ?? new Set<string>();
+  const goodTodayIds = options.goodTodayIds ?? new Set<string>();
+  const previousGroupIds = options.previousGroupIds ?? new Set<string>();
+  const eligible = [...new Map(phrases.map((phrase) => [phrase.id, phrase])).values()]
+    .filter((phrase) => !phrase.retiredAt)
+    .filter((phrase) => isEligibleStage(states.get(phrase.id)))
+    .filter((phrase) => phrase.origin !== "system" || phrase.kind !== "example" || Boolean(states.get(phrase.id)?.unlockedAt));
+  const unique = eligible
+    .filter((phrase) => options.mode !== "quick" || !goodTodayIds.has(phrase.id))
+    .filter((phrase) => options.mode !== "quick" || !previousGroupIds.has(phrase.id));
   const selected: TrainingCandidate[] = [];
   const selectedIds = new Set<string>();
-  const practicedTodayIds = options.practicedTodayIds ?? new Set<string>();
-  const fresh = (pool: Phrase[]) => pool.filter((phrase) => !practicedTodayIds.has(phrase.id));
-  const repeated = (pool: Phrase[]) => pool.filter((phrase) => practicedTodayIds.has(phrase.id));
 
-  const add = (pool: Phrase[], source: TrainingSource, limit: number) => {
-    for (const phrase of seededOrder(pool, options.seed)) {
-      if (selected.length >= allocation.target || limit <= 0) break;
+  const add = (pool: Phrase[], limit = Number.POSITIVE_INFINITY) => {
+    for (const phrase of pool) {
+      if (selected.length >= target || limit <= 0) break;
       if (selectedIds.has(phrase.id)) continue;
-      selected.push({ phrase, source });
+      selected.push({ phrase, source: sourceFor(phrase, nowTime) });
       selectedIds.add(phrase.id);
       limit -= 1;
     }
   };
 
-  add(fresh(due), "due", allocation.due);
-  add(fresh(weak), "weak", allocation.weak);
-  add(fresh(mature), "mature", allocation.mature);
-
-  const reviewedBackfill = [
-    ...fresh(due).map((phrase) => ({ phrase, source: "due" as const })),
-    ...fresh(weak).map((phrase) => ({ phrase, source: "weak" as const })),
-    ...fresh(levelTwo).map((phrase) => ({ phrase, source: "weak" as const })),
-    ...fresh(mature).map((phrase) => ({ phrase, source: "mature" as const })),
-  ].sort((left, right) => {
-    const difference = stableHash(`${options.seed}${left.phrase.id}`)
-      - stableHash(`${options.seed}${right.phrase.id}`);
-    return difference || left.phrase.id.localeCompare(right.phrase.id);
-  });
-
-  for (const candidate of reviewedBackfill) {
-    if (selected.length >= allocation.target) break;
-    if (selectedIds.has(candidate.phrase.id)) continue;
-    selected.push(candidate);
-    selectedIds.add(candidate.phrase.id);
-  }
-
-  const newAllowance = Math.max(0, 3 - options.newIntroducedToday);
-  add(fresh(newPhrases), "new", Math.min(newAllowance, allocation.target - selected.length));
-
-  const repeatedBackfill = [
-    ...repeated(due).map((phrase) => ({ phrase, source: "due" as const })),
-    ...repeated(weak).map((phrase) => ({ phrase, source: "weak" as const })),
-    ...repeated(levelTwo).map((phrase) => ({ phrase, source: "weak" as const })),
-    ...repeated(mature).map((phrase) => ({ phrase, source: "mature" as const })),
-  ].sort((left, right) => {
-    const difference = stableHash(`${options.seed}${left.phrase.id}`)
-      - stableHash(`${options.seed}${right.phrase.id}`);
-    return difference || left.phrase.id.localeCompare(right.phrase.id);
-  });
-
-  for (const candidate of repeatedBackfill) {
-    if (selected.length >= allocation.target) break;
-    if (selectedIds.has(candidate.phrase.id)) continue;
-    selected.push(candidate);
-    selectedIds.add(candidate.phrase.id);
-  }
-
-  const selectedNewCount = selected.filter(({ source }) => source === "new").length;
-  add(
-    repeated(newPhrases),
-    "new",
-    Math.min(Math.max(0, newAllowance - selectedNewCount), allocation.target - selected.length),
-  );
-
-  return selected;
-}
-
-function selectPrioritizedGroup(phrases: Phrase[], options: TrainingSelectionOptions): TrainingCandidate[] {
-  const target = options.mode === "quick" ? 3 : 10;
-  const states = new Map((options.learningStates ?? []).map((state) => [state.phraseId, state]));
-  const practiced = options.practicedTodayIds ?? new Set<string>();
-  const unique = [...new Map(phrases.map((phrase) => [phrase.id, phrase])).values()]
-    .filter((phrase) => !phrase.retiredAt)
-    .filter((phrase) => phrase.origin !== "system" || phrase.kind !== "example" || Boolean(states.get(phrase.id)?.unlockedAt));
-  const nowTime = options.now.getTime();
-  const selected: TrainingCandidate[] = [];
-  const ids = new Set<string>();
-  const sourceFor = (phrase: Phrase): TrainingSource => {
-    if (!phrase.lastReviewedAt) return "new";
-    if (new Date(phrase.nextReviewAt).getTime() <= nowTime) return "due";
-    if (phrase.masteryLevel <= 2) return "weak";
-    return "mature";
+  const priorityPools = (pool: Phrase[], matureRotation = 0) => {
+    const due = pool.filter((phrase) => sourceFor(phrase, nowTime) === "due");
+    const weak = pool.filter((phrase) => sourceFor(phrase, nowTime) === "weak");
+    const mature = pool.filter((phrase) => sourceFor(phrase, nowTime) === "mature");
+    return {
+      due: seededOrder(due, orderSeed),
+      weak: seededOrder(weak, orderSeed),
+      mature: rotateOrder(oldestReviewedOrder(mature, orderSeed), matureRotation),
+    };
   };
-  const add = (pool: Phrase[], limit = Number.POSITIVE_INFINITY, preserveOrder = false) => {
-    const order = (items: Phrase[]) => preserveOrder ? items : seededOrder(items, options.seed);
-    const ordered = [...order(pool.filter((phrase) => !practiced.has(phrase.id))), ...order(pool.filter((phrase) => practiced.has(phrase.id)))];
-    for (const phrase of ordered) {
-      if (selected.length >= target || limit <= 0 || ids.has(phrase.id)) continue;
-      selected.push({ phrase, source: sourceFor(phrase) });
-      ids.add(phrase.id);
-      limit -= 1;
-    }
-  };
-  const isPersonal = (phrase: Phrase) => (phrase.origin ?? "personal") === "personal";
-  const due = unique.filter((phrase) => phrase.lastReviewedAt && new Date(phrase.nextReviewAt).getTime() <= nowTime);
-  const personalNewAllowance = Math.max(0, 5 - (options.personalNewIntroducedToday ?? 0));
-  const systemNewAllowance = Math.max(0, 3 - (options.systemNewIntroducedToday ?? 0));
-  const personalReviewed = unique.filter((phrase) => isPersonal(phrase) && phrase.lastReviewedAt)
-    .sort((left, right) => left.masteryLevel - right.masteryLevel || right.createdAt.localeCompare(left.createdAt));
-  const personalNew = seededOrder(unique.filter((phrase) => isPersonal(phrase) && !phrase.lastReviewedAt), options.seed)
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
-    .slice(0, personalNewAllowance);
-  const personalPool = [...personalNew, ...personalReviewed];
-  const systemNew = seededOrder(unique.filter((phrase) => !isPersonal(phrase) && !phrase.lastReviewedAt), options.seed).slice(0, systemNewAllowance);
-  const duePool = due.filter((phrase) => !isPersonal(phrase));
 
-  if (options.mode === "standard") {
+  if (options.mode === "quick") {
+    const practicedMatureCount = eligible.filter((phrase) => practicedTodayIds.has(phrase.id)
+      && sourceFor(phrase, nowTime) === "mature").length;
+    const matureRotation = (options.rotationCursor ?? 0) * target - practicedMatureCount;
+    const fresh = priorityPools(
+      unique.filter((phrase) => !practicedTodayIds.has(phrase.id)),
+      matureRotation,
+    );
+    add(fresh.due);
+    add(fresh.weak);
+    add(fresh.mature);
 
-    add(personalPool, 5, true);
-    add(due.filter((phrase) => !ids.has(phrase.id)), 3);
-    add(systemNew.filter((phrase) => !ids.has(phrase.id)), 2);
-    add(personalPool.filter((phrase) => !ids.has(phrase.id)));
-    add(due.filter((phrase) => !ids.has(phrase.id)));
-    add(systemNew.filter((phrase) => !ids.has(phrase.id)));
-    add(unique.filter((phrase) => phrase.lastReviewedAt && !ids.has(phrase.id)));
+    const practiced = priorityPools(
+      unique.filter((phrase) => practicedTodayIds.has(phrase.id)),
+      matureRotation,
+    );
+    add(practiced.due);
+    add(practiced.weak);
+    add(practiced.mature);
     return selected;
   }
 
-  const today = options.practicedTodayBucketCounts ?? { personal: 0, due: 0, systemNew: 0 };
-  const chosen = { personal: 0, due: 0, systemNew: 0 };
-  const pools = { personal: personalPool, due: duePool, systemNew };
-  const shares = { personal: 0.5, due: 0.3, systemNew: 0.2 };
-  const finalTotal = today.personal + today.due + today.systemNew + target;
-  while (selected.length < target) {
-    const ranked = (["personal", "due", "systemNew"] as const).sort((left, right) => {
-      const rightDeficit = shares[right] * finalTotal - today[right] - chosen[right];
-      const leftDeficit = shares[left] * finalTotal - today[left] - chosen[left];
-      return rightDeficit - leftDeficit;
-    });
-    let filled = false;
-    for (const bucket of ranked) {
-      const before = selected.length;
-      add(pools[bucket], 1, bucket === "personal");
-      if (selected.length > before) {
-        chosen[bucket] += 1;
-        filled = true;
-        break;
-      }
-    }
-    if (!filled) break;
-  }
-  add(personalPool.filter((phrase) => !ids.has(phrase.id)));
-  add(due.filter((phrase) => !ids.has(phrase.id)));
-  add(systemNew.filter((phrase) => !ids.has(phrase.id)));
-  add(unique.filter((phrase) => phrase.lastReviewedAt && !ids.has(phrase.id)));
+  const freshFirst = (pool: Phrase[]) => [
+    ...pool.filter((phrase) => !practicedTodayIds.has(phrase.id)),
+    ...pool.filter((phrase) => practicedTodayIds.has(phrase.id)),
+  ];
+  const personal = priorityPools(unique.filter((phrase) => (phrase.origin ?? "personal") === "personal"));
+  add(freshFirst([...personal.due, ...personal.weak, ...personal.mature]), 5);
+
+  const remaining = priorityPools(unique.filter((phrase) => !selectedIds.has(phrase.id)));
+  add(freshFirst(remaining.due), 3);
+  add(freshFirst(remaining.weak), 1);
+  add(freshFirst(remaining.mature), 1);
+  add(freshFirst([...remaining.due, ...remaining.weak, ...remaining.mature]));
   return selected;
 }
