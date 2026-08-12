@@ -25,16 +25,19 @@ function controller(overrides: Partial<TrainingSessionController> = {}): Trainin
 }
 
 describe("SpeakingPractice", () => {
-  it("keeps English hidden and wires the Chinese-first prompt actions", async () => {
+  it("labels daily review as Chinese recall while keeping English out of the prompt", async () => {
     const user = userEvent.setup();
     const value = controller();
     const onPause = vi.fn();
     render(<SpeakingPractice controller={value} onPause={onPause} onHome={vi.fn()} onAgain={vi.fn()} />);
+    expect(screen.getByText("今日复习 · 中文回忆")).toBeVisible();
+    expect(screen.getByText("英文答案已隐藏")).toBeVisible();
     expect(screen.getByText("我还没决定。")).toBeVisible();
     expect(screen.queryByText("I haven't decided yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText("I haven't decided yet whether to go.")).not.toBeInTheDocument();
     const unknown = screen.getByRole("button", { name: "不会，直接看答案" });
     const pronunciation = screen.getByRole("button", { name: "先听发音" });
-    const selfAssessment = screen.getByRole("button", { name: "查看答案并自评" });
+    const selfAssessment = screen.getByRole("button", { name: "查看英文答案并自评" });
     expect(unknown.parentElement).toBe(pronunciation.parentElement);
     expect(unknown.parentElement).toHaveClass("prompt-secondary-actions");
     expect(unknown.parentElement?.nextElementSibling).toBe(selfAssessment);

@@ -32,8 +32,8 @@ export function SpeakingPractice({ controller, onPause, onHome, onAgain }: {
   const answered = controller.phase === "answer";
   return <section className={`speaking-practice phase-${controller.phase}`}>
     <header className="practice-head"><button type="button" className="practice-pause" aria-label="保存进度并返回" onClick={onPause}><AppIcon name="close" size={22} /></button><span><AppIcon name="clock" size={18} /> 第 {controller.index + 1} / {controller.total} 个</span><div className="practice-track"><i style={{ width: `${((controller.index + (answered ? .6 : 0)) / Math.max(1, controller.total)) * 100}%` }} /></div></header>
-    <div className="practice-prompt"><p className="eyebrow">先用英语表达</p><h1>{phrase.chinese}</h1>
-      {!answered && <p>不用逐字翻译，先说出你自然想到的表达。</p>}
+    <div className="practice-prompt"><p className="eyebrow">{answered ? "先用英语表达" : "今日复习 · 中文回忆"}</p><h1>{phrase.chinese}</h1>
+      {!answered && <p>英文答案已隐藏</p>}
       {answered && <div className="practice-answer"><p className="eyebrow">自然表达</p><h2>{phrase.english}</h2>{phrase.personalExample && <blockquote>{phrase.personalExample}</blockquote>}</div>}
     </div>
     {status && <p className="practice-status" role="status">{status}</p>}
@@ -43,7 +43,7 @@ export function SpeakingPractice({ controller, onPause, onHome, onAgain }: {
           <button className="unknown-action" onClick={() => run(controller.revealAsUnknown)}>不会，直接看答案</button>
           <button className="pronounce-action" onClick={() => run(controller.usePronunciationHint)}><AppIcon name="speaker" size={21} />先听发音</button>
         </div>
-        <button className="self-assessment-action" onClick={() => run(controller.revealForSelfAssessment)}>查看答案并自评</button>
+        <button className="self-assessment-action" onClick={() => run(controller.revealForSelfAssessment)}>查看英文答案并自评</button>
       </>}
       {answered && <>
         {/* This is the learner's just-recorded speech; a caption track does not exist. */}
