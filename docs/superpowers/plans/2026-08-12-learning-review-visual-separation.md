@@ -187,4 +187,3 @@ Expected: tests, lint, production build, and whitespace checks all PASS.
 - [ ] **Step 3: Review the final diff against scope**
 
 Confirm production changes are limited to `NewPhraseLearning.tsx`, `SpeakingPractice.tsx`, and `globals.css`; confirm no changes to repositories, authentication, API routes, selection algorithms, grading, or session persistence.
-
