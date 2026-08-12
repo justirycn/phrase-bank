@@ -34,6 +34,9 @@ describe("SpeakingPractice", () => {
     expect(header).not.toBeNull();
     const modeLabel = within(header as HTMLElement).getByText("今日复习 · 中文回忆");
     expect(modeLabel).toHaveClass("task-mode", "task-mode-review");
+    expect(screen.getByRole("progressbar", { name: "今日复习进度" })).toHaveAttribute("aria-valuemin", "0");
+    expect(screen.getByRole("progressbar", { name: "今日复习进度" })).toHaveAttribute("aria-valuemax", "3");
+    expect(screen.getByRole("progressbar", { name: "今日复习进度" })).toHaveAttribute("aria-valuenow", "1");
     expect(screen.getByText("先用英语表达")).toBeVisible();
     expect(screen.getByText("英文答案已隐藏")).toHaveClass("review-hidden-answer");
     expect(screen.getByText("我还没决定。")).toBeVisible();
