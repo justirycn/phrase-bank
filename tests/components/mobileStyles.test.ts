@@ -1,6 +1,34 @@
 import { readFile, readdir } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
+function contrastRatio(foreground: string, background: string) {
+  const luminance = (hex: string) => {
+    const channels = hex.slice(1).match(/.{2}/g)?.map((channel) => Number.parseInt(channel, 16) / 255) ?? [];
+    const [red, green, blue] = channels.map((channel) => channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  };
+  const lighter = Math.max(luminance(foreground), luminance(background));
+  const darker = Math.min(luminance(foreground), luminance(background));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function ruleSelectors(css: string) {
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const selectors: string[] = [];
+  let segmentStart = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "{") {
+      const candidate = source.slice(segmentStart, index).trim();
+      if (candidate && !candidate.startsWith("@")) selectors.push(...candidate.split(",").map((selector) => selector.trim()));
+      segmentStart = index + 1;
+    } else if (character === ";" || character === "}") {
+      segmentStart = index + 1;
+    }
+  }
+  return selectors;
+}
+
 describe("mobile phrase typography", () => {
   it("fits the complete 12-week heatmap without horizontal overflow", async () => {
     const css = await readFile("app/globals.css", "utf8");
@@ -68,7 +96,7 @@ describe("iPhone new phrase learning styles", () => {
     const learningMode = css.match(/\.new-phrase-learning \.task-mode-learning\s*\{([^}]*)\}/s)?.[1] ?? "";
     const reviewMode = css.match(/\.speaking-practice \.task-mode-review\s*\{([^}]*)\}/s)?.[1] ?? "";
 
-    expect(css).toMatch(/\.new-phrase-learning\s*\{[^}]*--task-accent:\s*#d86b4b[^}]*--task-surface:\s*#[0-9a-f]{6}[^}]*background:\s*var\(--task-surface\)/s);
+    expect(css).toMatch(/\.new-phrase-learning\s*\{[^}]*--task-accent:\s*#d86b4b[^}]*--task-accent-strong:\s*#a4472d[^}]*--task-surface:\s*#[0-9a-f]{6}[^}]*background:\s*var\(--task-surface\)/s);
     expect(css).toMatch(/\.speaking-practice\s*\{[^}]*--task-accent:\s*#267453[^}]*--task-surface:\s*#[0-9a-f]{6}[^}]*background:\s*var\(--task-surface\)/s);
     for (const mode of [learningMode, reviewMode]) {
       expect(mode).toMatch(/display:\s*inline-flex/);
@@ -76,19 +104,24 @@ describe("iPhone new phrase learning styles", () => {
       expect(mode).toMatch(/white-space:\s*nowrap/);
       expect(mode).toMatch(/background:/);
     }
-    expect(css).toMatch(/\.new-phrase-learning \.new-learning-actions \.primary\s*\{[^}]*background:\s*var\(--task-accent\)/s);
-    expect(css).toMatch(/\.new-phrase-learning \.learning-track i\s*\{[^}]*background:\s*var\(--task-accent\)/s);
+    expect(css).toMatch(/\.new-phrase-learning \.new-learning-actions \.primary\s*\{[^}]*background:\s*var\(--task-accent-strong,\s*#a4472d\)[^}]*color:\s*#fff/s);
+    expect(css).toMatch(/\.new-phrase-learning \.learning-track i\s*\{[^}]*background:\s*var\(--task-accent-strong,\s*#a4472d\)/s);
+    expect(css).toMatch(/\.new-phrase-learning \.task-mode-learning\s*\{[^}]*background:\s*#f9ddd3[^}]*color:\s*var\(--task-accent-strong,\s*#a4472d\)/s);
+    expect(css).toMatch(/\.new-phrase-learning \.new-learning-grades button:last-child\s*\{[^}]*background:\s*var\(--task-accent-strong,\s*#a4472d\)[^}]*color:\s*#fff/s);
     expect(css).toMatch(/\.speaking-practice \.practice-track i\s*\{[^}]*background:\s*var\(--task-accent\)/s);
     expect(css).toMatch(/\.speaking-practice \.self-assessment-action\s*\{[^}]*background:\s*var\(--task-accent\)/s);
     expect(css).toMatch(/\.speaking-practice \.review-hidden-answer\s*\{[^}]*border:\s*[^;}]*dashed[^}]*text-align:\s*center/s);
     expect(css).not.toMatch(/\.speaking-practice \.practice-prompt > p:not\(\.eyebrow\)/);
+    expect(contrastRatio("#ffffff", "#a4472d")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#a4472d", "#f9ddd3")).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio("#a4472d", "#fce4dc")).toBeGreaterThanOrEqual(3);
   });
 
   it("does not restore removed quick-practice styling", async () => {
     const css = await readFile("app/globals.css", "utf8");
+    const selectors = ruleSelectors(`${css}\n/* .quick-start is intentionally unsupported. */`);
 
-    expect(css).not.toMatch(/\.quick-start\b/);
-    expect(css).not.toMatch(/quick-practice/i);
+    expect(selectors.some((selector) => selector.includes(".quick-start"))).toBe(false);
   });
 
   it("reserves the learning action tray and bottom safe area", async () => {

@@ -1282,6 +1282,7 @@ label.settings-action:focus-within {
 /* Guided new-phrase learning. The 196px reserve covers the tallest grade tray. */
 .new-phrase-learning {
   --task-accent: #d86b4b;
+  --task-accent-strong: #a4472d;
   --task-surface: #fff4ee;
   width: min(100%, 680px);
   min-height: 100dvh;
@@ -1314,14 +1315,14 @@ label.settings-action:focus-within {
   height: 8px;
   margin: 2px 0 0;
   border-radius: 99px;
-  background: rgba(216, 107, 75, 0.14);
+  background: #fce4dc;
   overflow: hidden;
 }
 .new-phrase-learning .learning-track i {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: var(--task-accent);
+  background: var(--task-accent-strong, #a4472d);
 }
 .new-phrase-learning .task-mode-learning {
   display: inline-flex;
@@ -1330,7 +1331,7 @@ label.settings-action:focus-within {
   border-radius: 999px;
   padding: 5px 9px;
   background: #f9ddd3;
-  color: var(--task-accent);
+  color: var(--task-accent-strong, #a4472d);
   font-weight: 800;
   line-height: 1.2;
   overflow: hidden;
@@ -1468,8 +1469,8 @@ label.settings-action:focus-within {
   overflow-wrap: anywhere;
 }
 .new-phrase-learning .new-learning-actions .primary {
-  border-color: var(--task-accent);
-  background: var(--task-accent);
+  border-color: var(--task-accent-strong, #a4472d);
+  background: var(--task-accent-strong, #a4472d);
   color: #fff;
   box-shadow: 0 9px 22px rgba(216, 107, 75, 0.2);
 }
@@ -1479,9 +1480,9 @@ label.settings-action:focus-within {
   gap: 8px;
   min-width: 0;
 }
-.new-learning-grades button:last-child {
-  border-color: var(--task-accent);
-  background: var(--task-accent);
+.new-phrase-learning .new-learning-grades button:last-child {
+  border-color: var(--task-accent-strong, #a4472d);
+  background: var(--task-accent-strong, #a4472d);
   color: #fff;
 }
 .new-learning-loading,
