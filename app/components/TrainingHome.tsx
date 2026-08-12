@@ -4,23 +4,23 @@ import { AppIcon } from "./AppIcon";
 import { LearningHeatmap } from "./LearningHeatmap";
 import { WeeklySummary, type WeeklyFocusPhrase } from "./WeeklySummary";
 
-export function TrainingHome({ dailySummary, streak, weeklySummary, focusPhrases, learnedToday, nextLearningCount, themeName, activeLearning, activeRemaining, dueCount, practiceCount, heatmapDays, heatmapError, onRetryHeatmap, onStartLearning, onStartStandard, onStartQuick }: {
+export function TrainingHome({ dailySummary, dailyProgress, streak, weeklySummary, focusPhrases, learnedToday, nextLearningCount, themeName, activeLearning, activeRemaining, dueCount, heatmapDays, heatmapError, onRetryHeatmap, onContinue, onStartLearning, onStartStandard }: {
   dailySummary: DailyTrainingResult; streak: TrainingStreak; weeklySummary: WeeklySummaryType;
+  dailyProgress: { mastered: number; reviewed: number };
   focusPhrases?: WeeklyFocusPhrase[];
-  learnedToday: number; nextLearningCount: number; themeName?: string; activeLearning?: boolean; activeRemaining?: number; dueCount: number; practiceCount: number;
+  learnedToday: number; nextLearningCount: number; themeName?: string; activeLearning?: boolean; activeRemaining?: number; dueCount: number;
   heatmapDays?: LearningHeatmapDay[]; heatmapError?: string; onRetryHeatmap?: () => void;
+  onContinue: () => void;
   onStartLearning: () => void;
-  onStartStandard: () => void; onStartQuick: () => void;
+  onStartStandard: () => void;
 }) {
-  const minutes = Math.floor(dailySummary.activeSeconds / 60);
-  const percentage = Math.min(100, dailySummary.activeSeconds / 1800 * 100);
   return <div className="training-home">
-    <header><p className="eyebrow">TODAY&apos;S SPEAKING</p><h1>{dailySummary.fullGoalReached ? "今天已经完成" : "今天，说出来"}</h1><p>{dailySummary.fullGoalReached ? "今天的目标完成了，想继续巩固也很好。" : "每天累计半小时，不需要一次完成。"}</p></header>
-    <section className="daily-progress" aria-label="今日训练进度"><div><span>今日累计</span><strong>{minutes} / 30 分钟</strong></div><div className="daily-progress-track"><i style={{ width: `${percentage}%` }} /></div><p><AppIcon name="clock" size={18} />完成 {dailySummary.completedGroups} 组 · 满 20 分钟保持连续</p></section>
+    <header><p className="eyebrow">TODAY&apos;S SPEAKING</p><h1>{dailyProgress.mastered > 0 ? "今天有进步" : "今天，说出来"}</h1><p>先完成到期复习，再认识几句真正用得上的表达。</p></header>
+    <section className="daily-progress" aria-label="今日句子进度"><div><span>今日掌握</span><strong>{dailyProgress.mastered} 句</strong></div><p>新学 {learnedToday} 句 · 复习 {dailyProgress.reviewed} 句</p></section>
     <div className="training-entry">
+      <button className="continue-start" onClick={onContinue}><span><AppIcon name="play" size={24} /><b>继续今日任务</b><small>{activeLearning ? "继续未完成的新句学习" : dueCount > 0 ? `${dueCount} 句待复习` : nextLearningCount > 0 ? `下一组 ${nextLearningCount} 句新内容` : "今天的任务已完成"}</small></span><AppIcon name="forward" size={22} /></button>
       <button className="learning-start" onClick={onStartLearning}><span><AppIcon name="library" size={24} /><b>学习新句</b><small>今天已学 {learnedToday} / 15 · {activeLearning ? `恢复本组：剩余 ${activeRemaining ?? nextLearningCount} / 共 ${nextLearningCount} 句${themeName ? ` · ${themeName}` : ""}` : nextLearningCount > 0 ? `下一组 ${nextLearningCount} 句${themeName ? ` · ${themeName}` : ""}` : learnedToday >= 15 ? "今日学习完成" : "暂无新句"}</small></span><AppIcon name="forward" size={22} /></button>
       <button className="standard-start" onClick={onStartStandard}><span><AppIcon name="microphone" size={24} /><b>今日复习</b><small>{dueCount} 句待复习</small></span><AppIcon name="forward" size={22} /></button>
-      <button className="quick-start" onClick={onStartQuick}><AppIcon name="play" size={21} />三分钟速练 <small>{practiceCount} 句已学可练 · 每组最多 3 句</small></button>
     </div>
     <WeeklySummary streak={streak} summary={weeklySummary} focusPhrases={focusPhrases} />
     {heatmapDays !== undefined || heatmapError ? <LearningHeatmap days={heatmapDays ?? []} error={heatmapError} onRetry={onRetryHeatmap} /> : null}
