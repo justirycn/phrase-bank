@@ -1,0 +1,334 @@
+{
+  "environment": {
+    "date": "2026-08-11",
+    "browser": "Codex in-app browser",
+    "target": "local vinext production server at 127.0.0.1:4173",
+    "cssViewport": {
+      "width": 390,
+      "height": 844
+    },
+    "limitations": [
+      "not a real iPhone",
+      "not Safari",
+      "not a public-network measurement"
+    ]
+  },
+  "build": {
+    "before": {
+      "sha": "3e2026060494ba8108a6da45ab7bd15e88882758",
+      "homeChunkBytes": 157491,
+      "initialJavaScriptBytes": 524925,
+      "htmlBytes": 446625
+    },
+    "current": {
+      "homeChunkBytes": 61866,
+      "initialJavaScriptBytes": 492520,
+      "nonHomeScreenChunks": 6,
+      "htmlBytes": 446909
+    },
+    "budgets": {
+      "homeChunkBytes": 63500,
+      "initialJavaScriptBytes": 556500
+    }
+  },
+  "beforeAfter": {
+    "generatedByRunner": true,
+    "command": "npm run benchmark:home-before-after",
+    "baseline": {
+      "sha": "3e2026060494ba8108a6da45ab7bd15e88882758",
+      "sourceTree": "c05481d8e96f2f2a1ce5bdf889def71e058e90e5",
+      "build": {
+        "homeChunkBytes": 157491,
+        "initialJavaScriptBytes": 524925,
+        "htmlBytes": 446625
+      },
+      "startupSource": {
+        "files": [
+          "app/PhraseBankApp.tsx",
+          "app/components/AppIcon.tsx",
+          "app/components/NewPhraseLearning.tsx",
+          "app/components/SpeakingPractice.tsx",
+          "app/components/TrainingHome.tsx",
+          "app/components/WeeklySummary.tsx",
+          "app/domain/bundledSystemContent.ts",
+          "app/domain/learningProgress.ts",
+          "app/domain/learningSelection.ts",
+          "app/domain/review.ts",
+          "app/domain/systemContent.ts",
+          "app/domain/trainingSelection.ts",
+          "app/domain/trainingStats.ts",
+          "app/domain/types.ts",
+          "app/domain/validation.ts",
+          "app/hooks/useNewPhraseLearning.ts",
+          "app/hooks/useTrainingSession.ts",
+          "app/services/recorder.ts",
+          "app/services/speech.ts",
+          "app/services/systemContentInstaller.ts",
+          "app/storage/backup.ts",
+          "app/storage/indexedDbRepository.ts",
+          "app/storage/repository.ts",
+          "app/storage/seed.ts",
+          "app/storage/starterPhrases.ts"
+        ],
+        "exportSnapshotCallSites": 1,
+        "callSites": [
+          {
+            "file": "app/PhraseBankApp.tsx",
+            "functionName": "refresh"
+          }
+        ],
+        "note": "Counted only exportSnapshot call sites inside startup refresh/loadHomeData functions reachable through the eager startup dependency graph; inline Settings export actions are excluded."
+      },
+      "homeDataBenchmark": {
+        "available": false,
+        "reason": "Baseline predates the production loadHomeData benchmark boundary and its repository API/fixture contract is not equivalent, so bounded rows and service-ready duration are unavailable."
+      }
+    },
+    "current": {
+      "sha": "0b9cb01b1c5ea3a0d4805cad210ffc87a2c96914",
+      "sourceTree": "73d873542b700969add2697edb0aa43c8d70be68",
+      "build": {
+        "homeChunkBytes": 61866,
+        "initialJavaScriptBytes": 492520,
+        "htmlBytes": 446909
+      },
+      "startupSource": {
+        "files": [
+          "app/PhraseBankApp.tsx",
+          "app/components/AppIcon.tsx",
+          "app/components/LearningHeatmap.tsx",
+          "app/components/TrainingHome.tsx",
+          "app/components/WeeklySummary.tsx",
+          "app/domain/bundledSystemContent.ts",
+          "app/domain/learningHeatmap.ts",
+          "app/domain/learningProgress.ts",
+          "app/domain/learningSelection.ts",
+          "app/domain/review.ts",
+          "app/domain/systemContent.ts",
+          "app/domain/trainingStats.ts",
+          "app/domain/types.ts",
+          "app/hooks/useHomeData.ts",
+          "app/services/homeData.ts",
+          "app/services/systemContentInstaller.ts",
+          "app/storage/backup.ts",
+          "app/storage/indexedDbRepository.ts",
+          "app/storage/repository.ts",
+          "app/storage/seed.ts",
+          "app/storage/starterPhrases.ts"
+        ],
+        "exportSnapshotCallSites": 0,
+        "callSites": []
+      },
+      "homeDataBenchmark": {
+        "fixture": {
+          "seed": 20260811,
+          "phrases": 2000,
+          "categories": 10,
+          "learningStates": 2000,
+          "events": 10080,
+          "trainingSessions": 1440
+        },
+        "calls": {
+          "listPhrases": 1,
+          "listCategories": 1,
+          "listDuePhrases": 1,
+          "listTrainingEvents": 1,
+          "listTrainingSessions": 1,
+          "listPhraseLearningStates": 1,
+          "getActiveTrainingSession": 1,
+          "getActiveLearningSession": 1,
+          "exportSnapshot": 0
+        },
+        "requests": {
+          "activeTrainingSession": 1,
+          "activeLearningSession": 1
+        },
+        "rows": {
+          "trainingEvents": 6636,
+          "trainingSessions": 948,
+          "activeTrainingSessions": 0,
+          "activeLearningSessions": 0,
+          "heatmapDays": 84
+        },
+        "serviceReadyMilliseconds": 112.00890000000072
+      }
+    },
+    "cleanup": {
+      "tempRoot": "C:\\Temp",
+      "dependencyJunctionRemoved": true,
+      "tempDirectoryRemoved": true,
+      "verifiedResidueCount": 0,
+      "worktreeRegistrationCreated": false
+    }
+  },
+  "homeDataBenchmark": {
+    "command": "npm run benchmark:home-data",
+    "fixture": {
+      "seed": 20260811,
+      "phrases": 2000,
+      "categories": 10,
+      "learningStates": 2000,
+      "events": 10080,
+      "trainingSessions": 1440
+    },
+    "calls": {
+      "listPhrases": 1,
+      "listCategories": 1,
+      "listDuePhrases": 1,
+      "listTrainingEvents": 1,
+      "listTrainingSessions": 1,
+      "listPhraseLearningStates": 1,
+      "getActiveTrainingSession": 1,
+      "getActiveLearningSession": 1,
+      "exportSnapshot": 0
+    },
+    "rows": {
+      "trainingEvents": 6636,
+      "trainingSessions": 948,
+      "activeTrainingSessions": 0,
+      "activeLearningSessions": 0,
+      "heatmapDays": 84
+    },
+    "serviceReadyMilliseconds": 112.00890000000072,
+    "regressionBudgetMilliseconds": 5000,
+    "budgetNote": "The ceiling is deliberately generous; this is a regression smoke budget, not a microbenchmark or Web Vital.",
+    "requests": {
+      "activeTrainingSession": 1,
+      "activeLearningSession": 1
+    }
+  },
+  "layout": {
+    "innerWidth": 390,
+    "innerHeight": 844,
+    "documentClientWidth": 375,
+    "documentScrollWidth": 375,
+    "horizontalOverflow": false,
+    "heatmapCellCount": 84,
+    "heatmapColumns": 12,
+    "heatmapRows": 7,
+    "mainBottomPaddingCssPx": 88,
+    "bottomNavigationHeightCssPx": 76
+  },
+  "homeReadyReloadMilliseconds": [
+    193,
+    184,
+    185
+  ],
+  "visualAcceptance": {
+    "environment": "local Chrome extension production server",
+    "cssViewport": {
+      "width": 390,
+      "height": 844
+    },
+    "notClaims": [
+      "not IAB",
+      "not Safari",
+      "not a real iPhone",
+      "not a public-network measurement"
+    ],
+    "states": {
+      "skeleton": {
+        "statusVisible": true,
+        "horizontalOverflow": false,
+        "scrollWidth": 390,
+        "clientWidth": 390
+      },
+      "heatmapError": {
+        "retryVisible": true,
+        "enabledEntryCount": 3,
+        "horizontalOverflow": false,
+        "entryBottoms": [
+          393,
+          487,
+          548
+        ]
+      },
+      "heatmapRetry": {
+        "cellCount": 84,
+        "columns": 12,
+        "horizontalOverflow": false,
+        "firstCellAccessibleName": "5月18日，未学习"
+      },
+      "cssEquivalent200": {
+        "auditLabelVisible": true,
+        "browserZoom": false,
+        "enabledEntryCount": 3,
+        "horizontalOverflow": false,
+        "scrollHeight": 1763
+      },
+      "realNonHomeReturn": {
+        "screen": "library",
+        "returnedHome": true,
+        "cellCount": 84,
+        "enabledNavActions": 4,
+        "horizontalOverflow": false,
+        "bottomNavigationHeightCssPx": 76,
+        "bottomNavigationAtViewportBottom": true,
+        "mainBottomPaddingCssPx": 88
+      },
+      "heatmapErrorFocused": {
+        "errorAndRetryInViewport": true,
+        "horizontalOverflow": false,
+        "scrollY": 477,
+        "statusTop": 622.734375,
+        "retryBottom": 690.734375,
+        "capture": "uncropped full-page JPEG"
+      },
+      "cssEquivalent200HeatmapFocused": {
+        "labelAndHeatmapInViewport": true,
+        "cellCount": 84,
+        "columns": 12,
+        "gridTemplateColumns": "21.4062px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px 21.4219px 21.4219px 21.4062px",
+        "firstAccessibleName": "5月18日，未学习",
+        "horizontalOverflow": false,
+        "browserZoom": false,
+        "scrollY": 919,
+        "labelTop": 0,
+        "heatmapTop": 406.40625,
+        "capture": "uncropped full-page JPEG"
+      }
+    }
+  },
+  "localHttp": {
+    "cold": [
+      {
+        "connectSeconds": 0.001063,
+        "ttfbSeconds": 0.031985,
+        "totalSeconds": 0.049496,
+        "compressedBytes": 132190
+      },
+      {
+        "connectSeconds": 0.00099,
+        "ttfbSeconds": 0.010345,
+        "totalSeconds": 0.026658,
+        "compressedBytes": 132190
+      },
+      {
+        "connectSeconds": 0.001001,
+        "ttfbSeconds": 0.016445,
+        "totalSeconds": 0.031901,
+        "compressedBytes": 132190
+      }
+    ],
+    "warmConnection": [
+      {
+        "connectSeconds": 0.001146,
+        "ttfbSeconds": 0.013393,
+        "totalSeconds": 0.028893,
+        "compressedBytes": 132190
+      },
+      {
+        "connectSeconds": 0,
+        "ttfbSeconds": 0.015656,
+        "totalSeconds": 0.032459,
+        "compressedBytes": 132190
+      },
+      {
+        "connectSeconds": 0,
+        "ttfbSeconds": 0.013142,
+        "totalSeconds": 0.029816,
+        "compressedBytes": 132190
+      }
+    ]
+  }
+}
