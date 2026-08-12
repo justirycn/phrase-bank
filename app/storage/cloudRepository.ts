@@ -8,7 +8,7 @@ export class CloudPhraseRepository extends LocalPhraseRepository {
   constructor(private fetcher: typeof fetch = fetch) { super(`phrase-cloud-${crypto.randomUUID()}`); }
   async initialize() {
     if (this.ready) return;
-    const response = await this.fetcher("/api/repository", { credentials: "same-origin" });
+    const response = await this.fetcher.call(globalThis, "/api/repository", { credentials: "same-origin" });
     if (response.status === 401) throw new AuthenticationError("登录已过期");
     if (!response.ok) throw new Error("云端数据暂时无法加载");
     const { snapshot } = await response.json() as { snapshot?: BackupEnvelope };
@@ -18,7 +18,7 @@ export class CloudPhraseRepository extends LocalPhraseRepository {
   }
   private async sync() {
     const snapshot = await super.exportSnapshot();
-    const response = await this.fetcher("/api/repository", { method: "PUT", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ snapshot }) });
+    const response = await this.fetcher.call(globalThis, "/api/repository", { method: "PUT", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ snapshot }) });
     if (response.status === 401) throw new AuthenticationError("登录已过期");
     if (!response.ok) throw new Error("云端数据保存失败");
   }
