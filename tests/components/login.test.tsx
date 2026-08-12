@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { CloudPhraseRepository } from "../../app/storage/cloudRepository";
 import { AuthPhraseBankApp } from "../../app/AuthPhraseBankApp";
 
 describe("AuthPhraseBankApp", () => {
@@ -25,5 +26,13 @@ describe("AuthPhraseBankApp", () => {
     await user.click(screen.getByRole("button", { name: "退出登录" }));
     expect(await screen.findByRole("heading", { name: "登录 Phrase Bank" })).toBeVisible();
     expect(screen.queryByText("欢迎 alice")).not.toBeInTheDocument();
+  });
+
+  it("keeps one cloud repository instance for the signed-in account", async () => {
+    const created: CloudPhraseRepository[] = [];
+    const fetcher = vi.fn(async () => Response.json({ user: { username: "alice" } }));
+    const view = render(<AuthPhraseBankApp fetcher={fetcher} createRepository={() => { const repo = new CloudPhraseRepository(fetcher); created.push(repo); return repo; }} renderApp={() => <p>ready</p>} />);
+    await screen.findByText("ready"); view.rerender(<AuthPhraseBankApp fetcher={fetcher} createRepository={() => { const repo = new CloudPhraseRepository(fetcher); created.push(repo); return repo; }} renderApp={() => <p>ready</p>} />);
+    expect(created).toHaveLength(1);
   });
 });
