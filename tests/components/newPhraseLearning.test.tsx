@@ -36,6 +36,7 @@ describe("NewPhraseLearning", () => {
     ] });
     render(<NewPhraseLearning controller={value} onHome={vi.fn()} />);
 
+    expect(screen.getByText("新句学习 · 先学后测")).toBeVisible();
     expect(screen.getByRole("heading", { level: 1, name: phrase.english })).toBeVisible();
     expect(screen.getByText(phrase.chinese)).toBeVisible();
     expect(screen.getByText(phrase.intent)).toBeVisible();
@@ -48,7 +49,7 @@ describe("NewPhraseLearning", () => {
     expect(items[1]).toHaveTextContent("Could you give me a moment while I find that?");
     expect(screen.queryByText("This must not render.")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "重听标准发音" }));
-    await user.click(screen.getByRole("button", { name: "下一句" }));
+    await user.click(screen.getByRole("button", { name: "我看懂了，下一句" }));
     expect(value.replay).toHaveBeenCalledOnce();
     expect(value.nextStudyPhrase).toHaveBeenCalledOnce();
     expect(screen.queryByText(/录音|麦克风/)).not.toBeInTheDocument();
@@ -75,12 +76,13 @@ describe("NewPhraseLearning", () => {
       return <NewPhraseLearning controller={value} onHome={vi.fn()} />;
     }
     render(<Harness />);
+    expect(screen.getByText("新句学习 · 小测")).toBeVisible();
     expect(screen.getByText("5 / 5")).toBeVisible();
     expect(screen.getByText(phrase.chinese)).toBeVisible();
-    expect(screen.getByRole("heading", { name: phrase.english })).toBeVisible();
+    expect(screen.queryByText(phrase.english)).not.toBeInTheDocument();
     expect(screen.queryByText(phrase.intent)).not.toBeInTheDocument();
     expect(screen.queryByText("例句")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "开始自评" }));
+    await user.click(screen.getByRole("button", { name: "查看答案并自评" }));
     expect(reveal).toHaveBeenCalledOnce();
     expect(screen.getByRole("heading", { name: phrase.english })).toBeVisible();
     expect(screen.getByRole("button", { name: "重听标准发音" })).toBeVisible();
@@ -105,11 +107,11 @@ describe("NewPhraseLearning", () => {
     expect(value.grade).toHaveBeenNthCalledWith(3, "good");
   });
 
-  it("uses the final study action copy and disables every study action while busy", async () => {
+  it("uses the study advance action copy and disables every study action while busy", async () => {
     const user = userEvent.setup(); const onHome = vi.fn();
     const value = controller({ studyIndex: 4, busy: true });
     render(<NewPhraseLearning controller={value} onHome={onHome} />);
-    expect(screen.getByRole("button", { name: "开始小测试" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "我看懂了，下一句" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "重听标准发音" })).toBeDisabled();
     const close = screen.getByRole("button", { name: "关闭学习并返回首页" });
     expect(close).toBeDisabled();
@@ -123,7 +125,7 @@ describe("NewPhraseLearning", () => {
     const user = userEvent.setup();
     const hidden = controller({ phase: "test", busy: true });
     const view = render(<NewPhraseLearning controller={hidden} onHome={vi.fn()} />);
-    const reveal = screen.getByRole("button", { name: "开始自评" });
+    const reveal = screen.getByRole("button", { name: "查看答案并自评" });
     expect(reveal).toBeDisabled();
     await user.click(reveal);
     expect(hidden.reveal).not.toHaveBeenCalled();
@@ -145,7 +147,7 @@ describe("NewPhraseLearning", () => {
     const value = controller({ nextStudyPhrase: vi.fn(() => pending) });
     const user = userEvent.setup();
     render(<NewPhraseLearning controller={value} onHome={vi.fn()} />);
-    const next = screen.getByRole("button", { name: "下一句" });
+    const next = screen.getByRole("button", { name: "我看懂了，下一句" });
     await user.dblClick(next);
     expect(value.nextStudyPhrase).toHaveBeenCalledOnce();
     expect(next).toBeDisabled();
@@ -159,7 +161,7 @@ describe("NewPhraseLearning", () => {
     render(<NewPhraseLearning controller={controller({ replay: vi.fn(async () => { throw new Error("speech"); }) })} onHome={vi.fn()} />);
     await user.click(screen.getByRole("button", { name: "重听标准发音" }));
     expect(await screen.findByRole("status")).toHaveTextContent("操作没有完成");
-    expect(screen.getByRole("button", { name: "下一句" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "我看懂了，下一句" })).toBeEnabled();
   });
 
   it.each([

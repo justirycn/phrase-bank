@@ -94,6 +94,9 @@ export function NewPhraseLearning({ controller, onHome }: {
       <button type="button" className="new-learning-close" aria-label="关闭学习并返回首页" disabled={disabled} onClick={exit}>
         <AppIcon name="close" size={22} />
       </button>
+      <span className="task-mode task-mode-learning">
+        {isStudy ? "新句学习 · 先学后测" : "新句学习 · 小测"}
+      </span>
       <span aria-label={`学习进度 ${progress}`}>{progress}</span>
     </header>
 
@@ -102,7 +105,7 @@ export function NewPhraseLearning({ controller, onHome }: {
       {!isStudy && <h1>{current.chinese}</h1>}
       <div className="new-learning-answer">
         {isStudy && <h1 className="new-learning-english">{current.english}</h1>}
-        {!isStudy && <h2 className="new-learning-english">{current.english}</h2>}
+        {!isStudy && showAnswer && <h2 className="new-learning-english">{current.english}</h2>}
         {isStudy && <p className="new-learning-chinese">{current.chinese}</p>}
         {showContext && <section className="new-learning-context" aria-label="使用场景">
           <h3>使用场景</h3>
@@ -130,10 +133,10 @@ export function NewPhraseLearning({ controller, onHome }: {
         <AppIcon name="speaker" size={20} />重听标准发音
       </button>}
       {isStudy && <button type="button" className="primary" disabled={disabled} onClick={() => { void run(controller.nextStudyPhrase); }}>
-        {index + 1 >= controller.total ? "开始小测试" : "下一句"}
+        我看懂了，下一句
       </button>}
       {!isStudy && !controller.revealed && <button type="button" className="primary" disabled={disabled} onClick={() => { void run(controller.reveal); }}>
-        开始自评
+        查看答案并自评
       </button>}
       {!isStudy && controller.revealed && <div className="new-learning-grades" aria-label="自我评分">
         <button type="button" disabled={disabled} onClick={() => grade("again")}>不会</button>
