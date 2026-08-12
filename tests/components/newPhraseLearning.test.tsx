@@ -42,6 +42,9 @@ describe("NewPhraseLearning", () => {
     expect(screen.getByText(phrase.intent)).toBeVisible();
     expect(screen.getByText(phrase.sourceNote)).toBeVisible();
     expect(screen.getByText("1 / 5")).toBeVisible();
+    expect(screen.getByRole("progressbar", { name: "新句学习进度" })).toHaveAttribute("aria-valuemin", "0");
+    expect(screen.getByRole("progressbar", { name: "新句学习进度" })).toHaveAttribute("aria-valuemax", "5");
+    expect(screen.getByRole("progressbar", { name: "新句学习进度" })).toHaveAttribute("aria-valuenow", "1");
     const list = screen.getByRole("list", { name: "例句" });
     const items = within(list).getAllByRole("listitem");
     expect(items).toHaveLength(2);
@@ -78,6 +81,7 @@ describe("NewPhraseLearning", () => {
     render(<Harness />);
     expect(screen.getByText("新句学习 · 小测")).toBeVisible();
     expect(screen.getByText("5 / 5")).toBeVisible();
+    expect(screen.getByRole("progressbar", { name: "新句学习进度" })).toHaveAttribute("aria-valuenow", "5");
     expect(screen.getByText(phrase.chinese)).toBeVisible();
     expect(screen.queryByText(phrase.english)).not.toBeInTheDocument();
     expect(screen.queryByText(phrase.intent)).not.toBeInTheDocument();

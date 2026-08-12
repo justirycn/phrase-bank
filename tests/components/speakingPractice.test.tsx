@@ -35,7 +35,7 @@ describe("SpeakingPractice", () => {
     const modeLabel = within(header as HTMLElement).getByText("今日复习 · 中文回忆");
     expect(modeLabel).toHaveClass("task-mode", "task-mode-review");
     expect(screen.getByText("先用英语表达")).toBeVisible();
-    expect(screen.getByText("英文答案已隐藏")).toBeVisible();
+    expect(screen.getByText("英文答案已隐藏")).toHaveClass("review-hidden-answer");
     expect(screen.getByText("我还没决定。")).toBeVisible();
     expect(screen.queryByText("I haven't decided yet.")).not.toBeInTheDocument();
     expect(screen.queryByText("I haven't decided yet whether to go.")).not.toBeInTheDocument();

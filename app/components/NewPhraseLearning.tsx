@@ -87,6 +87,7 @@ export function NewPhraseLearning({ controller, onHome }: {
   const showContext = showAnswer && Boolean(current.intent || current.sourceNote);
   const showExamples = isStudy && current.origin === "system" && current.kind === "core";
   const progress = `${index + 1} / ${controller.total}`;
+  const progressPercent = ((index + 1) / controller.total) * 100;
   const grade = (result: ReviewResult) => { void run(() => controller.grade(result)); };
 
   return <section className={`new-phrase-learning phase-${controller.phase}`}>
@@ -98,6 +99,9 @@ export function NewPhraseLearning({ controller, onHome }: {
         {isStudy ? "新句学习 · 先学后测" : "新句学习 · 小测"}
       </span>
       <span aria-label={`学习进度 ${progress}`}>{progress}</span>
+      <div className="learning-track" role="progressbar" aria-label="新句学习进度" aria-valuemin={0} aria-valuemax={controller.total} aria-valuenow={index + 1}>
+        <i style={{ width: `${progressPercent}%` }} />
+      </div>
     </header>
 
     <main className="new-learning-card">

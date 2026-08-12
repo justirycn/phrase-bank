@@ -77,9 +77,11 @@ describe("iPhone new phrase learning styles", () => {
       expect(mode).toMatch(/background:/);
     }
     expect(css).toMatch(/\.new-phrase-learning \.new-learning-actions \.primary\s*\{[^}]*background:\s*var\(--task-accent\)/s);
+    expect(css).toMatch(/\.new-phrase-learning \.learning-track i\s*\{[^}]*background:\s*var\(--task-accent\)/s);
     expect(css).toMatch(/\.speaking-practice \.practice-track i\s*\{[^}]*background:\s*var\(--task-accent\)/s);
     expect(css).toMatch(/\.speaking-practice \.self-assessment-action\s*\{[^}]*background:\s*var\(--task-accent\)/s);
-    expect(css).toMatch(/\.review-hidden-answer\s*\{[^}]*border:\s*[^;}]*dashed[^}]*text-align:\s*center/s);
+    expect(css).toMatch(/\.speaking-practice \.review-hidden-answer\s*\{[^}]*border:\s*[^;}]*dashed[^}]*text-align:\s*center/s);
+    expect(css).not.toMatch(/\.speaking-practice \.practice-prompt > p:not\(\.eyebrow\)/);
   });
 
   it("does not restore removed quick-practice styling", async () => {
