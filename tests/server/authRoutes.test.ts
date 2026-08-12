@@ -32,3 +32,4 @@ describe("auth routes", () => {
     expect((await login(request("/api/auth/login", { method: "POST", headers: { "content-length": "70000" }, body: "{}" }))).status).toBe(413);
   });
 });
+// @vitest-environment node

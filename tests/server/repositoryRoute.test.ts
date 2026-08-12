@@ -13,3 +13,4 @@ describe("repository route", () => {
     expect(await (await GET(new Request("https://x/api/repository", { headers: { cookie } }))).json()).toEqual({ snapshot });
   });
 });
+// @vitest-environment node
