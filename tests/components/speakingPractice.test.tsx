@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SpeakingPractice } from "../../app/components/SpeakingPractice";
@@ -29,8 +29,12 @@ describe("SpeakingPractice", () => {
     const user = userEvent.setup();
     const value = controller();
     const onPause = vi.fn();
-    render(<SpeakingPractice controller={value} onPause={onPause} onHome={vi.fn()} onAgain={vi.fn()} />);
-    expect(screen.getByText("今日复习 · 中文回忆")).toBeVisible();
+    const { container } = render(<SpeakingPractice controller={value} onPause={onPause} onHome={vi.fn()} onAgain={vi.fn()} />);
+    const header = container.querySelector(".practice-head");
+    expect(header).not.toBeNull();
+    const modeLabel = within(header as HTMLElement).getByText("今日复习 · 中文回忆");
+    expect(modeLabel).toHaveClass("task-mode", "task-mode-review");
+    expect(screen.getByText("先用英语表达")).toBeVisible();
     expect(screen.getByText("英文答案已隐藏")).toBeVisible();
     expect(screen.getByText("我还没决定。")).toBeVisible();
     expect(screen.queryByText("I haven't decided yet.")).not.toBeInTheDocument();
@@ -66,9 +70,16 @@ describe("SpeakingPractice", () => {
   it("shows the answer, recording playback and caps mastery after a hint", async () => {
     const user = userEvent.setup();
     const value = controller({ phase: "answer", usedHint: true, recordingUrl: "blob:voice" });
-    render(<SpeakingPractice controller={value} onPause={vi.fn()} onHome={vi.fn()} onAgain={vi.fn()} />);
+    const { container } = render(<SpeakingPractice controller={value} onPause={vi.fn()} onHome={vi.fn()} onAgain={vi.fn()} />);
+    const header = container.querySelector(".practice-head");
+    expect(header).not.toBeNull();
+    const modeLabel = within(header as HTMLElement).getByText("今日复习 · 中文回忆");
+    expect(modeLabel).toHaveClass("task-mode", "task-mode-review");
+    expect(screen.queryByText("英文答案已隐藏")).not.toBeInTheDocument();
     expect(screen.getByText("I haven't decided yet.")).toBeVisible();
     expect(screen.getByText("I haven't decided yet whether to go.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "不会" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "模糊" })).toBeVisible();
     expect(screen.getByRole("button", { name: "掌握" })).toBeDisabled();
     expect(screen.getByLabelText("播放我的录音")).toHaveAttribute("src", "blob:voice");
     await user.click(screen.getByRole("button", { name: "再听标准发音" }));
