@@ -27,9 +27,15 @@ export class AuthStore {
   }
 
   async login(username: string, password: string, source: string) {
+    const attempt = this.db.prepare("SELECT failures, blocked_until FROM login_attempts WHERE source=?").get(source) as { failures: number; blocked_until?: string } | undefined;
+    if (attempt?.blocked_until && new Date(attempt.blocked_until).getTime() > this.now().getTime()) return undefined;
     const row = this.db.prepare("SELECT * FROM users WHERE username=?").get(username.trim()) as UserRow | undefined;
     const valid = row?.enabled === 1 && await verifyPassword(password, row.salt, row.password_hash);
-    if (!valid || !row) return undefined;
+    if (!valid || !row) {
+      const failures = (attempt?.failures ?? 0) + 1; const blocked = failures >= 5 ? new Date(this.now().getTime() + 5 * 60000).toISOString() : null;
+      this.db.prepare("INSERT INTO login_attempts VALUES (?, ?, ?, ?) ON CONFLICT(source) DO UPDATE SET failures=excluded.failures, blocked_until=excluded.blocked_until, updated_at=excluded.updated_at").run(source, failures, blocked, this.now().toISOString());
+      return undefined;
+    }
     const token = randomBytes(32).toString("hex"); const now = this.now(); const expires = new Date(now.getTime() + 30 * 86400000);
     this.db.prepare("DELETE FROM login_attempts WHERE source=?").run(source);
     this.db.prepare("INSERT INTO sessions VALUES (?, ?, ?, ?)").run(tokenHash(token), row.id, expires.toISOString(), now.toISOString());

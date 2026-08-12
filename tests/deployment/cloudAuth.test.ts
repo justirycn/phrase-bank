@@ -13,4 +13,7 @@ describe("cloud auth deployment", () => {
     const pkg = JSON.parse(root("package.json"));
     for (const name of ["account:create", "account:reset", "account:disable", "account:enable", "account:list"]) expect(pkg.scripts[name]).toBeTruthy();
   });
+  it("makes the mounted data directory writable by the runtime user", () => {
+    expect(root("Dockerfile")).toContain("chown node:node /app/data");
+  });
 });
