@@ -8,6 +8,10 @@ services:
     restart: unless-stopped
     expose:
       - "3000"
+    environment:
+      - PHRASE_DB_PATH=/app/data/phrase-bank.sqlite
+    volumes:
+      - phrase_data:/app/data
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
@@ -31,5 +35,6 @@ services:
       - caddy_config:/config
 
 volumes:
+  phrase_data:
   caddy_data:
   caddy_config:

@@ -19,6 +19,11 @@
     "content:qwen": "tsx scripts/run-qwen-content-agent.ts",
     "content:publish": "tsx scripts/publish-qwen-content.ts",
     "db:generate": "drizzle-kit generate"
+    ,"account:create": "tsx scripts/manage-account.ts create"
+    ,"account:reset": "tsx scripts/manage-account.ts reset"
+    ,"account:disable": "tsx scripts/manage-account.ts disable"
+    ,"account:enable": "tsx scripts/manage-account.ts enable"
+    ,"account:list": "tsx scripts/manage-account.ts list"
   },
   "dependencies": {
     "@phosphor-icons/react": "^2.1.10",

@@ -49,6 +49,11 @@ export class AuthStore {
     this.db.prepare("UPDATE users SET enabled=?, updated_at=? WHERE id=?").run(enabled ? 1 : 0, this.now().toISOString(), row.id);
     if (!enabled) this.db.prepare("DELETE FROM sessions WHERE user_id=?").run(row.id);
   }
+  async resetPassword(username: string, password: string) {
+    const material = await hashPassword(password); const result = this.db.prepare("UPDATE users SET password_hash=?, salt=?, updated_at=? WHERE username=?").run(material.hash, material.salt, this.now().toISOString(), username);
+    if (!result.changes) throw new Error("账号不存在");
+  }
+  listUsers() { return this.db.prepare("SELECT username, enabled FROM users ORDER BY username").all(); }
   async readDocument(userId: string) {
     const row = this.db.prepare("SELECT document FROM user_documents WHERE user_id=?").get(userId) as { document: string } | undefined;
     return JSON.parse(row?.document ?? "{}");
