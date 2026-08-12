@@ -172,11 +172,11 @@ describe("PhraseBankApp", () => {
     expect(await screen.findByText("已学习提示")).toBeVisible();
     expect(screen.getByText(/第\s*1\s*\/\s*2\s*个/)).toBeVisible();
     expect(screen.queryByText("Missing state")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "查看答案并自评" }));
+    await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
     await user.click(screen.getByRole("button", { name: /掌握/ }));
     expect(await screen.findByText("已掌握提示")).toBeVisible();
     expect(screen.getByText(/第\s*2\s*\/\s*2\s*个/)).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "查看答案并自评" }));
+    await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
     await user.click(screen.getByRole("button", { name: /掌握/ }));
     expect(await screen.findByRole("heading", { name: "这一组完成了" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "回到首页" }));
@@ -246,8 +246,8 @@ describe("PhraseBankApp", () => {
     repo.phrases = [makePhrase({ id: "only-new", origin: "personal", kind: "standalone" })];
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: /学习新句/ }));
-    await user.click(await screen.findByRole("button", { name: "开始小测试" }));
-    await user.click(await screen.findByRole("button", { name: "开始自评" }));
+    await user.click(await screen.findByRole("button", { name: "我看懂了，下一句" }));
+    await user.click(await screen.findByRole("button", { name: "查看答案并自评" }));
     await user.click(await screen.findByRole("button", { name: /掌握/ }));
     await screen.findByRole("heading", { name: "本组学习完成" });
     await user.click(screen.getByRole("button", { name: "返回首页" }));
