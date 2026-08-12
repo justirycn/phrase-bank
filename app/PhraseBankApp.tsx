@@ -57,7 +57,7 @@ class ScreenLoadBoundary extends Component<{ children: ReactNode; onRetry: () =>
 export function PhraseBankApp({ repository, contentInstaller }: { repository?: Repository; contentInstaller?: (repository: Repository) => Promise<unknown> }) {
   const repo = repository ?? defaultRepository;
   const [screen, setScreen] = useState<Screen>("home");
-  const [initialization, setInitialization] = useState<{ repository?: Repository; status: InitializationStatus; attempt: number }>(() => ({ repository: repo, status: repo ? "loading" : "ready", attempt: 0 }));
+  const [initialization, setInitialization] = useState<{ repository?: Repository; status: InitializationStatus; attempt: number; message?: string }>(() => ({ repository: repo, status: repo ? "loading" : "ready", attempt: 0 }));
   const initializationStatus: InitializationStatus = initialization.repository === repo ? initialization.status : repo ? "loading" : "ready";
   const initializationAttempt = initialization.repository === repo ? initialization.attempt : 0;
   const home = useHomeData(initializationStatus === "ready" ? repo : undefined);
@@ -87,8 +87,9 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
         catch { if (current) setNotice("系统句库暂时无法更新，个人句子和已有训练仍可正常使用。"); }
       }
       if (current) setInitialization({ repository: repo, status: "ready", attempt: initializationAttempt });
-    })().catch(() => {
-      if (current) setInitialization({ repository: repo, status: "error", attempt: initializationAttempt });
+    })().catch((failure: unknown) => {
+      const message = failure instanceof Error ? failure.message : String(failure);
+      if (current) setInitialization({ repository: repo, status: "error", attempt: initializationAttempt, message });
     });
     return () => { current = false; };
   }, [contentInstaller, initializationAttempt, repo, repository]);
@@ -115,7 +116,7 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
     setScreen("library");
   }, [refresh, setError, setNotice, setScreen]);
   if (screen === "home" && initializationStatus === "loading") return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
-  if (screen === "home" && initializationStatus === "error") return <main className="loading"><p role="alert">本地数据暂时无法打开，请刷新后重试。</p><button onClick={() => { setInitialization({ repository: repo, status: "loading", attempt: initializationAttempt + 1 }); }}>重试</button></main>;
+  if (screen === "home" && initializationStatus === "error") return <main className="loading"><p role="alert">本地数据暂时无法打开，请刷新后重试。{initialization.message}</p><button onClick={() => { setInitialization({ repository: repo, status: "loading", attempt: initializationAttempt + 1 }); }}>重试</button></main>;
   if (screen === "home" && !home.data && !home.error) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
   if (screen === "home" && home.error && !home.data) return <main className="loading"><p role="alert">{home.error}</p><button onClick={() => { void home.retry(); }}>重试</button></main>;
   const today = shanghaiDate();

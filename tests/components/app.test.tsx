@@ -109,7 +109,7 @@ describe("PhraseBankApp", () => {
 
     render(<PhraseBankApp repository={repo as never} />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("本地数据暂时无法打开，请刷新后重试。");
+    expect(await screen.findByRole("alert")).toHaveTextContent("本地数据暂时无法打开，请刷新后重试。initialize failed");
     expect(repo.phraseReadAttempts).toBe(0);
     expect(repo.exportSnapshotAttempts).toBe(0);
     repo.failInitialize = false;
