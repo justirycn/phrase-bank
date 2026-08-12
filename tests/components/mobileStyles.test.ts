@@ -63,6 +63,32 @@ describe("mobile phrase typography", () => {
 });
 
 describe("iPhone new phrase learning styles", () => {
+  it("separates live learning and review controls with warm and cool task accents", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+    const learningMode = css.match(/\.new-phrase-learning \.task-mode-learning\s*\{([^}]*)\}/s)?.[1] ?? "";
+    const reviewMode = css.match(/\.speaking-practice \.task-mode-review\s*\{([^}]*)\}/s)?.[1] ?? "";
+
+    expect(css).toMatch(/\.new-phrase-learning\s*\{[^}]*--task-accent:\s*#d86b4b[^}]*--task-surface:\s*#[0-9a-f]{6}[^}]*background:\s*var\(--task-surface\)/s);
+    expect(css).toMatch(/\.speaking-practice\s*\{[^}]*--task-accent:\s*#267453[^}]*--task-surface:\s*#[0-9a-f]{6}[^}]*background:\s*var\(--task-surface\)/s);
+    for (const mode of [learningMode, reviewMode]) {
+      expect(mode).toMatch(/display:\s*inline-flex/);
+      expect(mode).toMatch(/border-radius:\s*999px/);
+      expect(mode).toMatch(/white-space:\s*nowrap/);
+      expect(mode).toMatch(/background:/);
+    }
+    expect(css).toMatch(/\.new-phrase-learning \.new-learning-actions \.primary\s*\{[^}]*background:\s*var\(--task-accent\)/s);
+    expect(css).toMatch(/\.speaking-practice \.practice-track i\s*\{[^}]*background:\s*var\(--task-accent\)/s);
+    expect(css).toMatch(/\.speaking-practice \.self-assessment-action\s*\{[^}]*background:\s*var\(--task-accent\)/s);
+    expect(css).toMatch(/\.review-hidden-answer\s*\{[^}]*border:\s*[^;}]*dashed[^}]*text-align:\s*center/s);
+  });
+
+  it("does not restore removed quick-practice styling", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+
+    expect(css).not.toMatch(/\.quick-start\b/);
+    expect(css).not.toMatch(/quick-practice/i);
+  });
+
   it("reserves the learning action tray and bottom safe area", async () => {
     const css = await readFile("app/globals.css", "utf8");
 
