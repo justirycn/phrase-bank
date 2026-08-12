@@ -14,4 +14,16 @@ describe("AuthPhraseBankApp", () => {
     await user.type(screen.getByLabelText("账号"), "alice"); await user.type(screen.getByLabelText("密码"), "1234"); await user.click(screen.getByRole("button", { name: "登录" }));
     expect(await screen.findByRole("heading", { name: "欢迎 alice" })).toBeVisible();
   });
+
+  it("logs out and removes protected content", async () => {
+    const user = userEvent.setup();
+    const fetcher = vi.fn(async (url: RequestInfo | URL) => String(url).endsWith("/session")
+      ? Response.json({ user: { username: "alice" } })
+      : Response.json({ ok: true }));
+    render(<AuthPhraseBankApp fetcher={fetcher} renderApp={({ username }) => <h1>欢迎 {username}</h1>} />);
+    expect(await screen.findByText("欢迎 alice")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "退出登录" }));
+    expect(await screen.findByRole("heading", { name: "登录 Phrase Bank" })).toBeVisible();
+    expect(screen.queryByText("欢迎 alice")).not.toBeInTheDocument();
+  });
 });
