@@ -35,4 +35,12 @@ describe("AuthPhraseBankApp", () => {
     await screen.findByText("ready"); view.rerender(<AuthPhraseBankApp fetcher={fetcher} createRepository={() => { const repo = new CloudPhraseRepository(fetcher); created.push(repo); return repo; }} renderApp={() => <p>ready</p>} />);
     expect(created).toHaveLength(1);
   });
+
+  it("passes cloud content installation to the application", async () => {
+    const fetcher = vi.fn(async () => Response.json({ user: { username: "alice" } }));
+    const renderApplication = vi.fn(() => <p>cloud app</p>);
+    render(<AuthPhraseBankApp fetcher={fetcher} renderApplication={renderApplication} />);
+    await screen.findByText("cloud app");
+    expect(renderApplication).toHaveBeenCalledWith(expect.objectContaining({ contentInstaller: expect.any(Function) }));
+  });
 });
