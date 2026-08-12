@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { CloudPhraseRepository } from "../../app/storage/cloudRepository";
 
 describe("CloudPhraseRepository", () => {
+  it("invokes the browser fetch function with the global context", async () => {
+    const fetcher = vi.fn(function (this: unknown) {
+      if (this !== globalThis) throw new TypeError("Illegal invocation");
+      return Promise.resolve(Response.json({ snapshot: null }));
+    }) as unknown as typeof fetch;
+
+    const repo = new CloudPhraseRepository(fetcher);
+    await expect(repo.initialize()).resolves.toBeUndefined();
+  });
+
   it("starts from cloud data and uploads changes", async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === "PUT"
       ? Response.json({ ok: true })
