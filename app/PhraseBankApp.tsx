@@ -6,7 +6,7 @@ import { TrainingHome } from "./components/TrainingHome";
 import type { PhraseInput, PhraseLearningState, TrainingMode } from "./domain/types";
 import { createNewPhrase } from "./domain/review";
 import { DAILY_NEW_PHRASE_LIMIT, previewLearningGroup } from "./domain/learningSelection";
-import { calculateStreak, summarizeDailyTraining, summarizeWeek } from "./domain/trainingStats";
+import { calculateStreak, summarizeDailySentenceProgress, summarizeDailyTraining, summarizeWeek } from "./domain/trainingStats";
 import { useHomeData } from "./hooks/useHomeData";
 import { installBundledSystemContent } from "./services/systemContentInstaller";
 import { LocalPhraseRepository } from "./storage/indexedDbRepository";
@@ -68,6 +68,7 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
   const trainingSessions = home.data?.trainingSessions ?? [];
   const learningStates = home.data?.learningStates ?? [];
   const activeLearningSession = home.data?.activeLearningSession;
+  const activeTrainingSession = home.data?.activeTrainingSession;
   const [trainingMode, setTrainingMode] = useState<TrainingMode>("standard");
   const [trainingRun, setTrainingRun] = useState(0);
   const [notice, setNotice] = useState("");
@@ -120,7 +121,7 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
   if (screen === "home" && !home.data && !home.error) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
   if (screen === "home" && home.error && !home.data) return <main className="loading"><p role="alert">{home.error}</p><button onClick={() => { void home.retry(); }}>重试</button></main>;
   const today = shanghaiDate();
-  const dailySummary = summarizeDailyTraining(today, trainingEvents, trainingSessions);
+  const dailyProgress = summarizeDailySentenceProgress(today, trainingEvents);
   const trainingDays = [...new Set(trainingEvents.map((event) => shanghaiTimestampDate(event.occurredAt)))].map((date) => summarizeDailyTraining(date, trainingEvents, trainingSessions));
   const weeklySummary = summarizeWeek(trainingEvents, trainingSessions, mondayOf(today));
   const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
@@ -136,13 +137,20 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
   const activeCursor = activeLearningSession?.phase === "test" ? activeLearningSession.testIndex : activeLearningSession?.studyIndex ?? 0;
   const activeRemaining = activeLearningSession?.phraseIds.slice(activeCursor).filter((id) => phraseIds.has(id)).length;
   const nextLearningCount = activePhraseIds?.length ?? preview.phrases.length;
-  const learnedEligibleCount = phrases.filter((phrase) => !phrase.retiredAt && ["learned", "mastered"].includes(learningById.get(phrase.id)?.stage ?? "unseen")).length;
+  const activeReviewRemaining = activeTrainingSession
+    ? activeTrainingSession.phraseIds.slice(activeTrainingSession.currentIndex).filter((id) => phraseIds.has(id)).length
+    : 0;
+  const continueToday = () => {
+    if (activeLearningSession) return go("learn");
+    if (activeTrainingSession || eligibleDue.length > 0) return startTraining("standard");
+    return go("learn");
+  };
 
   return <div className="app-shell">
     <main className="app-main">
       {(error || home.error) && <div className="toast error" role="alert">{error || home.error}</div>}
       {notice && <div className="toast" role="status">{notice}</div>}
-      {screen === "home" && <TrainingHome dailySummary={dailySummary} streak={calculateStreak(trainingDays, today)} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} activeLearning={Boolean(activeLearningSession)} activeRemaining={activeRemaining} dueCount={eligibleDue.length} practiceCount={learnedEligibleCount} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onStartLearning={() => go("learn")} onStartStandard={() => go("review")} onStartQuick={() => startTraining("quick")} />}
+      {screen === "home" && <TrainingHome dailyProgress={dailyProgress} streak={calculateStreak(trainingDays, today)} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} activeLearning={Boolean(activeLearningSession)} activeRemaining={activeRemaining} activeReview={Boolean(activeTrainingSession)} reviewRemaining={activeReviewRemaining} dueCount={eligibleDue.length} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onContinue={continueToday} onStartLearning={() => go("learn")} onStartStandard={() => startTraining("standard")} />}
       <ScreenLoadBoundary key={screen} onRetry={() => setLazyScreens(createLazyScreens())}><Suspense fallback={<ScreenLoading screen={screen} />}>{screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={saveAddedPhrase} onRetryState={retryAddedPhraseState} onComplete={completeAddedPhrase} />}
       {screen === "learn" && repo && <LearningSession repository={repo} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}

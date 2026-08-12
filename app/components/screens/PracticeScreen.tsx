@@ -17,5 +17,5 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
   useEffect(() => {
     if (phase === "complete") void finish().catch(() => setError("训练进度暂时无法保存，请稍后重试。"));
   }, [finish, phase, setError]);
-  return <SpeakingPractice controller={controller} onHome={() => void controller.finish().then(onHome).catch(() => setError("训练进度暂时无法保存，请稍后重试。"))} onAgain={() => void controller.finish().then(onAgain).catch(() => setError("训练进度暂时无法保存，请稍后重试。"))} />;
+  return <SpeakingPractice controller={controller} onPause={() => void onHome()} onHome={() => void controller.finish().then(onHome).catch(() => setError("训练进度暂时无法保存，请稍后重试。"))} onAgain={() => void controller.finish().then(onAgain).catch(() => setError("训练进度暂时无法保存，请稍后重试。"))} />;
 }

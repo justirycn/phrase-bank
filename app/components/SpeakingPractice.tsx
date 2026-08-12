@@ -5,8 +5,9 @@ import type { ReviewResult } from "../domain/types";
 import type { TrainingSessionController } from "../hooks/useTrainingSession";
 import { AppIcon } from "./AppIcon";
 
-export function SpeakingPractice({ controller, onHome, onAgain }: {
+export function SpeakingPractice({ controller, onPause, onHome, onAgain }: {
   controller: TrainingSessionController;
+  onPause: () => void;
   onHome: () => void;
   onAgain: () => void;
 }) {
@@ -30,7 +31,7 @@ export function SpeakingPractice({ controller, onHome, onAgain }: {
   if (!phrase) return <section className="practice-loading" aria-live="polite">正在准备今天的语言块…</section>;
   const answered = controller.phase === "answer";
   return <section className={`speaking-practice phase-${controller.phase}`}>
-    <header className="practice-head"><span><AppIcon name="clock" size={18} /> 第 {controller.index + 1} / {controller.total} 个</span><div className="practice-track"><i style={{ width: `${((controller.index + (answered ? .6 : 0)) / Math.max(1, controller.total)) * 100}%` }} /></div></header>
+    <header className="practice-head"><button type="button" className="practice-pause" aria-label="保存进度并返回" onClick={onPause}><AppIcon name="close" size={22} /></button><span><AppIcon name="clock" size={18} /> 第 {controller.index + 1} / {controller.total} 个</span><div className="practice-track"><i style={{ width: `${((controller.index + (answered ? .6 : 0)) / Math.max(1, controller.total)) * 100}%` }} /></div></header>
     <div className="practice-prompt"><p className="eyebrow">先用英语表达</p><h1>{phrase.chinese}</h1>
       {!answered && <p>不用逐字翻译，先说出你自然想到的表达。</p>}
       {answered && <div className="practice-answer"><p className="eyebrow">自然表达</p><h2>{phrase.english}</h2>{phrase.personalExample && <blockquote>{phrase.personalExample}</blockquote>}</div>}

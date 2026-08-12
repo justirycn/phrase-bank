@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   calculateStreak,
+  summarizeDailySentenceProgress,
   summarizeDailyTraining,
   summarizeWeek,
 } from "../../app/domain/trainingStats";
@@ -108,6 +109,24 @@ describe("summarizeDailyTraining", () => {
 
     expect(result.masteredCount).toBe(3);
     expect(result.promotedCount).toBe(1);
+  });
+});
+
+describe("summarizeDailySentenceProgress", () => {
+  it("counts distinct mastered and reviewed phrases on the Shanghai day", () => {
+    const result = summarizeDailySentenceProgress("2026-08-09", [
+      event("good-one", "phrase-1", "good", "2026-08-08T16:01:00.000Z"),
+      event("good-repeat", "phrase-1", "good", "2026-08-09T03:00:00.000Z"),
+      event("hard", "phrase-2", "hard", "2026-08-09T04:00:00.000Z"),
+      { ...event("new", "phrase-3", "good", "2026-08-09T05:00:00.000Z"), source: "new" },
+      event("outside", "phrase-4", "good", "2026-08-09T16:00:00.000Z"),
+    ]);
+
+    expect(result).toEqual({ mastered: 2, reviewed: 2 });
+  });
+
+  it("returns zero for an invalid day", () => {
+    expect(summarizeDailySentenceProgress("invalid", [])).toEqual({ mastered: 0, reviewed: 0 });
   });
 });
 

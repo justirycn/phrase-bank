@@ -28,7 +28,8 @@ describe("SpeakingPractice", () => {
   it("keeps English hidden and wires the Chinese-first prompt actions", async () => {
     const user = userEvent.setup();
     const value = controller();
-    render(<SpeakingPractice controller={value} onHome={vi.fn()} onAgain={vi.fn()} />);
+    const onPause = vi.fn();
+    render(<SpeakingPractice controller={value} onPause={onPause} onHome={vi.fn()} onAgain={vi.fn()} />);
     expect(screen.getByText("我还没决定。")).toBeVisible();
     expect(screen.queryByText("I haven't decided yet.")).not.toBeInTheDocument();
     const unknown = screen.getByRole("button", { name: "不会，直接看答案" });
@@ -45,12 +46,14 @@ describe("SpeakingPractice", () => {
     expect(value.revealForSelfAssessment).toHaveBeenCalledOnce();
     expect(value.startRecording).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "按住说英语" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存进度并返回" }));
+    expect(onPause).toHaveBeenCalledOnce();
   });
 
 
   it("shows initialization recovery actions", async () => {
     const onHome = vi.fn(); const onAgain = vi.fn(); const user = userEvent.setup();
-    render(<SpeakingPractice controller={controller({ initializationError: "训练内容暂时无法加载，请检查本地数据后重试。", current: undefined })} onHome={onHome} onAgain={onAgain} />);
+    render(<SpeakingPractice controller={controller({ initializationError: "训练内容暂时无法加载，请检查本地数据后重试。", current: undefined })} onPause={vi.fn()} onHome={onHome} onAgain={onAgain} />);
     expect(screen.getByRole("alert")).toHaveTextContent("训练内容暂时无法加载");
     await user.click(screen.getByRole("button", { name: "返回首页" }));
     await user.click(screen.getByRole("button", { name: "重试" }));
@@ -60,7 +63,7 @@ describe("SpeakingPractice", () => {
   it("shows the answer, recording playback and caps mastery after a hint", async () => {
     const user = userEvent.setup();
     const value = controller({ phase: "answer", usedHint: true, recordingUrl: "blob:voice" });
-    render(<SpeakingPractice controller={value} onHome={vi.fn()} onAgain={vi.fn()} />);
+    render(<SpeakingPractice controller={value} onPause={vi.fn()} onHome={vi.fn()} onAgain={vi.fn()} />);
     expect(screen.getByText("I haven't decided yet.")).toBeVisible();
     expect(screen.getByText("I haven't decided yet whether to go.")).toBeVisible();
     expect(screen.getByRole("button", { name: "掌握" })).toBeDisabled();
@@ -73,7 +76,7 @@ describe("SpeakingPractice", () => {
   it("offers completion actions", async () => {
     const user = userEvent.setup();
     const onHome = vi.fn(); const onAgain = vi.fn();
-    render(<SpeakingPractice controller={controller({ phase: "complete", current: undefined })} onHome={onHome} onAgain={onAgain} />);
+    render(<SpeakingPractice controller={controller({ phase: "complete", current: undefined })} onPause={vi.fn()} onHome={onHome} onAgain={onAgain} />);
     expect(screen.getByText("本组有效练习 0 分钟")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "回到首页" }));
     await user.click(screen.getByRole("button", { name: "再练一组" }));
