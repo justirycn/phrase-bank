@@ -51,8 +51,10 @@ export function analyzeHomeBuildManifest(input: {
   rscAssets: RscAssets;
   sizes: Record<string, number>;
 }) {
-  const homePreloads = input.clientAssets.dynamicPreloads["app/PhraseBankApp.tsx"] ?? [];
-  const homeChunk = homePreloads.map(normalize).find((file) => /\/PhraseBankApp-[^/]+\.js$/.test(`/${file}`));
+  const authEntry = input.clientAssets.dynamicPreloads["app/AuthPhraseBankApp.tsx"];
+  const homePreloads = authEntry ?? input.clientAssets.dynamicPreloads["app/PhraseBankApp.tsx"] ?? [];
+  const homePattern = authEntry ? /\/AuthPhraseBankApp-[^/]+\.js$/ : /\/PhraseBankApp-[^/]+\.js$/;
+  const homeChunk = homePreloads.map(normalize).find((file) => homePattern.test(`/${file}`));
   if (!homeChunk) throw new Error("Production manifest does not contain the PhraseBankApp chunk; run npm run build.");
 
   const homeReference = Object.values(input.rscAssets.clientReferenceDeps)

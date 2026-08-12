@@ -1,5 +1,5 @@
-import { PhraseBankApp } from "./PhraseBankApp";
+import { AuthPhraseBankApp } from "./AuthPhraseBankApp";
 
 export default function Home() {
-  return <PhraseBankApp />;
+  return <AuthPhraseBankApp />;
 }

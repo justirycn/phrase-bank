@@ -30,8 +30,10 @@ function buildMetrics(root: string) {
   const client = parseDefaultExport(join(root, "dist/server/vinext-client-assets.js"));
   const rsc = parseDefaultExport(join(root, "dist/server/__vite_rsc_assets_manifest.js"));
   const allSizes = sizes(join(root, "dist/client"));
-  const homeChunk = (client.dynamicPreloads["app/PhraseBankApp.tsx"] as string[]).map(normalize)
-    .find((file) => basename(file).startsWith("PhraseBankApp-"));
+  const homeEntry = client.dynamicPreloads["app/AuthPhraseBankApp.tsx"] ? "app/AuthPhraseBankApp.tsx" : "app/PhraseBankApp.tsx";
+  const homeName = homeEntry.split("/").pop()!.replace(".tsx", "");
+  const homeChunk = (client.dynamicPreloads[homeEntry] as string[]).map(normalize)
+    .find((file) => basename(file).startsWith(`${homeName}-`));
   if (!homeChunk || allSizes[homeChunk] === undefined) throw new Error("Missing PhraseBankApp build asset");
   const reference = Object.values(rsc.clientReferenceDeps as Record<string, { js?: string[] }>)
     .find(({ js = [] }) => js.map(normalize).includes(homeChunk));
