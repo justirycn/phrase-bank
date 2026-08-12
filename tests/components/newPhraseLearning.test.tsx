@@ -64,7 +64,7 @@ describe("NewPhraseLearning", () => {
     expect(screen.queryByText("使用场景")).not.toBeInTheDocument();
   });
 
-  it("keeps new-phrase learning bilingual before self-rating", async () => {
+  it("shows a Chinese-only prompt and reveals English before self-rating", async () => {
     const user = userEvent.setup();
     const reveal = vi.fn(async () => undefined);
     function Harness() {
