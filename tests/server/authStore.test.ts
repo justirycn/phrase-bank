@@ -46,3 +46,4 @@ describe("AuthStore", () => {
     expect(await auth.readDocument(b.id)).toMatchObject({ phrases: [{ english: "B" }] });
   });
 });
+// @vitest-environment node
