@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { TrainingHome } from "../../app/components/TrainingHome";
 
 const base = {
-  dailySummary: { activeSeconds: 0, completedGroups: 0, fullGoalReached: false },
   dailyProgress: { mastered: 3, reviewed: 4 },
   streak: { current: 0, longest: 0 },
   weeklySummary: { activeSeconds: 0, spokenCount: 0, masteredCount: 0, promotedCount: 0 },

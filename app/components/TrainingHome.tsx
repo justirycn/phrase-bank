@@ -1,11 +1,11 @@
-import type { DailyTrainingResult, TrainingStreak, WeeklyTrainingSummary as WeeklySummaryType } from "../domain/trainingStats";
+import type { TrainingStreak, WeeklyTrainingSummary as WeeklySummaryType } from "../domain/trainingStats";
 import type { LearningHeatmapDay } from "../domain/learningHeatmap";
 import { AppIcon } from "./AppIcon";
 import { LearningHeatmap } from "./LearningHeatmap";
 import { WeeklySummary, type WeeklyFocusPhrase } from "./WeeklySummary";
 
-export function TrainingHome({ dailySummary, dailyProgress, streak, weeklySummary, focusPhrases, learnedToday, nextLearningCount, themeName, activeLearning, activeRemaining, activeReview, reviewRemaining, dueCount, heatmapDays, heatmapError, onRetryHeatmap, onContinue, onStartLearning, onStartStandard }: {
-  dailySummary: DailyTrainingResult; streak: TrainingStreak; weeklySummary: WeeklySummaryType;
+export function TrainingHome({ dailyProgress, streak, weeklySummary, focusPhrases, learnedToday, nextLearningCount, themeName, activeLearning, activeRemaining, activeReview, reviewRemaining, dueCount, heatmapDays, heatmapError, onRetryHeatmap, onContinue, onStartLearning, onStartStandard }: {
+  streak: TrainingStreak; weeklySummary: WeeklySummaryType;
   dailyProgress: { mastered: number; reviewed: number };
   focusPhrases?: WeeklyFocusPhrase[];
   learnedToday: number; nextLearningCount: number; themeName?: string; activeLearning?: boolean; activeRemaining?: number; activeReview?: boolean; reviewRemaining?: number; dueCount: number;
