@@ -101,6 +101,15 @@ function zeroDaily(date: string): DailyTrainingResult {
   };
 }
 
+export function summarizeDailySentenceProgress(date: string, events: TrainingEvent[]) {
+  if (!parseCalendarDate(date)) return { mastered: 0, reviewed: 0 };
+  const dailyEvents = events.filter((event) => shanghaiDate(event.occurredAt) === date);
+  return {
+    mastered: new Set(dailyEvents.filter((event) => event.result === "good").map((event) => event.phraseId)).size,
+    reviewed: new Set(dailyEvents.filter((event) => event.source !== "new").map((event) => event.phraseId)).size,
+  };
+}
+
 export function summarizeDailyTraining(
   date: string,
   events: TrainingEvent[],
