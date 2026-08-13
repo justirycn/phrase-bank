@@ -22,7 +22,7 @@ class MemoryRepository {
   async listDuePhrases() { return [...this.phrases]; }
   async savePhrase(phrase: Phrase) { this.phraseSaveAttempts += 1; if (this.savePhraseImpl) return this.savePhraseImpl(phrase); if (this.failPhraseSave) throw new Error("save failed"); this.phrases = [...this.phrases.filter((p) => p.id !== phrase.id), phrase]; }
   async deletePhrase(id: string) { this.phrases = this.phrases.filter((p) => p.id !== id); }
-  async submitReview(id: string, result: ReviewResult) { void id; void result; }
+  async submitReview(id: string, result: ReviewResult, now?: Date, operationId?: string) { void id; void result; void now; void operationId; }
   events: TrainingEvent[] = [];
   sessions: TrainingSessionRecord[] = [];
   exportSnapshotAttempts = 0;

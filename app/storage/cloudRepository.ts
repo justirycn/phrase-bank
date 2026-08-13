@@ -24,7 +24,7 @@ export class CloudPhraseRepository extends LocalPhraseRepository {
   }
   override async savePhrase(v: Phrase) { await super.savePhrase(v); await this.sync(); }
   override async deletePhrase(v: string) { await super.deletePhrase(v); await this.sync(); }
-  override async submitReview(id: string, result: ReviewResult, now?: Date) { await super.submitReview(id, result, now); await this.sync(); }
+  override async submitReview(id: string, result: ReviewResult, now?: Date, operationId?: string) { await super.submitReview(id, result, now, operationId); await this.sync(); }
   override async submitTrainingReview(v: TrainingEvent) { await super.submitTrainingReview(v); await this.sync(); }
   override async saveCategory(v: Category) { await super.saveCategory(v); await this.sync(); }
   override async deleteCategoryAndMigrate(id: string, target: string) { await super.deleteCategoryAndMigrate(id, target); await this.sync(); }

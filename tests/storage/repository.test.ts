@@ -568,6 +568,50 @@ describe("LocalPhraseRepository", () => {
     expect({ ...after, exportedAt: before.exportedAt }).toEqual(before);
   });
 
+  it("applies the same standalone review operation exactly once and rejects conflicting reuse", async () => {
+    const firstAt = new Date("2026-08-10T08:00:00.000Z");
+    const phrase = {
+      ...createNewPhrase({ english: "Retry once", chinese: "重试一次", categoryId: "daily" }, firstAt),
+      id: "idempotent-review",
+    };
+    await repo.savePhrase(phrase);
+    await repo.savePhraseLearningState({
+      phraseId: phrase.id, stage: "learned", firstSeenAt: firstAt.toISOString(), firstTestedAt: firstAt.toISOString(),
+      firstResult: "good", consecutiveGood: 0, masteredDates: [], updatedAt: firstAt.toISOString(),
+    });
+    const submit = repo.submitReview.bind(repo) as (id: string, result: ReviewResult, now: Date, operationId: string) => Promise<void>;
+
+    await submit(phrase.id, "good", firstAt, "review-operation-1");
+    const once = await repo.exportSnapshot();
+    await submit(phrase.id, "good", new Date("2026-08-10T08:01:00.000Z"), "review-operation-1");
+    const twice = await repo.exportSnapshot();
+
+    expect(twice.phrases.find(({ id }) => id === phrase.id)).toEqual(once.phrases.find(({ id }) => id === phrase.id));
+    expect(twice.phraseLearningStates.find(({ phraseId }) => phraseId === phrase.id)).toEqual(once.phraseLearningStates.find(({ phraseId }) => phraseId === phrase.id));
+    expect(twice.reviewLogs.filter(({ phraseId }) => phraseId === phrase.id)).toEqual(once.reviewLogs.filter(({ phraseId }) => phraseId === phrase.id));
+    expect(once.reviewLogs.find(({ phraseId }) => phraseId === phrase.id)?.id).toBe("review-operation-1");
+    await expect(submit(phrase.id, "hard", firstAt, "review-operation-1")).rejects.toThrow("操作ID冲突");
+  });
+
+  it("serializes concurrent retries of the same standalone review operation", async () => {
+    const now = new Date("2026-08-10T08:00:00.000Z");
+    const phrase = { ...createNewPhrase({ english: "Concurrent retry", chinese: "并发重试", categoryId: "daily" }, now), id: "concurrent-review" };
+    await repo.savePhrase(phrase);
+    await repo.savePhraseLearningState({
+      phraseId: phrase.id, stage: "learned", firstSeenAt: now.toISOString(), firstTestedAt: now.toISOString(),
+      firstResult: "good", consecutiveGood: 0, masteredDates: [], updatedAt: now.toISOString(),
+    });
+
+    await Promise.all([
+      repo.submitReview(phrase.id, "good", now, "concurrent-operation"),
+      repo.submitReview(phrase.id, "good", now, "concurrent-operation"),
+    ]);
+
+    const snapshot = await repo.exportSnapshot();
+    expect(snapshot.reviewLogs.filter(({ phraseId }) => phraseId === phrase.id)).toHaveLength(1);
+    expect(snapshot.phrases.find(({ id }) => id === phrase.id)).toMatchObject({ reviewStep: 1, masteryLevel: 1 });
+  });
+
   it("persists legal phrase states and learning-session CRUD in updated order", async () => {
     const state: PhraseLearningState = {
       phraseId: "starter-daily-not-sure", stage: "learning",

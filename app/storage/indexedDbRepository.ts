@@ -304,10 +304,19 @@ export class LocalPhraseRepository implements PhraseRepository {
     const items = await (await this.db()).getAllFromIndex("phrases", "by-due", IDBKeyRange.upperBound(now.toISOString()));
     return items.sort((a, b) => a.nextReviewAt.localeCompare(b.nextReviewAt));
   }
-  async submitReview(id: string, result: ReviewResult, now = new Date()) {
+  async submitReview(id: string, result: ReviewResult, now = new Date(), operationId?: string) {
     const db = await this.db();
     const tx = db.transaction(["phrases", "reviewLogs", "phraseLearningState"], "readwrite");
     try {
+      if (operationId !== undefined) {
+        if (!operationId.trim()) throw new Error("复习操作ID无效");
+        const existing = await tx.objectStore("reviewLogs").get(operationId);
+        if (existing) {
+          if (existing.phraseId !== id || existing.result !== result) throw new Error("复习操作ID冲突");
+          await tx.done;
+          return;
+        }
+      }
       const phrase = await tx.objectStore("phrases").get(id);
       if (!phrase) throw new Error("找不到这条语言块");
       const stateStore = tx.objectStore("phraseLearningState");
@@ -316,6 +325,7 @@ export class LocalPhraseRepository implements PhraseRepository {
         throw new Error("这句话尚未完成新句学习，不能进入复习");
       }
       const scheduled = scheduleReview(phrase, result, now);
+      if (operationId) scheduled.log.id = operationId;
       await tx.objectStore("phrases").put(scheduled.phrase);
       await tx.objectStore("reviewLogs").put(scheduled.log);
       const nextState = reviewedState(currentState, phrase.id, result, now);
