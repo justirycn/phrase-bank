@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyLearningResult,
   effectiveMasteryDates,
+  firstMasteryAchievedDate,
   masteryAchievedDate,
   nextExampleToUnlock,
 } from "../../app/domain/learningProgress";
@@ -78,6 +79,21 @@ describe("learning progress", () => {
     expect(effectiveMasteryDates(dayTwo)).toEqual(["2026-08-12", "2026-08-13"]);
     expect(dayThree.stage).toBe("mastered");
     expect(masteryAchievedDate(dayThree)).toBe("2026-08-14");
+    expect(firstMasteryAchievedDate(dayThree)).toBe("2026-08-11");
+  });
+
+  it("preserves partial distinct-day progress across a failure before first mastery", () => {
+    const partial = state({ masteredDates: ["2026-08-09", "2026-08-10"], consecutiveGood: 2 });
+    const failed = applyLearningResult(partial, "hard", new Date("2026-08-11T04:00:00.000Z"));
+    const mastered = applyLearningResult(failed, "good", new Date("2026-08-12T04:00:00.000Z"));
+
+    expect(failed).toMatchObject({
+      stage: "learned", consecutiveGood: 2, masteredDates: ["2026-08-09", "2026-08-10"],
+    });
+    expect(failed.masteryResetAt).toBeUndefined();
+    expect(mastered).toMatchObject({
+      stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-09", "2026-08-10", "2026-08-12"],
+    });
   });
 
   it("ignores invalid and duplicate legacy mastery dates", () => {
@@ -87,6 +103,7 @@ describe("learning progress", () => {
 
     expect(effectiveMasteryDates(legacy)).toEqual(["2026-08-10", "2026-08-11", "2026-08-12"]);
     expect(masteryAchievedDate(legacy)).toBe("2026-08-12");
+    expect(firstMasteryAchievedDate(legacy)).toBe("2026-08-12");
   });
 
   it("normalizes legacy mastery dates when recording another good result", () => {

@@ -72,11 +72,11 @@ describe("backup parsing", () => {
     expect(parseBackup(JSON.stringify(v3))).toMatchObject({
       ...v3, version: 5, learningSessions: [], appPreferences: { dailyMasteryGoal: 10 },
       phraseLearningStates: [{
-        ...v3.phraseLearningStates[0], stage: "learning", firstSeenAt: valid.exportedAt, consecutiveGood: 0,
+        ...v3.phraseLearningStates[0], stage: "learned", firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt, firstResult: "good", consecutiveGood: 1,
       }],
     });
     expect(() => parseBackup(JSON.stringify({ ...v3, phraseLearningStates: [{ ...v3.phraseLearningStates[0], phraseId: "missing" }] }))).toThrow("无效学习状态");
-    expect(() => parseBackup(JSON.stringify({ ...v3, phraseLearningStates: [{ ...v3.phraseLearningStates[0], masteredDates: ["2026-08-07", "2026-08-07"] }] }))).toThrow("无效学习状态");
+    expect(parseBackup(JSON.stringify({ ...v3, phraseLearningStates: [{ ...v3.phraseLearningStates[0], masteredDates: ["2026-08-07", "2026-08-07"] }] })).phraseLearningStates[0].masteredDates).toEqual(["2026-08-07"]);
     const orphan = { ...phrase, id: "orphan", kind: "example", parentPhraseId: "missing", unlockOrder: 1 };
     expect(() => parseBackup(JSON.stringify({ ...v3, phrases: [orphan], phraseLearningStates: [] }))).toThrow("内容层级");
     expect(() => parseBackup(JSON.stringify({ ...v3, phrases: [{ ...phrase, origin: "unknown" }] }))).toThrow("内容层级");
@@ -139,7 +139,7 @@ describe("backup parsing", () => {
     };
     const normalized = parseBackup(JSON.stringify(v3));
     expect(normalized.phraseLearningStates[0]).toEqual({
-      phraseId: "p1", stage: "learning", firstSeenAt: phrase.lastReviewedAt, consecutiveGood: 0,
+      phraseId: "p1", stage: "learned", firstSeenAt: phrase.lastReviewedAt, firstTestedAt: phrase.lastReviewedAt, firstResult: "good", consecutiveGood: 1,
       masteredDates: ["2026-08-08"], updatedAt: "2026-08-10T08:00:00.000Z",
     });
     expect(parseBackup(JSON.stringify(normalized))).toEqual(normalized);
@@ -168,6 +168,26 @@ describe("backup parsing", () => {
     expect(parseBackup(JSON.stringify({ ...base, phraseLearningStates: [falseLearned] }))).toMatchObject({
       version: 5, phraseLearningStates: [{ stage: "mastered", consecutiveGood: 3 }],
     });
+  });
+
+  it("cleans duplicate and malformed mastery dates in v3, v4, and v5 backups", () => {
+    const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 3, masteryLevel: 3, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt, lastReviewedAt: valid.exportedAt };
+    const dirtyDates = ["2026-08-09", "bad", "2026-08-07", "2026-08-09", "2026-02-30", "2026-08-08"];
+    const currentState = { phraseId: "p1", stage: "learned", firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt, firstResult: "good", consecutiveGood: 0, masteredDates: dirtyDates, updatedAt: valid.exportedAt };
+    const common = { ...valid, phrases: [phrase], trainingEvents: [], trainingSessions: [] };
+
+    const v3 = parseBackup(JSON.stringify({ ...common, version: 3, phraseLearningStates: [{ phraseId: "p1", masteredDates: dirtyDates, updatedAt: valid.exportedAt }] }));
+    expect(v3.phraseLearningStates[0]).toMatchObject({
+      masteredDates: ["2026-08-07", "2026-08-08", "2026-08-09"], stage: "mastered", consecutiveGood: 3,
+    });
+    for (const backup of [
+      { ...common, version: 4, phraseLearningStates: [currentState], learningSessions: [] },
+      { ...common, version: 5, phraseLearningStates: [currentState], learningSessions: [], appPreferences: { dailyMasteryGoal: 10 } },
+    ]) {
+      expect(parseBackup(JSON.stringify(backup)).phraseLearningStates[0]).toMatchObject({
+        masteredDates: ["2026-08-07", "2026-08-08", "2026-08-09"], stage: "mastered", consecutiveGood: 3,
+      });
+    }
   });
 
   it("requires learningSessions in v4 and validates learning-session fields and references", () => {

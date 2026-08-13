@@ -4,7 +4,7 @@ import type {
   TrainingEvent,
   TrainingSessionRecord,
 } from "./types";
-import { masteryAchievedDate } from "./learningProgress";
+import { firstMasteryAchievedDate } from "./learningProgress";
 
 export interface DailyTrainingResult extends DailyTrainingSummary {
   streakQualified: boolean;
@@ -108,9 +108,9 @@ function zeroDaily(date: string): DailyTrainingResult {
 export function summarizeDailySentenceProgress(date: string, events: TrainingEvent[], states: PhraseLearningState[]) {
   if (!parseCalendarDate(date)) return { mastered: 0, consolidated: 0, reviewed: 0 };
   const dailyEvents = events.filter((event) => shanghaiDate(event.occurredAt) === date);
-  const masteredIds = new Set(states.filter((state) => masteryAchievedDate(state) === date).map((state) => state.phraseId));
+  const masteredIds = new Set(states.filter((state) => firstMasteryAchievedDate(state) === date).map((state) => state.phraseId));
   const everMasteredIds = new Set(states.filter((state) => {
-    const achieved = masteryAchievedDate(state);
+    const achieved = firstMasteryAchievedDate(state);
     return achieved !== undefined && achieved <= date;
   }).map((state) => state.phraseId));
   const goodTodayIds = new Set(dailyEvents.filter((event) => event.result === "good").map((event) => event.phraseId));
@@ -272,7 +272,7 @@ export function summarizeWeek(
     }).length,
     spokenCount: weeklyEvents.filter((trainingEvent) => trainingEvent.recorded).length,
     masteredCount: states.filter((state) => {
-      const achieved = masteryAchievedAsOf(state, effectiveEnd);
+      const achieved = firstMasteryAchievedDate(state);
       return achieved !== undefined && achieved >= weekStart && achieved <= effectiveEnd;
     }).length,
     promotedCount: weeklyEvents.filter((trainingEvent) => promoted.has(trainingEvent)).length,

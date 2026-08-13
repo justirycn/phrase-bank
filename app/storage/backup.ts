@@ -1,5 +1,5 @@
 import { DEFAULT_DAILY_MASTERY_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV1, type BackupEnvelopeV5, type LearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
-import { effectiveMasteryDates } from "../domain/learningProgress";
+import { effectiveMasteryDates, normalizeMasteryDates } from "../domain/learningProgress";
 
 type LegacyLearningState = Partial<PhraseLearningState> & Pick<PhraseLearningState, "phraseId">;
 type BackupCandidate = Omit<Partial<BackupEnvelopeV1>, "version"> & {
@@ -49,10 +49,12 @@ function resultEvidence(phraseId: string, logs: ReviewLog[], events: TrainingEve
 }
 
 export function normalizeCurrentLearningState(state: PhraseLearningState): PhraseLearningState {
-  if (state.stage !== "learned" && state.stage !== "mastered") return state;
-  const consecutiveGood = effectiveMasteryDates(state).length;
+  const masteredDates = normalizeMasteryDates(state.masteredDates);
+  if (state.stage !== "learned" && state.stage !== "mastered") return { ...state, masteredDates };
+  const consecutiveGood = effectiveMasteryDates({ ...state, masteredDates }).length;
   return {
     ...state,
+    masteredDates,
     stage: consecutiveGood >= 3 ? "mastered" : "learned",
     consecutiveGood,
   };
@@ -62,20 +64,23 @@ export function normalizeLegacyLearningState(phrase: Phrase, legacy: LegacyLearn
   const evidence = resultEvidence(phrase.id, logs, events);
   const earliest = evidence[0];
   const lastReviewedAt = validDate(phrase.lastReviewedAt) ? phrase.lastReviewedAt : undefined;
-  const masteredDates = Array.isArray(legacy?.masteredDates) ? legacy.masteredDates.filter((day): day is string => typeof day === "string") : [];
+  const masteredDates = Array.isArray(legacy?.masteredDates) ? normalizeMasteryDates(legacy.masteredDates) : [];
   const priorLearning = lastReviewedAt !== undefined || phrase.reviewStep > 0 || phrase.masteryLevel > 0 || masteredDates.length > 0
     || legacy?.stage === "learning" || legacy?.stage === "learned" || legacy?.stage === "mastered";
   const firstSeenAt = earliest?.timestamp ?? lastReviewedAt ?? (validDate(legacy?.firstSeenAt)
     ? legacy.firstSeenAt
     : priorLearning ? validDate(legacy?.updatedAt) ? legacy.updatedAt : validDate(phrase.updatedAt) ? phrase.updatedAt : undefined : undefined);
-  const firstTestedAt = earliest?.timestamp;
-  const firstResult = earliest?.result;
+  const masteryEvidenceAt = masteredDates.length > 0
+    ? lastReviewedAt ?? (validDate(legacy?.updatedAt) ? legacy.updatedAt : validDate(phrase.updatedAt) ? phrase.updatedAt : undefined)
+    : undefined;
+  const firstTestedAt = earliest?.timestamp ?? masteryEvidenceAt;
+  const firstResult = earliest?.result ?? (masteryEvidenceAt ? "good" : undefined);
   const masteryResetAt = validDate(legacy?.masteryResetAt) ? legacy.masteryResetAt : undefined;
   const effectiveDates = effectiveMasteryDates({ masteredDates, masteryResetAt } as PhraseLearningState);
-  const stage: PhraseLearningState["stage"] = earliest
+  const stage: PhraseLearningState["stage"] = firstTestedAt
     ? effectiveDates.length >= 3 ? "mastered" : "learned"
     : firstSeenAt ? "learning" : "unseen";
-  const consecutiveGood = earliest ? effectiveDates.length : 0;
+  const consecutiveGood = firstTestedAt ? effectiveDates.length : 0;
   const migrated: PhraseLearningState = {
     ...legacy,
     phraseId: phrase.id,
@@ -151,8 +156,7 @@ export function assertValidLearningSession(
 function invalidLearningState(state: LegacyLearningState, phraseIds: Set<string>) {
   if (!phraseIds.has(state.phraseId) || !stages.has(state.stage as string)
     || !validIndex(state.consecutiveGood)
-    || !Array.isArray(state.masteredDates) || new Set(state.masteredDates).size !== state.masteredDates.length
-    || state.masteredDates.some((day) => !validDay(day))
+    || !Array.isArray(state.masteredDates)
     || !validDate(state.updatedAt) || (state.unlockedAt !== undefined && !validDate(state.unlockedAt))
     || (state.masteryResetAt !== undefined && !validDate(state.masteryResetAt))) return true;
   const hasSeen = validDate(state.firstSeenAt);
@@ -225,8 +229,7 @@ export function parseBackup(raw: string): BackupEnvelopeV5 {
   } else if (backup.version === 3) {
     if (!Array.isArray(backup.phraseLearningStates)) throw new Error("备份缺少学习状态");
     if (backup.phraseLearningStates.some((state) => !phraseIds.has(state.phraseId)
-      || !Array.isArray(state.masteredDates) || new Set(state.masteredDates).size !== state.masteredDates.length
-      || state.masteredDates.some((day) => !validDay(day))
+      || !Array.isArray(state.masteredDates)
       || !validDate(state.updatedAt) || (state.unlockedAt !== undefined && !validDate(state.unlockedAt))
       || (state.masteryResetAt !== undefined && !validDate(state.masteryResetAt)))) throw new Error("备份包含无效学习状态");
     phraseLearningStates = [];

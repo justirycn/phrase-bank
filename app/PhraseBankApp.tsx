@@ -199,7 +199,7 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
           );
         }} />
         : <ScreenLoading screen="review" />)}
-      {screen === "practice" && repo && <PracticeSession key={`${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => { setTrainingRun((run) => run + 1); void refresh().catch(() => setError("本地数据暂时无法刷新，请稍后再试。")); }} setError={setError} />}
+      {screen === "practice" && repo && <PracticeSession key={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => { setTrainingRun((run) => run + 1); void refresh().catch(() => setError("本地数据暂时无法刷新，请稍后再试。")); }} setError={setError} />}
       {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} appPreferences={home.data?.appPreferences ?? { dailyMasteryGoal: 10 }} refresh={refresh} setNotice={setNotice} setError={setError} />}</Suspense></ScreenLoadBoundary>
     </main>
     {screen !== "learn" && screen !== "review" && screen !== "practice" && <nav className="bottom-nav" aria-label="主导航">

@@ -151,6 +151,18 @@ describe("summarizeDailySentenceProgress", () => {
   it("returns zero for an invalid day", () => {
     expect(summarizeDailySentenceProgress("invalid", [], [])).toEqual({ mastered: 0, consolidated: 0, reviewed: 0 });
   });
+
+  it("does not count effective remastery as a new first mastery or consolidation", () => {
+    const remastered = state("remastered", {
+      stage: "mastered", consecutiveGood: 3,
+      masteredDates: ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-10", "2026-08-11", "2026-08-12"],
+      masteryResetAt: "2026-08-09T08:00:00.000Z",
+    });
+
+    expect(summarizeDailySentenceProgress("2026-08-12", [
+      event("remastery-good", "remastered", "good", "2026-08-12T08:00:00.000Z"),
+    ], [remastered])).toEqual({ mastered: 0, consolidated: 0, reviewed: 1 });
+  });
 });
 
 describe("calculateStreak", () => {
@@ -290,6 +302,16 @@ describe("summarizeWeek", () => {
     expect(summarizeWeek([
       { ...event("new", "new-only", "good", "2026-08-04T08:00:00.000Z"), source: "new" },
     ], [], [state("new-only", { masteredDates: ["2026-08-04"] })], "2026-08-03", "2026-08-09").retentionRate).toBeUndefined();
+  });
+
+  it("counts only historical first mastery transitions, not effective remastery", () => {
+    const remastered = state("remastered", {
+      stage: "mastered", consecutiveGood: 3,
+      masteredDates: ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-10", "2026-08-11", "2026-08-12"],
+      masteryResetAt: "2026-08-09T08:00:00.000Z",
+    });
+
+    expect(summarizeWeek([], [], [remastered], "2026-08-10", "2026-08-16").masteredCount).toBe(0);
   });
 });
 

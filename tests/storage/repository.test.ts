@@ -514,9 +514,8 @@ describe("LocalPhraseRepository", () => {
     };
     await repo.submitFirstLearningReview(event, { ...session, testIndex: 1, updatedAt: event.occurredAt });
     expect(await repo.getPhrase(phraseId)).toMatchObject({ reviewStep: 0, nextReviewAt: "2026-08-11T08:05:00.000Z" });
-    expect(await repo.getPhraseLearningState(phraseId)).toMatchObject({
-      stage: "learned", consecutiveGood: 0, masteryResetAt: event.occurredAt,
-    });
+    expect(await repo.getPhraseLearningState(phraseId)).toMatchObject({ stage: "learned", consecutiveGood: 0 });
+    expect((await repo.getPhraseLearningState(phraseId))?.masteryResetAt).toBeUndefined();
   });
 
   it("downgrades and resets a mastered phrase graded hard without advancing its review step", async () => {

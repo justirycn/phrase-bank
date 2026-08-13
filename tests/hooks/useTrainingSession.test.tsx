@@ -163,6 +163,44 @@ describe("useTrainingSession", () => {
     expect(result.current.total).toBe(0);
   });
 
+  it("isolates an in-flight grade when switching repositories", async () => {
+    const storeA = memoryRepository([phrase("a-first")]);
+    const storeB = memoryRepository([phrase("b-first")]);
+    const api = services();
+    let releaseReview!: () => void;
+    const reviewGate = new Promise<void>((resolve) => { releaseReview = resolve; });
+    (storeA.repository.submitTrainingReview as ReturnType<typeof vi.fn>).mockImplementationOnce(async (event: TrainingEvent) => {
+      await reviewGate;
+      storeA.events.push(event);
+    });
+    let releasePhrases!: (items: Phrase[]) => void;
+    const phrasesGate = new Promise<Phrase[]>((resolve) => { releasePhrases = resolve; });
+    (storeB.repository.listPhrases as ReturnType<typeof vi.fn>).mockImplementationOnce(() => phrasesGate);
+
+    const hook = renderHook(({ repository }) => useTrainingSession({ repository, mode: "quick", ...api, seed: "repo-switch" }), {
+      initialProps: { repository: storeA.repository },
+    });
+    await waitFor(() => expect(hook.result.current.current?.phrase.id).toBe("a-first"));
+
+    let staleGrade!: Promise<{ accepted: boolean }>;
+    act(() => { staleGrade = hook.result.current.grade("hard"); });
+    await waitFor(() => expect(storeA.repository.submitTrainingReview).toHaveBeenCalledOnce());
+    hook.rerender({ repository: storeB.repository });
+
+    await waitFor(() => expect(hook.result.current.current).toBeUndefined());
+    expect(hook.result.current.total).toBe(0);
+    await expect(hook.result.current.grade("hard")).resolves.toEqual({ accepted: false });
+
+    releasePhrases([phrase("b-first")]);
+    await waitFor(() => expect(hook.result.current.current?.phrase.id).toBe("b-first"));
+    releaseReview();
+    await expect(staleGrade).resolves.toEqual({ accepted: false });
+
+    expect(hook.result.current.current?.phrase.id).toBe("b-first");
+    expect(hook.result.current.index).toBe(0);
+    expect(storeB.events).toHaveLength(0);
+  });
+
   it("uses event epochs and ids to exclude only phrases whose actual latest result is good", async () => {
     const items = [phrase("later-hard"), phrase("later-good"), phrase("tie-good")];
     const store = memoryRepository(items); const api = services();

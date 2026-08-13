@@ -98,6 +98,7 @@ export function useTrainingSession({
   const evaluatedRef = useRef(false);
   const operationRef = useRef(false);
   const mountedRef = useRef(true);
+  const generationRef = useRef(0);
   const lastInteractionRef = useRef(0);
   const lastTickRef = useRef(0);
   const checkpointRef = useRef(0);
@@ -108,12 +109,20 @@ export function useTrainingSession({
   const finishingRef = useRef(false);
   const finishPromiseRef = useRef<Promise<void>>();
   const speechPreferencesRef = useRef<SpeechPreferences>({ accent: "en-US", autoSpeak: true });
+  const speechRef = useRef(speech);
+  const recorderRef = useRef(recorder);
   const nowRef = useRef(now);
   const readNow = useCallback(() => nowRef.current(), []);
+  const isCurrent = useCallback((generation: number) => mountedRef.current && generationRef.current === generation, []);
 
   useEffect(() => {
     nowRef.current = now;
   }, [now]);
+
+  useEffect(() => {
+    speechRef.current = speech;
+    recorderRef.current = recorder;
+  }, [recorder, speech]);
 
   const replaceQueue = useCallback((next: TrainingCandidate[]) => {
     queueRef.current = next;
@@ -149,8 +158,9 @@ export function useTrainingSession({
   const persistProposedState = useCallback(async (
     proposedQueue: TrainingCandidate[],
     proposedIndex: number,
+    generation = generationRef.current,
   ): Promise<boolean> => {
-    if (finishingRef.current) return false;
+    if (!isCurrent(generation) || finishingRef.current) return false;
     const session = sessionRef.current;
     if (!session) return false;
     const snapshot: TrainingSessionRecord = {
@@ -165,15 +175,38 @@ export function useTrainingSession({
       .then(() => repository.saveTrainingSession(snapshot));
     sessionWriteRef.current = write;
     await write;
-    if (finishingRef.current) return false;
+    if (!isCurrent(generation) || finishingRef.current) return false;
     Object.assign(session, snapshot);
     return true;
-  }, [readNow, repository]);
+  }, [isCurrent, readNow, repository]);
 
   useEffect(() => {
     mountedRef.current = true;
+    const generation = generationRef.current + 1;
+    generationRef.current = generation;
     let cancelled = false;
+    sessionRef.current = undefined;
+    queueRef.current = [];
+    indexRef.current = 0;
+    usedHintRef.current = false;
+    recordedRef.current = false;
+    evaluatedRef.current = false;
+    operationRef.current = false;
+    pendingEventRef.current = undefined;
+    pendingQueueRef.current = undefined;
+    finishingRef.current = false;
+    finishPromiseRef.current = undefined;
+    sessionWriteRef.current = Promise.resolve();
     void (async () => {
+      await Promise.resolve();
+      if (cancelled || !isCurrent(generation)) return;
+      setQueue([]);
+      setIndex(0);
+      setActiveSeconds(0);
+      setUsedHint(false);
+      setRecordingUrl(undefined);
+      setInitializationError(undefined);
+      setPhase("prompt");
       const [active, phrases, events, learningStates, speechPreferences, snapshot] = await Promise.all([
         repository.getActiveTrainingSession(),
         repository.listPhrases(),
@@ -182,7 +215,7 @@ export function useTrainingSession({
         repository.getSpeechPreferences().catch(() => ({ accent: "en-US", autoSpeak: true } as const)),
         repository.exportSnapshot(),
       ]);
-      if (cancelled) return;
+      if (cancelled || !isCurrent(generation)) return;
       speechPreferencesRef.current = speechPreferences;
       if (active) {
         const byId = new Map(phrases.map((item) => [item.id, item]));
@@ -249,6 +282,7 @@ export function useTrainingSession({
           }
         }
         await persistSession();
+        if (!isCurrent(generation)) return;
         return;
       }
 
@@ -323,7 +357,7 @@ export function useTrainingSession({
       if (selected.length === 0) setPhase("complete");
       await persistSession();
     })().catch(() => {
-      if (cancelled || !mountedRef.current) return;
+      if (cancelled || !isCurrent(generation)) return;
       sessionRef.current = undefined;
       replaceQueue([]);
       replaceIndex(0);
@@ -331,7 +365,7 @@ export function useTrainingSession({
       setInitializationError("训练内容暂时无法加载，请检查本地数据后重试。");
     });
     return () => { cancelled = true; };
-  }, [mode, newIntroducedToday, persistSession, readNow, repository, replaceIndex, replaceQueue, seed]);
+  }, [isCurrent, mode, newIntroducedToday, persistSession, readNow, repository, replaceIndex, replaceQueue, seed]);
 
   useEffect(() => {
     lastInteractionRef.current = Date.now();
@@ -370,19 +404,22 @@ export function useTrainingSession({
 
   useEffect(() => () => {
     mountedRef.current = false;
-    speech.cancel();
-    recorder.dispose();
-  }, [recorder, speech]);
+    generationRef.current += 1;
+    speechRef.current.cancel();
+    recorderRef.current.dispose();
+  }, []);
 
   const speakCurrent = useCallback(async () => {
+    const generation = generationRef.current;
     const current = queueRef.current[indexRef.current];
     if (!current) return;
     try {
       await speech.speak(current.phrase.english, speechPreferencesRef.current.accent);
+      if (!isCurrent(generation)) return;
     } catch {
       // Pronunciation is an enhancement; unsupported browsers must not block practice.
     }
-  }, [speech]);
+  }, [isCurrent, speech]);
 
   const autoSpeakCurrent = useCallback(() => {
     const preferences = speechPreferencesRef.current;
@@ -394,6 +431,7 @@ export function useTrainingSession({
   }, [speech]);
 
   const recordEvent = useCallback(async (result: ReviewResult): Promise<TrainingEvent | undefined> => {
+    const generation = generationRef.current;
     const session = sessionRef.current;
     const current = queueRef.current[indexRef.current];
     if (!session || !current) return;
@@ -417,9 +455,10 @@ export function useTrainingSession({
     }
     const pending = pendingEventRef.current;
     await repository.submitTrainingReview(pending.event);
+    if (!isCurrent(generation)) return;
     eventActiveBaseRef.current = pending.activeSecondsSnapshot;
     return pending.event;
-  }, [readNow, repository]);
+  }, [isCurrent, readNow, repository]);
 
   const resetItemState = useCallback(() => {
     setUsedHint(false);
@@ -433,29 +472,32 @@ export function useTrainingSession({
   }, []);
 
   const advance = useCallback(async (): Promise<boolean> => {
+    const generation = generationRef.current;
     const next = indexRef.current + 1;
     const nextQueue = pendingQueueRef.current ?? queueRef.current;
-    if (!await persistProposedState(nextQueue, next) || finishingRef.current) return false;
+    if (!await persistProposedState(nextQueue, next, generation) || !isCurrent(generation) || finishingRef.current) return false;
     speech.cancel();
     if (nextQueue !== queueRef.current) replaceQueue(nextQueue);
     replaceIndex(next);
     resetItemState();
     if (next >= queueRef.current.length) setPhase("complete");
     return true;
-  }, [persistProposedState, replaceIndex, replaceQueue, resetItemState, speech]);
+  }, [isCurrent, persistProposedState, replaceIndex, replaceQueue, resetItemState, speech]);
 
   const startRecording = useCallback(async () => {
+    const generation = generationRef.current;
     if (operationRef.current || phase !== "prompt") return;
     operationRef.current = true;
     try {
       await recorder.start();
-      if (mountedRef.current) setPhase("recording");
+      if (isCurrent(generation)) setPhase("recording");
     } finally {
-      operationRef.current = false;
+      if (isCurrent(generation)) operationRef.current = false;
     }
-  }, [phase, recorder]);
+  }, [isCurrent, phase, recorder]);
 
   const stopRecording = useCallback(async () => {
+    const generation = generationRef.current;
     // A press can be released before React commits the recording phase. The
     // component awaits startRecording first, so accepting the prompt closure
     // here safely completes that same recording.
@@ -463,35 +505,36 @@ export function useTrainingSession({
     operationRef.current = true;
     try {
       const recording = await recorder.stop();
-      if (!mountedRef.current) return;
+      if (!isCurrent(generation)) return;
       recordedRef.current = true;
       setRecordingUrl(recording.url);
       setPhase("answer");
       void autoSpeakCurrent();
     } finally {
-      operationRef.current = false;
+      if (isCurrent(generation)) operationRef.current = false;
     }
-  }, [autoSpeakCurrent, phase, recorder]);
+  }, [autoSpeakCurrent, isCurrent, phase, recorder]);
 
   const revealAsUnknown = useCallback(async () => {
+    const generation = generationRef.current;
     if (operationRef.current || evaluatedRef.current || phase === "complete") return;
     operationRef.current = true;
     try {
       const current = queueRef.current[indexRef.current];
       if (!current) return;
       const evaluation = await recordEvent("again");
-      if (!evaluation || finishingRef.current) return;
+      if (!isCurrent(generation) || !evaluation || finishingRef.current) return;
       const nextQueue = queueAfterReview(queueRef.current, indexRef.current, evaluation.result);
       pendingQueueRef.current = nextQueue;
-      if (!await persistProposedState(nextQueue, indexRef.current) || finishingRef.current) return;
+      if (!await persistProposedState(nextQueue, indexRef.current, generation) || !isCurrent(generation) || finishingRef.current) return;
       if (nextQueue !== queueRef.current) replaceQueue(nextQueue);
       evaluatedRef.current = true;
       setPhase("answer");
       void autoSpeakCurrent();
     } finally {
-      operationRef.current = false;
+      if (isCurrent(generation)) operationRef.current = false;
     }
-  }, [autoSpeakCurrent, persistProposedState, phase, recordEvent, replaceQueue]);
+  }, [autoSpeakCurrent, isCurrent, persistProposedState, phase, recordEvent, replaceQueue]);
 
   const revealForSelfAssessment = useCallback(async () => {
     if (operationRef.current || phase !== "prompt") return;
@@ -500,41 +543,48 @@ export function useTrainingSession({
   }, [autoSpeakCurrent, phase]);
 
   const usePronunciationHint = useCallback(async () => {
+    const generation = generationRef.current;
     if (phase !== "prompt") return;
     usedHintRef.current = true;
     setUsedHint(true);
     await speakCurrent();
-  }, [phase, speakCurrent]);
+    if (!isCurrent(generation)) return;
+  }, [isCurrent, phase, speakCurrent]);
 
   const grade = useCallback(async (result: ReviewResult) => {
+    const generation = generationRef.current;
     if (operationRef.current || phase === "complete") return { accepted: false };
     if (result === "good" && usedHintRef.current) return { accepted: false };
     operationRef.current = true;
     try {
       if (!evaluatedRef.current) {
         const evaluation = await recordEvent(result);
-        if (!evaluation) return { accepted: false };
+        if (!isCurrent(generation) || !evaluation) return { accepted: false };
         evaluatedRef.current = true;
         pendingQueueRef.current = queueAfterReview(queueRef.current, indexRef.current, evaluation.result);
       }
-      return { accepted: await advance() };
+      const accepted = await advance();
+      return { accepted: isCurrent(generation) && accepted };
     } finally {
-      operationRef.current = false;
+      if (isCurrent(generation)) operationRef.current = false;
     }
-  }, [advance, phase, recordEvent]);
+  }, [advance, isCurrent, phase, recordEvent]);
 
   const finish = useCallback(async () => {
+    const generation = generationRef.current;
     if (finishPromiseRef.current) return finishPromiseRef.current;
     const session = sessionRef.current;
     finishingRef.current = true;
-    if (mountedRef.current) setPhase("complete");
+    if (isCurrent(generation)) setPhase("complete");
     speech.cancel();
     recorder.dispose();
     const completion = (async () => {
       if (session && !session.completedAt) {
         const finishedAt = readNow();
         await persistSession(true);
+        if (!isCurrent(generation)) return;
         await repository.completeTrainingSession(session.id, finishedAt);
+        if (!isCurrent(generation)) return;
         session.completedAt = finishedAt.toISOString();
       }
     })();
@@ -542,11 +592,13 @@ export function useTrainingSession({
     try {
       await completion;
     } catch (error) {
-      finishingRef.current = false;
-      finishPromiseRef.current = undefined;
+      if (isCurrent(generation)) {
+        finishingRef.current = false;
+        finishPromiseRef.current = undefined;
+      }
       throw error;
     }
-  }, [persistSession, readNow, recorder, repository, speech]);
+  }, [isCurrent, persistSession, readNow, recorder, repository, speech]);
 
   return {
     phase,

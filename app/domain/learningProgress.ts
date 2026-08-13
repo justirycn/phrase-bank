@@ -20,13 +20,21 @@ function resetDay(state: PhraseLearningState): string | undefined {
   return Number.isNaN(resetAt.getTime()) ? undefined : shanghaiDay.format(resetAt);
 }
 
+export function normalizeMasteryDates(dates: readonly unknown[]): string[] {
+  return [...new Set(dates.filter((day): day is string => typeof day === "string" && validCalendarDay(day)))].sort();
+}
+
 export function effectiveMasteryDates(state: PhraseLearningState): string[] {
   const cutoff = resetDay(state);
-  return [...new Set(state.masteredDates.filter((day) => validCalendarDay(day) && (!cutoff || day > cutoff)))].sort();
+  return normalizeMasteryDates(state.masteredDates).filter((day) => !cutoff || day > cutoff);
 }
 
 export function masteryAchievedDate(state: PhraseLearningState): string | undefined {
   return effectiveMasteryDates(state)[2];
+}
+
+export function firstMasteryAchievedDate(state: PhraseLearningState): string | undefined {
+  return normalizeMasteryDates(state.masteredDates)[2];
 }
 
 export function applyLearningResult(
@@ -36,8 +44,20 @@ export function applyLearningResult(
 ): PhraseLearningState {
   const timestamp = now.toISOString();
   if (result !== "good") {
+    const masteredDates = normalizeMasteryDates(state.masteredDates);
+    const effectiveDates = effectiveMasteryDates({ ...state, masteredDates });
+    if (effectiveDates.length < 3) {
+      return {
+        ...state,
+        masteredDates,
+        stage: "learned",
+        consecutiveGood: effectiveDates.length,
+        updatedAt: timestamp,
+      };
+    }
     return {
       ...state,
+      masteredDates,
       stage: "learned",
       consecutiveGood: 0,
       masteryResetAt: timestamp,
@@ -45,7 +65,7 @@ export function applyLearningResult(
     };
   }
   const day = shanghaiDay.format(now);
-  const masteredDates = [...new Set([...state.masteredDates.filter(validCalendarDay), day])].sort();
+  const masteredDates = normalizeMasteryDates([...state.masteredDates, day]);
   const progressed = { ...state, masteredDates };
   const effectiveDates = effectiveMasteryDates(progressed);
   return {

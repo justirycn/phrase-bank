@@ -49,7 +49,7 @@ describe("CloudPhraseRepository", () => {
       phrases: [phrase], reviewLogs: [], trainingEvents: [], trainingSessions: [], learningSessions: [], appPreferences: { dailyMasteryGoal: 10 },
       phraseLearningStates: [{
         phraseId: phrase.id, stage: "mastered" as const, firstSeenAt: now, firstTestedAt: now, firstResult: "good" as const,
-        consecutiveGood: 3, masteredDates: ["2026-08-07"], updatedAt: now,
+        consecutiveGood: 3, masteredDates: ["2026-08-09", "bad", "2026-08-07", "2026-08-09", "2026-08-08"], updatedAt: now,
       }],
     };
     const repo = new CloudPhraseRepository(async (_input, init) => init?.method === "PUT"
@@ -58,7 +58,9 @@ describe("CloudPhraseRepository", () => {
 
     await repo.initialize();
 
-    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({ stage: "learned", consecutiveGood: 1 });
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({
+      stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-07", "2026-08-08", "2026-08-09"],
+    });
   });
 
   it("preserves mastery resets and dynamic training queues across cloud snapshot sync", async () => {
