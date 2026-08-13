@@ -50,11 +50,12 @@ function resultEvidence(phraseId: string, logs: ReviewLog[], events: TrainingEve
 
 export function normalizeCurrentLearningState(state: PhraseLearningState): PhraseLearningState {
   const masteredDates = normalizeMasteryDates(state.masteredDates);
-  if (state.stage !== "learned" && state.stage !== "mastered") return { ...state, masteredDates };
-  const consecutiveGood = effectiveMasteryDates({ ...state, masteredDates }).length;
+  const normalized = { ...state, masteredDates };
+  if (state.masteryResetAt !== undefined && !validDate(state.masteryResetAt)) delete normalized.masteryResetAt;
+  if (state.stage !== "learned" && state.stage !== "mastered") return normalized;
+  const consecutiveGood = effectiveMasteryDates(normalized).length;
   return {
-    ...state,
-    masteredDates,
+    ...normalized,
     stage: consecutiveGood >= 3 ? "mastered" : "learned",
     consecutiveGood,
   };

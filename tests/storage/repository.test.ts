@@ -186,6 +186,26 @@ describe("LocalPhraseRepository", () => {
     });
   });
 
+  it("accepts only an identical retry for an existing training event id", async () => {
+    const occurredAt = "2026-08-07T08:00:00.000Z";
+    const first = createNewPhrase({ english: "First", chinese: "第一", categoryId: "daily" }, new Date(occurredAt));
+    const second = createNewPhrase({ english: "Second", chinese: "第二", categoryId: "daily" }, new Date(occurredAt));
+    await repo.savePhrase(first);
+    await repo.savePhrase(second);
+    const event: TrainingEvent = {
+      id: "retry-event", sessionId: "retry-session", phraseId: first.id, source: "due",
+      result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 2, occurredAt,
+    };
+
+    await repo.submitTrainingReview(event);
+    await expect(repo.submitTrainingReview({ ...event })).resolves.toBeUndefined();
+    await expect(repo.submitTrainingReview({ ...event, phraseId: second.id })).rejects.toThrow("训练事件ID冲突");
+    await expect(repo.submitTrainingReview({ ...event, result: "hard" })).rejects.toThrow("训练事件ID冲突");
+
+    expect((await repo.listTrainingEvents()).filter(({ id }) => id === event.id)).toEqual([event]);
+    expect((await repo.getPhrase(second.id))?.reviewStep).toBe(0);
+  });
+
   it("does not store a training event when its atomic review cannot be applied", async () => {
     const before = await repo.exportSnapshot();
     const event: TrainingEvent = {
@@ -662,12 +682,28 @@ describe("LocalPhraseRepository", () => {
     const request = indexedDB.open(dbName, 5);
     const rawDb = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
     const rawTx = rawDb.transaction("phraseLearningState", "readwrite");
-    rawTx.objectStore("phraseLearningState").put({ ...metadata, stage: "mastered", consecutiveGood: 3, masteredDates: [] });
+    rawTx.objectStore("phraseLearningState").put({
+      ...metadata, stage: "mastered", consecutiveGood: 3, masteryResetAt: "invalid-reset",
+      masteredDates: ["2026-08-09", "invalid", "2026-08-07", "2026-08-09", "2026-08-08"],
+    });
     await new Promise<void>((resolve, reject) => { rawTx.oncomplete = () => resolve(); rawTx.onerror = () => reject(rawTx.error); });
     rawDb.close();
     const reopened = new LocalPhraseRepository(dbName);
     await reopened.initialize();
-    expect(await reopened.getPhraseLearningState(phrase.id)).toMatchObject({ stage: "learned", consecutiveGood: 0 });
+    expect(await reopened.getPhraseLearningState(phrase.id)).toMatchObject({
+      stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-07", "2026-08-08", "2026-08-09"],
+    });
+    expect((await reopened.getPhraseLearningState(phrase.id))?.masteryResetAt).toBeUndefined();
+    const verifyRequest = indexedDB.open(dbName, 5);
+    const verifyDb = await new Promise<IDBDatabase>((resolve, reject) => { verifyRequest.onsuccess = () => resolve(verifyRequest.result); verifyRequest.onerror = () => reject(verifyRequest.error); });
+    const stored = await new Promise<PhraseLearningState | undefined>((resolve, reject) => {
+      const request = verifyDb.transaction("phraseLearningState").objectStore("phraseLearningState").get(phrase.id);
+      request.onsuccess = () => resolve(request.result as PhraseLearningState | undefined);
+      request.onerror = () => reject(request.error);
+    });
+    verifyDb.close();
+    expect(stored?.masteredDates).toEqual(["2026-08-07", "2026-08-08", "2026-08-09"]);
+    expect(stored?.masteryResetAt).toBeUndefined();
   });
 
   it("creates legal unseen states for seeded and installed phrases", async () => {

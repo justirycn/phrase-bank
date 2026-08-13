@@ -49,6 +49,11 @@ function sameTrainingEvent(left: TrainingEvent, right: TrainingEvent) {
     && left.activeSeconds === right.activeSeconds && left.occurredAt === right.occurredAt;
 }
 
+function sameNormalizedLearningState(left: PhraseLearningState, right: PhraseLearningState) {
+  return left.stage === right.stage && left.consecutiveGood === right.consecutiveGood
+    && left.masteryResetAt === right.masteryResetAt && samePhraseIds(left.masteredDates, right.masteredDates);
+}
+
 function samePhraseIds(left: string[], right: string[]) {
   return left.length === right.length && left.every((id, index) => id === right[index]);
 }
@@ -188,7 +193,7 @@ export class LocalPhraseRepository implements PhraseRepository {
     let stateCursor = await stateStore.openCursor();
     while (stateCursor) {
       const normalized = normalizeCurrentLearningState(stateCursor.value);
-      if (normalized.stage !== stateCursor.value.stage || normalized.consecutiveGood !== stateCursor.value.consecutiveGood) {
+      if (!sameNormalizedLearningState(normalized, stateCursor.value)) {
         await stateCursor.update(normalized);
       }
       stateCursor = await stateCursor.continue();
@@ -436,7 +441,13 @@ export class LocalPhraseRepository implements PhraseRepository {
     const db = await this.db();
     const tx = db.transaction(["trainingEvents", "phrases", "reviewLogs", "phraseLearningState"], "readwrite");
     const eventStore = tx.objectStore("trainingEvents");
-    if (await eventStore.get(event.id)) {
+    const storedEvent = await eventStore.get(event.id);
+    if (storedEvent) {
+      if (!sameTrainingEvent(storedEvent, event)) {
+        tx.abort();
+        try { await tx.done; } catch { /* The explicit abort preserves the atomic boundary. */ }
+        throw new Error("训练事件ID冲突");
+      }
       await tx.done;
       return;
     }
