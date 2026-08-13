@@ -201,11 +201,19 @@ function chronologicalEvents(events: TrainingEvent[]): TrainingEvent[] {
   });
 }
 
+function masteryAchievedAsOf(state: PhraseLearningState, asOf: string): string | undefined {
+  const resetAt = state.masteryResetAt ? shanghaiDate(state.masteryResetAt) : undefined;
+  const cutoff = resetAt && resetAt <= asOf ? resetAt : undefined;
+  return [...new Set(state.masteredDates.filter((date) =>
+    parseCalendarDate(date) !== undefined && date <= asOf && (!cutoff || date > cutoff),
+  ))].sort()[2];
+}
+
 function forgettablePhrases(events: TrainingEvent[], states: PhraseLearningState[], asOf: string): string[] {
   const asOfDate = parseCalendarDate(asOf);
   if (!asOfDate) return [];
   const windowStart = calendarDate(addCalendarDays(asOfDate, -83));
-  const stableIds = new Set(states.filter((state) => masteryAchievedDate(state) !== undefined).map((state) => state.phraseId));
+  const stableIds = new Set(states.filter((state) => masteryAchievedAsOf(state, asOf) !== undefined).map((state) => state.phraseId));
   const byPhrase = new Map<string, TrainingEvent[]>();
   for (const event of chronologicalEvents(events)) {
     const date = shanghaiDate(event.occurredAt);
@@ -260,7 +268,7 @@ export function summarizeWeek(
     }).length,
     spokenCount: weeklyEvents.filter((trainingEvent) => trainingEvent.recorded).length,
     masteredCount: states.filter((state) => {
-      const achieved = masteryAchievedDate(state);
+      const achieved = masteryAchievedAsOf(state, effectiveEnd);
       return achieved !== undefined && achieved >= weekStart && achieved <= effectiveEnd;
     }).length,
     promotedCount: weeklyEvents.filter((trainingEvent) => promoted.has(trainingEvent)).length,

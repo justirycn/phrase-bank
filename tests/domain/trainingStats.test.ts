@@ -204,12 +204,12 @@ describe("summarizeWeek", () => {
   it("uses persisted mastery transitions and each phrase's latest weekly review for retention", () => {
     const events = [
       event("before", "promoted", "again", "2026-08-02T15:59:59.000Z", 100, true),
-      event("start", "promoted", "good", "2026-08-02T16:00:00.000Z", 200, true),
-      event("again-z", "zeta", "again", "2026-08-04T00:00:00.000Z", 300),
-      event("again-a", "alpha", "again", "2026-08-05T00:00:00.000Z", 400),
-      event("hard-a", "alpha", "hard", "2026-08-06T00:00:00.000Z", 500),
-      event("hard-b", "beta", "hard", "2026-08-07T00:00:00.000Z", 600),
-      event("hard-c", "charlie", "hard", "2026-08-08T00:00:00.000Z", 700),
+      { ...event("start", "promoted", "good", "2026-08-02T16:00:00.000Z", 200, true), source: "new" },
+      event("alpha-first", "alpha", "again", "2026-08-04T00:00:00.000Z", 300),
+      event("alpha-latest", "alpha", "good", "2026-08-05T00:00:00.000Z", 400),
+      event("beta-first", "beta", "good", "2026-08-06T00:00:00.000Z", 500),
+      event("beta-latest", "beta", "hard", "2026-08-07T00:00:00.000Z", 600),
+      event("charlie", "charlie", "good", "2026-08-08T00:00:00.000Z", 700),
       event("end", "omega", "good", "2026-08-09T15:59:59.000Z", 800),
       event("after", "outside", "again", "2026-08-09T16:00:00.000Z", 900),
     ];
@@ -230,8 +230,8 @@ describe("summarizeWeek", () => {
       completedGroups: 2,
       spokenCount: 1,
       masteredCount: 1,
-      promotedCount: 1,
-      retentionRate: 33,
+      promotedCount: 2,
+      retentionRate: 75,
     });
   });
 
@@ -243,17 +243,34 @@ describe("summarizeWeek", () => {
       event("hard-separated-one", "separated", "hard", "2026-08-04T08:00:00.000Z"),
       event("hard-separated-good", "separated", "good", "2026-08-05T08:00:00.000Z"),
       event("hard-separated-two", "separated", "hard", "2026-08-06T08:00:00.000Z"),
-      event("mastered-again", "stable", "again", "2026-08-07T08:00:00.000Z"),
+      event("stable-failure-before-mastery", "stable", "again", "2026-08-01T08:00:00.000Z"),
       event("too-old", "old", "again", "2026-05-17T08:00:00.000Z"),
     ];
     const states = [
       state("again-phrase"), state("double-hard"), state("separated"), state("old"),
-      state("stable", { stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-01", "2026-08-02", "2026-08-03"] }),
+      state("stable", { stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-03", "2026-08-04", "2026-08-05"] }),
     ];
 
     expect(summarizeWeek(events, [], states, "2026-08-03", "2026-08-09")).toMatchObject({
       forgettableCount: 2,
       weakPhraseIds: ["double-hard", "again-phrase"],
+    });
+  });
+
+  it("evaluates mastery and resets as of the requested date, ignoring future state changes", () => {
+    const events = [
+      event("future-master-failure", "future-master", "again", "2026-08-08T08:00:00.000Z"),
+      event("future-reset-failure", "future-reset", "again", "2026-08-08T09:00:00.000Z"),
+    ];
+    const states = [
+      state("future-master", { stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-08", "2026-08-09", "2026-08-10"], updatedAt: "2026-08-10T08:00:00.000Z" }),
+      state("future-reset", { stage: "learned", consecutiveGood: 0, masteredDates: ["2026-08-06", "2026-08-07", "2026-08-08"], masteryResetAt: "2026-08-10T08:00:00.000Z", updatedAt: "2026-08-10T08:00:00.000Z" }),
+    ];
+
+    expect(summarizeWeek(events, [], states, "2026-08-03", "2026-08-09")).toMatchObject({
+      masteredCount: 1,
+      forgettableCount: 1,
+      weakPhraseIds: ["future-master"],
     });
   });
 

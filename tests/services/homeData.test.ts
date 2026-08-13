@@ -31,7 +31,8 @@ describe("loadHomeData", () => {
     const repo = repository();
     const now = new Date("2026-08-11T08:00:00.000Z");
     const result = await loadHomeData(repo, now);
-    const from = new Date("2026-05-24T16:00:00.000Z");
+    const eventFrom = new Date("2026-05-19T16:00:00.000Z");
+    const heatmapFrom = new Date("2026-05-24T16:00:00.000Z");
     const to = new Date("2026-08-11T15:59:59.999Z");
 
     expect(repo.listPhrases).toHaveBeenCalledTimes(1);
@@ -39,13 +40,13 @@ describe("loadHomeData", () => {
     expect(repo.listDuePhrases).toHaveBeenCalledTimes(1);
     expect(repo.listDuePhrases).toHaveBeenCalledWith(now);
     expect(repo.listTrainingSessions).toHaveBeenCalledTimes(1);
-    expect(repo.listTrainingSessions).toHaveBeenCalledWith(from, to);
+    expect(repo.listTrainingSessions).toHaveBeenCalledWith(heatmapFrom, to);
     expect(repo.listPhraseLearningStates).toHaveBeenCalledTimes(1);
     expect(repo.getActiveTrainingSession).toHaveBeenCalledTimes(1);
     expect(repo.getActiveLearningSession).toHaveBeenCalledTimes(1);
     expect(repo.getAppPreferences).toHaveBeenCalledTimes(1);
     expect(repo.listTrainingEvents).toHaveBeenCalledTimes(1);
-    expect(repo.listTrainingEvents).toHaveBeenCalledWith(from, to);
+    expect(repo.listTrainingEvents).toHaveBeenCalledWith(eventFrom, to);
     expect(repo.exportSnapshot).not.toHaveBeenCalled();
     expect(result).toMatchObject({
       phrases: [{ id: "phrase" }], categories: [{ id: "category" }], duePhrases: [{ id: "due" }],
@@ -55,6 +56,22 @@ describe("loadHomeData", () => {
       events: [], heatmapError: "",
     });
     expect(result.heatmap).toHaveLength(84);
+  });
+
+  it("keeps an exact rolling 84-day event on a midweek home while the Monday heatmap filters it out", async () => {
+    const oldEvent = {
+      id: "rolling-boundary", sessionId: "session", phraseId: "old-phrase", source: "due" as const,
+      result: "again" as const, usedPronunciationHint: false, recorded: false, activeSeconds: 1,
+      occurredAt: "2026-05-20T08:00:00.000Z",
+    };
+    const repo = repository({ listTrainingEvents: vi.fn(async () => [oldEvent]) });
+
+    const result = await loadHomeData(repo, new Date("2026-08-11T08:00:00.000Z"));
+
+    expect(result.events).toEqual([oldEvent]);
+    expect(result.heatmap).toHaveLength(84);
+    expect(result.heatmap.some(({ date }) => date === "2026-05-20")).toBe(false);
+    expect(result.heatmap.reduce((total, day) => total + day.count, 0)).toBe(0);
   });
 
   it("isolates event failures while preserving successful core data", async () => {

@@ -29,9 +29,19 @@ export function shanghaiHeatmapRange(now = new Date()): { from: Date; to: Date }
   return { from, to: new Date(tomorrow.getTime() - 1) };
 }
 
+function shanghaiEventRange(now: Date): { from: Date; to: Date } {
+  const { year, month, day } = shanghaiCalendarDate(now);
+  const fromDate = new Date(Date.UTC(year, month - 1, day));
+  fromDate.setUTCDate(fromDate.getUTCDate() - 83);
+  const from = shanghaiStartUtc(fromDate.getUTCFullYear(), fromDate.getUTCMonth() + 1, fromDate.getUTCDate());
+  const tomorrow = shanghaiStartUtc(year, month, day + 1);
+  return { from, to: new Date(tomorrow.getTime() - 1) };
+}
+
 export async function loadHomeData(repository: PhraseRepository, now = new Date()) {
-  const { from, to } = shanghaiHeatmapRange(now);
-  const eventsResult = repository.listTrainingEvents(from, to).then(
+  const heatmapRange = shanghaiHeatmapRange(now);
+  const eventRange = shanghaiEventRange(now);
+  const eventsResult = repository.listTrainingEvents(eventRange.from, eventRange.to).then(
     (events) => ({ ok: true as const, events }),
     () => ({ ok: false as const }),
   );
@@ -48,7 +58,7 @@ export async function loadHomeData(repository: PhraseRepository, now = new Date(
     repository.listPhrases(),
     repository.listCategories(),
     repository.listDuePhrases(now),
-    repository.listTrainingSessions(from, to),
+    repository.listTrainingSessions(heatmapRange.from, heatmapRange.to),
     repository.listPhraseLearningStates(),
     repository.getActiveTrainingSession(),
     repository.getActiveLearningSession(),
