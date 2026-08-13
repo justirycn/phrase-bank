@@ -156,6 +156,8 @@ describe("iPhone new phrase learning styles", () => {
     expect(css).toMatch(/\.training-entry button\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*overflow-wrap:\s*anywhere/s);
     expect(css).toMatch(/\.training-entry button > span\s*\{[^}]*min-width:\s*0/s);
     expect(css).toMatch(/\.learning-start\s*\{[^}]*min-height:\s*88px/s);
+    expect(css).toMatch(/\.weekly-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,1fr\)/s);
+    expect(css).toMatch(/\.weekly-grid p\s*\{[^}]*min-width:\s*0/s);
   });
 
   it("removes learning motion when reduced motion is requested", async () => {

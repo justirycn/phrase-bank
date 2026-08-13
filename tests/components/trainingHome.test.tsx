@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import { TrainingHome } from "../../app/components/TrainingHome";
 
 const base = {
-  dailyProgress: { mastered: 3, reviewed: 4 },
+  dailyProgress: { mastered: 3, consolidated: 2, reviewed: 4 },
   streak: { current: 0, longest: 0 },
-  weeklySummary: { activeSeconds: 0, spokenCount: 0, masteredCount: 0, promotedCount: 0 },
+  weeklySummary: { weekStart: "2026-08-03", activeSeconds: 0, completedGroups: 0, spokenCount: 0, masteredCount: 0, promotedCount: 0, retentionRate: undefined, forgettableCount: 0, weakPhraseIds: [] },
   learnedToday: 2, nextLearningCount: 0, dueCount: 0,
   onContinue: vi.fn(), onStartLearning: vi.fn(), onStartStandard: vi.fn(), onRetryHeatmap: vi.fn(),
 };
@@ -26,6 +26,8 @@ describe("TrainingHome heatmap", () => {
     fireEvent.click(screen.getByRole("button", { name: /学习新句/ }));
     fireEvent.click(screen.getByRole("button", { name: /到期复习/ }));
     expect(screen.getByText("今日掌握")).toBeVisible();
+    expect(screen.getByText("今日巩固")).toBeVisible();
+    expect(screen.getByText("2 句")).toBeVisible();
     expect(screen.getByText("3 / 10 句")).toBeVisible();
     expect(screen.getByText("新学 2 句 · 复习 4 句")).toBeVisible();
     expect(screen.queryByText(/30 分钟|三分钟速练/)).not.toBeInTheDocument();
@@ -39,7 +41,7 @@ describe("TrainingHome heatmap", () => {
     [10, "已完成今日目标"],
     [14, "超额完成 4 句"],
   ])("shows mastery goal progress for %i mastered phrases", (mastered, status) => {
-    render(<TrainingHome {...base} dailyProgress={{ mastered, reviewed: 2 }} dailyMasteryGoal={10} />);
+    render(<TrainingHome {...base} dailyProgress={{ mastered, consolidated: 1, reviewed: 2 }} dailyMasteryGoal={10} />);
 
     const progress = screen.getByRole("progressbar", { name: "今日掌握进度" });
     expect(progress).toHaveAttribute("aria-valuemin", "0");
@@ -67,14 +69,17 @@ describe("TrainingHome heatmap", () => {
     expect(screen.getByRole("button", { name: /^到期复习/ })).toHaveTextContent("继续未完成 · 剩余 2 句");
   });
 
-  it("does not show speaking count in the weekly summary", () => {
-    render(<TrainingHome {...base} weeklySummary={{ ...base.weeklySummary, spokenCount: 99 }} />);
+  it("shows durable weekly outcomes and renders an absent retention rate as dashes", () => {
+    render(<TrainingHome {...base} streak={{ current: 99, lightDaysUsedThisWeek: 0 }} weeklySummary={{ ...base.weeklySummary, activeSeconds: 9999, spokenCount: 98, forgettableCount: 3 }} />);
 
     expect(screen.queryByText("开口次数")).not.toBeInTheDocument();
-    expect(screen.queryByText("99")).not.toBeInTheDocument();
-    expect(screen.getByText("有效分钟")).toBeVisible();
-    expect(screen.getByText("连续天数")).toBeVisible();
+    expect(screen.queryByText("有效分钟")).not.toBeInTheDocument();
+    expect(screen.queryByText("连续天数")).not.toBeInTheDocument();
     expect(screen.getByText("本周掌握")).toBeVisible();
+    expect(screen.getByText("本周复习保持率")).toBeVisible();
+    expect(screen.getByText("容易忘记")).toBeVisible();
+    expect(screen.getByText("--")).toBeVisible();
+    expect(screen.getByText("3")).toBeVisible();
     expect(screen.getByText("从模糊到掌握")).toBeVisible();
   });
 

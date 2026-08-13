@@ -1586,3 +1586,4 @@ select {
 .standard-start{background:#267453}
 .standard-start:disabled{opacity:.5;cursor:not-allowed}
 .daily-progress .daily-goal-status{font-weight:750;color:var(--forest,#173f30)}
+.weekly-grid p{min-width:0;overflow-wrap:anywhere}

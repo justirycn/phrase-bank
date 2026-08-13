@@ -7,10 +7,22 @@ import {
 } from "../../app/domain/trainingStats";
 import type {
   DailyTrainingSummary,
+  PhraseLearningState,
   ReviewResult,
   TrainingEvent,
   TrainingSessionRecord,
 } from "../../app/domain/types";
+
+function state(phraseId: string, overrides: Partial<PhraseLearningState> = {}): PhraseLearningState {
+  return {
+    phraseId,
+    stage: "learned",
+    consecutiveGood: 0,
+    masteredDates: [],
+    updatedAt: "2026-08-09T08:00:00.000Z",
+    ...overrides,
+  };
+}
 
 function event(
   id: string,
@@ -113,20 +125,29 @@ describe("summarizeDailyTraining", () => {
 });
 
 describe("summarizeDailySentenceProgress", () => {
-  it("counts distinct mastered and reviewed phrases on the Shanghai day", () => {
+  it("separates third-day mastery from earlier effective good-day consolidation", () => {
     const result = summarizeDailySentenceProgress("2026-08-09", [
-      event("good-one", "phrase-1", "good", "2026-08-08T16:01:00.000Z"),
-      event("good-repeat", "phrase-1", "good", "2026-08-09T03:00:00.000Z"),
-      event("hard", "phrase-2", "hard", "2026-08-09T04:00:00.000Z"),
-      { ...event("new", "phrase-3", "good", "2026-08-09T05:00:00.000Z"), source: "new" },
+      event("third-day", "phrase-1", "good", "2026-08-08T16:01:00.000Z"),
+      event("third-day-repeat", "phrase-1", "good", "2026-08-09T03:00:00.000Z"),
+      event("second-day", "phrase-2", "good", "2026-08-09T04:00:00.000Z"),
+      { ...event("first-new", "phrase-3", "good", "2026-08-09T05:00:00.000Z"), source: "new" },
+      event("hard", "phrase-4", "hard", "2026-08-09T06:00:00.000Z"),
+      event("good-before-reset", "phrase-5", "good", "2026-08-09T07:00:00.000Z"),
+      event("reset", "phrase-5", "again", "2026-08-09T08:00:00.000Z"),
       event("outside", "phrase-4", "good", "2026-08-09T16:00:00.000Z"),
+    ], [
+      state("phrase-1", { stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-07", "2026-08-08", "2026-08-09"] }),
+      state("phrase-2", { consecutiveGood: 2, masteredDates: ["2026-08-08", "2026-08-09"] }),
+      state("phrase-3", { consecutiveGood: 1, masteredDates: ["2026-08-09"] }),
+      state("phrase-4"),
+      state("phrase-5", { masteredDates: ["2026-08-09"], masteryResetAt: "2026-08-09T08:00:00.000Z" }),
     ]);
 
-    expect(result).toEqual({ mastered: 2, reviewed: 2 });
+    expect(result).toEqual({ mastered: 1, consolidated: 3, reviewed: 4 });
   });
 
   it("returns zero for an invalid day", () => {
-    expect(summarizeDailySentenceProgress("invalid", [])).toEqual({ mastered: 0, reviewed: 0 });
+    expect(summarizeDailySentenceProgress("invalid", [], [])).toEqual({ mastered: 0, consolidated: 0, reviewed: 0 });
   });
 });
 
@@ -180,7 +201,7 @@ describe("calculateStreak", () => {
 });
 
 describe("summarizeWeek", () => {
-  it("uses seven inclusive Shanghai dates and reports promotions and weak top three", () => {
+  it("uses persisted mastery transitions and each phrase's latest weekly review for retention", () => {
     const events = [
       event("before", "promoted", "again", "2026-08-02T15:59:59.000Z", 100, true),
       event("start", "promoted", "good", "2026-08-02T16:00:00.000Z", 200, true),
@@ -198,15 +219,58 @@ describe("summarizeWeek", () => {
       session("after", "2026-08-09T16:00:00.000Z"),
     ];
 
-    expect(summarizeWeek(events, sessions, "2026-08-03")).toEqual({
+    const states = [
+      state("promoted", { stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-01", "2026-08-02", "2026-08-03"] }),
+      state("omega", { consecutiveGood: 2, masteredDates: ["2026-08-08", "2026-08-09"] }),
+    ];
+
+    expect(summarizeWeek(events, sessions, states, "2026-08-03", "2026-08-09")).toMatchObject({
       weekStart: "2026-08-03",
       activeSeconds: 3500,
       completedGroups: 2,
       spokenCount: 1,
-      masteredCount: 2,
+      masteredCount: 1,
       promotedCount: 1,
-      weakPhraseIds: ["alpha", "zeta", "beta"],
+      retentionRate: 33,
     });
+  });
+
+  it("marks recent again or consecutive hard phrases forgettable unless currently stably mastered", () => {
+    const events = [
+      event("again", "again-phrase", "again", "2026-08-03T08:00:00.000Z"),
+      event("hard-one", "double-hard", "hard", "2026-08-04T08:00:00.000Z"),
+      event("hard-two", "double-hard", "hard", "2026-08-05T08:00:00.000Z"),
+      event("hard-separated-one", "separated", "hard", "2026-08-04T08:00:00.000Z"),
+      event("hard-separated-good", "separated", "good", "2026-08-05T08:00:00.000Z"),
+      event("hard-separated-two", "separated", "hard", "2026-08-06T08:00:00.000Z"),
+      event("mastered-again", "stable", "again", "2026-08-07T08:00:00.000Z"),
+      event("too-old", "old", "again", "2026-05-17T08:00:00.000Z"),
+    ];
+    const states = [
+      state("again-phrase"), state("double-hard"), state("separated"), state("old"),
+      state("stable", { stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-01", "2026-08-02", "2026-08-03"] }),
+    ];
+
+    expect(summarizeWeek(events, [], states, "2026-08-03", "2026-08-09")).toMatchObject({
+      forgettableCount: 2,
+      weakPhraseIds: ["double-hard", "again-phrase"],
+    });
+  });
+
+  it("includes the first day of the exact twelve-week window", () => {
+    expect(summarizeWeek([
+      event("window-start", "boundary", "again", "2026-05-18T08:00:00.000Z"),
+      event("before-window", "outside", "again", "2026-05-17T08:00:00.000Z"),
+    ], [], [state("boundary"), state("outside")], "2026-08-03", "2026-08-09")).toMatchObject({
+      forgettableCount: 1,
+      weakPhraseIds: ["boundary"],
+    });
+  });
+
+  it("leaves retention undefined when the week has no non-new result", () => {
+    expect(summarizeWeek([
+      { ...event("new", "new-only", "good", "2026-08-04T08:00:00.000Z"), source: "new" },
+    ], [], [state("new-only", { masteredDates: ["2026-08-04"] })], "2026-08-03", "2026-08-09").retentionRate).toBeUndefined();
   });
 });
 
@@ -217,9 +281,10 @@ describe("safe inputs", () => {
       masteredCount: 0, promotedCount: 0, lightDayUsed: false,
       streakQualified: false, fullGoalReached: false,
     });
-    expect(summarizeWeek([], [], "2026-02-30")).toEqual({
+    expect(summarizeWeek([], [], [], "2026-02-30")).toEqual({
       weekStart: "2026-02-30", activeSeconds: 0, completedGroups: 0,
-      spokenCount: 0, masteredCount: 0, promotedCount: 0, weakPhraseIds: [],
+      spokenCount: 0, masteredCount: 0, promotedCount: 0, retentionRate: undefined,
+      forgettableCount: 0, weakPhraseIds: [],
     });
     expect(calculateStreak([], "invalid")).toEqual({ current: 0, lightDaysUsedThisWeek: 0 });
   });
@@ -231,7 +296,7 @@ describe("safe inputs", () => {
     const before = structuredClone({ events, sessions, days });
 
     summarizeDailyTraining("2026-08-09", events, sessions);
-    summarizeWeek(events, sessions, "2026-08-03");
+    summarizeWeek(events, sessions, [], "2026-08-03");
     calculateStreak(days, "2026-08-09");
 
     expect({ events, sessions, days }).toEqual(before);

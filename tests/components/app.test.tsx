@@ -92,6 +92,15 @@ function learnedState(phraseId: string): PhraseLearningState {
   return { phraseId, stage: "learned", consecutiveGood: 0, masteredDates: [], updatedAt: now };
 }
 
+function threeMasteryDatesEndingOn(day: string): string[] {
+  const end = new Date(`${day}T00:00:00.000Z`);
+  return [-2, -1, 0].map((offset) => {
+    const date = new Date(end);
+    date.setUTCDate(date.getUTCDate() + offset);
+    return date.toISOString().slice(0, 10);
+  });
+}
+
 describe("PhraseBankApp", () => {
   it("keeps replacement review loading until repository B data is ready, then starts at B's first phrase", async () => {
     const user = userEvent.setup();
@@ -572,8 +581,11 @@ describe("PhraseBankApp", () => {
       { id: "e2", sessionId: "s1", phraseId: "p1", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: now },
       { id: "e3", sessionId: "s1", phraseId: "p2", source: "new", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: now },
     );
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date(now));
+    repo.learningStates.push({ phraseId: "p1", stage: "mastered", consecutiveGood: 3, masteredDates: threeMasteryDatesEndingOn(today), updatedAt: now });
     render(<PhraseBankApp repository={repo as never} />);
     expect(await screen.findByText("1 / 10 句")).toBeVisible();
+    expect(screen.getByText("今日巩固").parentElement).toHaveTextContent("0 句");
     expect(screen.getByText("新学 0 句 · 复习 1 句")).toBeVisible();
     expect(screen.queryByText(/30 分钟/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /到期复习/ })).toBeVisible();
@@ -584,6 +596,8 @@ describe("PhraseBankApp", () => {
     const repo = new MemoryRepository();
     const now = new Date().toISOString();
     repo.events.push({ id: "e1", sessionId: "s1", phraseId: "p1", source: "due", result: "good", usedPronunciationHint: false, recorded: true, activeSeconds: 1800, occurredAt: now });
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai" }).format(new Date(now));
+    repo.learningStates.push({ phraseId: "p1", stage: "mastered", consecutiveGood: 3, masteredDates: threeMasteryDatesEndingOn(today), updatedAt: now });
     repo.sessions.push({ id: "s1", mode: "quick", startedAt: now, updatedAt: now, completedAt: now, phraseIds: ["p1"], currentIndex: 1, activeSeconds: 1800 });
     render(<PhraseBankApp repository={repo as never} />);
     expect(await screen.findByText("今天有进步")).toBeVisible();
@@ -626,6 +640,9 @@ describe("PhraseBankApp", () => {
     expect(screen.getByText("你能说明一下吗？")).toBeVisible();
     expect(screen.getByText("日常")).toBeVisible();
     expect(screen.getByText("从模糊到掌握")).toBeVisible();
+    expect(screen.getByText("本周复习保持率")).toBeVisible();
+    expect(screen.getByText("容易忘记")).toBeVisible();
+    expect(screen.queryByText("有效分钟")).not.toBeInTheDocument();
   });
 
   it("retries and returns home even when repository refresh keeps failing", async () => {

@@ -1,8 +1,10 @@
 import type {
   DailyTrainingSummary,
+  PhraseLearningState,
   TrainingEvent,
   TrainingSessionRecord,
 } from "./types";
+import { masteryAchievedDate } from "./learningProgress";
 
 export interface DailyTrainingResult extends DailyTrainingSummary {
   streakQualified: boolean;
@@ -21,6 +23,8 @@ export interface WeeklyTrainingSummary {
   spokenCount: number;
   masteredCount: number;
   promotedCount: number;
+  retentionRate: number | undefined;
+  forgettableCount: number;
   weakPhraseIds: string[];
 }
 
@@ -101,11 +105,14 @@ function zeroDaily(date: string): DailyTrainingResult {
   };
 }
 
-export function summarizeDailySentenceProgress(date: string, events: TrainingEvent[]) {
-  if (!parseCalendarDate(date)) return { mastered: 0, reviewed: 0 };
+export function summarizeDailySentenceProgress(date: string, events: TrainingEvent[], states: PhraseLearningState[]) {
+  if (!parseCalendarDate(date)) return { mastered: 0, consolidated: 0, reviewed: 0 };
   const dailyEvents = events.filter((event) => shanghaiDate(event.occurredAt) === date);
+  const masteredIds = new Set(states.filter((state) => masteryAchievedDate(state) === date).map((state) => state.phraseId));
+  const goodTodayIds = new Set(dailyEvents.filter((event) => event.result === "good").map((event) => event.phraseId));
   return {
-    mastered: new Set(dailyEvents.filter((event) => event.result === "good").map((event) => event.phraseId)).size,
+    mastered: masteredIds.size,
+    consolidated: [...goodTodayIds].filter((phraseId) => !masteredIds.has(phraseId)).length,
     reviewed: new Set(dailyEvents.filter((event) => event.source !== "new").map((event) => event.phraseId)).size,
   };
 }
@@ -181,28 +188,67 @@ function zeroWeek(weekStart: string): WeeklyTrainingSummary {
     spokenCount: 0,
     masteredCount: 0,
     promotedCount: 0,
+    retentionRate: undefined,
+    forgettableCount: 0,
     weakPhraseIds: [],
   };
+}
+
+function chronologicalEvents(events: TrainingEvent[]): TrainingEvent[] {
+  return [...events].sort((left, right) => {
+    const timeDifference = new Date(left.occurredAt).getTime() - new Date(right.occurredAt).getTime();
+    return timeDifference || left.id.localeCompare(right.id);
+  });
+}
+
+function forgettablePhrases(events: TrainingEvent[], states: PhraseLearningState[], asOf: string): string[] {
+  const asOfDate = parseCalendarDate(asOf);
+  if (!asOfDate) return [];
+  const windowStart = calendarDate(addCalendarDays(asOfDate, -83));
+  const stableIds = new Set(states.filter((state) => masteryAchievedDate(state) !== undefined).map((state) => state.phraseId));
+  const byPhrase = new Map<string, TrainingEvent[]>();
+  for (const event of chronologicalEvents(events)) {
+    const date = shanghaiDate(event.occurredAt);
+    if (!date || date < windowStart || date > asOf || stableIds.has(event.phraseId)) continue;
+    byPhrase.set(event.phraseId, [...(byPhrase.get(event.phraseId) ?? []), event]);
+  }
+  const candidates: Array<{ phraseId: string; latestFailureAt: number }> = [];
+  for (const [phraseId, phraseEvents] of byPhrase) {
+    let latestFailureAt = Number.NEGATIVE_INFINITY;
+    for (let index = 0; index < phraseEvents.length; index += 1) {
+      const current = phraseEvents[index];
+      if (current.result === "again" || (current.result === "hard" && phraseEvents[index - 1]?.result === "hard")) {
+        latestFailureAt = Math.max(latestFailureAt, new Date(current.occurredAt).getTime());
+      }
+    }
+    if (latestFailureAt > Number.NEGATIVE_INFINITY) candidates.push({ phraseId, latestFailureAt });
+  }
+  return candidates.sort((left, right) => right.latestFailureAt - left.latestFailureAt || left.phraseId.localeCompare(right.phraseId)).map(({ phraseId }) => phraseId);
 }
 
 export function summarizeWeek(
   events: TrainingEvent[],
   sessions: TrainingSessionRecord[],
+  states: PhraseLearningState[],
   weekStart: string,
+  asOf?: string,
 ): WeeklyTrainingSummary {
   const start = parseCalendarDate(weekStart);
   if (!start) return zeroWeek(weekStart);
   const end = calendarDate(addCalendarDays(start, 6));
+  const effectiveEnd = asOf && parseCalendarDate(asOf) && asOf < end ? asOf : end;
   const weeklyEvents = events.filter((trainingEvent) => {
     const date = shanghaiDate(trainingEvent.occurredAt);
-    return date !== undefined && date >= weekStart && date <= end;
+    return date !== undefined && date >= weekStart && date <= effectiveEnd;
   });
   const promoted = promotedEvents(events);
-  const difficulty = new Map<string, number>();
-  for (const trainingEvent of weeklyEvents) {
-    const score = trainingEvent.result === "again" ? 2 : trainingEvent.result === "hard" ? 1 : 0;
-    difficulty.set(trainingEvent.phraseId, (difficulty.get(trainingEvent.phraseId) ?? 0) + score);
+  const latestReviewByPhrase = new Map<string, TrainingEvent>();
+  for (const trainingEvent of chronologicalEvents(weeklyEvents)) {
+    if (trainingEvent.source !== "new") latestReviewByPhrase.set(trainingEvent.phraseId, trainingEvent);
   }
+  const latestReviews = [...latestReviewByPhrase.values()];
+  const retentionRate = latestReviews.length ? Math.round((latestReviews.filter((event) => event.result === "good").length / latestReviews.length) * 100) : undefined;
+  const forgettableIds = forgettablePhrases(events, states, asOf && parseCalendarDate(asOf) ? asOf : end);
 
   return {
     weekStart,
@@ -210,16 +256,16 @@ export function summarizeWeek(
     completedGroups: sessions.filter((trainingSession) => {
       if (trainingSession.completedAt === undefined) return false;
       const date = shanghaiDate(trainingSession.completedAt);
-      return date !== undefined && date >= weekStart && date <= end;
+      return date !== undefined && date >= weekStart && date <= effectiveEnd;
     }).length,
     spokenCount: weeklyEvents.filter((trainingEvent) => trainingEvent.recorded).length,
-    masteredCount: weeklyEvents.filter((trainingEvent) => trainingEvent.result === "good").length,
+    masteredCount: states.filter((state) => {
+      const achieved = masteryAchievedDate(state);
+      return achieved !== undefined && achieved >= weekStart && achieved <= effectiveEnd;
+    }).length,
     promotedCount: weeklyEvents.filter((trainingEvent) => promoted.has(trainingEvent)).length,
-    weakPhraseIds: [...difficulty.entries()]
-      .filter(([, score]) => score > 0)
-      .sort(([leftId, leftScore], [rightId, rightScore]) =>
-        rightScore - leftScore || leftId.localeCompare(rightId))
-      .slice(0, 3)
-      .map(([phraseId]) => phraseId),
+    retentionRate,
+    forgettableCount: forgettableIds.length,
+    weakPhraseIds: forgettableIds.slice(0, 3),
   };
 }
