@@ -351,6 +351,77 @@ describe("useTrainingSession", () => {
     expect(store.repository.submitTrainingReview).toHaveBeenCalledTimes(1);
   });
 
+  it("advances an unknown reveal without adding a second requeue for the same event", async () => {
+    const items = ["p1", "p2", "p3", "p4", "p5"].map(phrase);
+    const active: TrainingSessionRecord = {
+      id: "active-unknown-once", mode: "standard", startedAt: "2026-08-09T01:00:00.000Z",
+      updatedAt: "2026-08-09T01:00:00.000Z", phraseIds: items.map(({ id }) => id),
+      sources: items.map(() => "due"), currentIndex: 0, activeSeconds: 0,
+    };
+    const store = memoryRepository(items, undefined, [active]);
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "standard", ...services() }));
+    await waitFor(() => expect(result.current.current?.phrase.id).toBe("p1"));
+
+    await act(() => result.current.revealAsUnknown());
+    await act(() => result.current.grade("again"));
+
+    expect(store.events).toHaveLength(1);
+    expect(store.repository.submitTrainingReview).toHaveBeenCalledTimes(1);
+    expect(store.getSession()?.phraseIds.filter((id) => id === "p1")).toHaveLength(2);
+    expect(store.getSession()?.sources.filter((source) => source === "requeue")).toHaveLength(1);
+  });
+
+  it.each([
+    { first: "again" as const, retry: "hard" as const, total: 6, requeues: 1 },
+    { first: "hard" as const, retry: "again" as const, total: 5, requeues: 0 },
+  ])("keeps the pending $first result authoritative when retrying with $retry", async ({ first, retry, total, requeues }) => {
+    const items = ["p1", "p2", "p3", "p4", "p5"].map(phrase);
+    const active: TrainingSessionRecord = {
+      id: `active-cross-retry-${first}`, mode: "standard", startedAt: "2026-08-09T01:00:00.000Z",
+      updatedAt: "2026-08-09T01:00:00.000Z", phraseIds: items.map(({ id }) => id),
+      sources: items.map(() => "due"), currentIndex: 0, activeSeconds: 0,
+    };
+    const store = memoryRepository(items, undefined, [active]);
+    const submit = store.repository.submitTrainingReview as ReturnType<typeof vi.fn>;
+    submit.mockRejectedValueOnce(new Error("temporary failure"));
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "standard", ...services() }));
+    await waitFor(() => expect(result.current.current?.phrase.id).toBe("p1"));
+
+    await expect(act(() => result.current.grade(first))).rejects.toThrow("temporary failure");
+    await act(() => result.current.grade(retry));
+
+    expect(store.events).toHaveLength(1);
+    expect(store.events[0]!.result).toBe(first);
+    expect(result.current).toMatchObject({ index: 1, total });
+    expect(store.getSession()?.sources.filter((source) => source === "requeue")).toHaveLength(requeues);
+  });
+
+  it("reconstructs an unpersisted requeue from the saved event after remount", async () => {
+    const items = ["p1", "p2", "p3", "p4", "p5"].map(phrase);
+    const active: TrainingSessionRecord = {
+      id: "active-remount-failed-requeue-save", mode: "standard", startedAt: "2026-08-09T01:00:00.000Z",
+      updatedAt: "2026-08-09T01:00:00.000Z", phraseIds: items.map(({ id }) => id),
+      sources: items.map(() => "due"), currentIndex: 0, activeSeconds: 0,
+    };
+    const store = memoryRepository(items, undefined, [active]);
+    const first = renderHook(() => useTrainingSession({ repository: store.repository, mode: "standard", ...services() }));
+    await waitFor(() => expect(first.result.current.current?.phrase.id).toBe("p1"));
+    const save = store.repository.saveTrainingSession as ReturnType<typeof vi.fn>;
+    save.mockRejectedValueOnce(new Error("session write failed"));
+    await expect(act(() => first.result.current.grade("again"))).rejects.toThrow("session write failed");
+    first.unmount();
+
+    const second = renderHook(() => useTrainingSession({ repository: store.repository, mode: "standard", ...services() }));
+    await waitFor(() => expect(second.result.current.phase).toBe("answer"));
+    await act(() => second.result.current.grade("hard"));
+
+    expect(store.events).toHaveLength(1);
+    expect(store.repository.submitTrainingReview).toHaveBeenCalledTimes(1);
+    expect(second.result.current).toMatchObject({ index: 1, total: 6 });
+    expect(store.getSession()?.phraseIds).toEqual(["p1", "p2", "p3", "p1", "p4", "p5"]);
+    expect(store.getSession()?.sources).toEqual(["due", "due", "due", "requeue", "due", "due"]);
+  });
+
   it("uses pronunciation without revealing and caps a good grade", async () => {
     const store = memoryRepository();
     const api = services();

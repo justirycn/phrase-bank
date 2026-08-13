@@ -57,6 +57,22 @@ const compareTimestampAndId = (
   rightId: string,
 ) => new Date(leftTimestamp).getTime() - new Date(rightTimestamp).getTime()
   || leftId.localeCompare(rightId);
+const queueAfterReview = (
+  queue: TrainingCandidate[],
+  index: number,
+  result: ReviewResult,
+): TrainingCandidate[] => {
+  const current = queue[index];
+  if (result !== "again" || !current) return queue;
+  const requeueCount = queue.filter((candidate) => (
+    candidate.source === "requeue" && candidate.phrase.id === current.phrase.id
+  )).length;
+  if (requeueCount >= 3) return queue;
+  const nextQueue = [...queue];
+  const insertionIndex = Math.min(index + 3, nextQueue.length);
+  nextQueue.splice(insertionIndex, 0, { ...current, source: "requeue" });
+  return nextQueue;
+};
 
 export function useTrainingSession({
   repository,
@@ -214,6 +230,17 @@ export function useTrainingSession({
             ));
           if (phraseEvents.length > priorOccurrences) {
             const evaluation = phraseEvents[priorOccurrences];
+            const expectedRequeues = Math.min(3, phraseEvents
+              .slice(0, priorOccurrences + 1)
+              .filter((event) => event.result === "again").length);
+            const persistedRequeues = restored.filter((candidate) => (
+              candidate.source === "requeue" && candidate.phrase.id === currentPhraseId
+            )).length;
+            const recovered = persistedRequeues < expectedRequeues
+              ? queueAfterReview(restored, normalizedIndex, evaluation.result)
+              : restored;
+            pendingQueueRef.current = recovered;
+            if (recovered !== restored) replaceQueue(recovered);
             evaluatedRef.current = true;
             usedHintRef.current = evaluation.usedPronunciationHint;
             recordedRef.current = evaluation.recorded;
@@ -366,7 +393,7 @@ export function useTrainingSession({
     });
   }, [speech]);
 
-  const recordEvent = useCallback(async (result: ReviewResult) => {
+  const recordEvent = useCallback(async (result: ReviewResult): Promise<TrainingEvent | undefined> => {
     const session = sessionRef.current;
     const current = queueRef.current[indexRef.current];
     if (!session || !current) return;
@@ -391,6 +418,7 @@ export function useTrainingSession({
     const pending = pendingEventRef.current;
     await repository.submitTrainingReview(pending.event);
     eventActiveBaseRef.current = pending.activeSecondsSnapshot;
+    return pending.event;
   }, [readNow, repository]);
 
   const resetItemState = useCallback(() => {
@@ -404,22 +432,9 @@ export function useTrainingSession({
     setPhase("prompt");
   }, []);
 
-  const queueAfterReview = useCallback((result: ReviewResult): TrainingCandidate[] => {
-    const current = queueRef.current[indexRef.current];
-    if (result !== "again" || !current) return queueRef.current;
-    const requeueCount = queueRef.current.filter((candidate) => (
-      candidate.source === "requeue" && candidate.phrase.id === current.phrase.id
-    )).length;
-    if (requeueCount >= 3) return queueRef.current;
-    const nextQueue = [...queueRef.current];
-    const insertionIndex = Math.min(indexRef.current + 3, nextQueue.length);
-    nextQueue.splice(insertionIndex, 0, { ...current, source: "requeue" });
-    return nextQueue;
-  }, []);
-
-  const advance = useCallback(async (result?: ReviewResult): Promise<boolean> => {
+  const advance = useCallback(async (): Promise<boolean> => {
     const next = indexRef.current + 1;
-    const nextQueue = pendingQueueRef.current ?? (result ? queueAfterReview(result) : queueRef.current);
+    const nextQueue = pendingQueueRef.current ?? queueRef.current;
     if (!await persistProposedState(nextQueue, next) || finishingRef.current) return false;
     speech.cancel();
     if (nextQueue !== queueRef.current) replaceQueue(nextQueue);
@@ -427,7 +442,7 @@ export function useTrainingSession({
     resetItemState();
     if (next >= queueRef.current.length) setPhase("complete");
     return true;
-  }, [persistProposedState, queueAfterReview, replaceIndex, replaceQueue, resetItemState, speech]);
+  }, [persistProposedState, replaceIndex, replaceQueue, resetItemState, speech]);
 
   const startRecording = useCallback(async () => {
     if (operationRef.current || phase !== "prompt") return;
@@ -464,9 +479,10 @@ export function useTrainingSession({
     try {
       const current = queueRef.current[indexRef.current];
       if (!current) return;
-      await recordEvent("again");
-      if (finishingRef.current) return;
-      const nextQueue = queueAfterReview("again");
+      const evaluation = await recordEvent("again");
+      if (!evaluation || finishingRef.current) return;
+      const nextQueue = queueAfterReview(queueRef.current, indexRef.current, evaluation.result);
+      pendingQueueRef.current = nextQueue;
       if (!await persistProposedState(nextQueue, indexRef.current) || finishingRef.current) return;
       if (nextQueue !== queueRef.current) replaceQueue(nextQueue);
       evaluatedRef.current = true;
@@ -475,7 +491,7 @@ export function useTrainingSession({
     } finally {
       operationRef.current = false;
     }
-  }, [autoSpeakCurrent, persistProposedState, phase, queueAfterReview, recordEvent, replaceQueue]);
+  }, [autoSpeakCurrent, persistProposedState, phase, recordEvent, replaceQueue]);
 
   const revealForSelfAssessment = useCallback(async () => {
     if (operationRef.current || phase !== "prompt") return;
@@ -496,15 +512,16 @@ export function useTrainingSession({
     operationRef.current = true;
     try {
       if (!evaluatedRef.current) {
-        await recordEvent(result);
+        const evaluation = await recordEvent(result);
+        if (!evaluation) return { accepted: false };
         evaluatedRef.current = true;
-        pendingQueueRef.current = queueAfterReview(result);
+        pendingQueueRef.current = queueAfterReview(queueRef.current, indexRef.current, evaluation.result);
       }
-      return { accepted: await advance(result) };
+      return { accepted: await advance() };
     } finally {
       operationRef.current = false;
     }
-  }, [advance, phase, queueAfterReview, recordEvent]);
+  }, [advance, phase, recordEvent]);
 
   const finish = useCallback(async () => {
     if (finishPromiseRef.current) return finishPromiseRef.current;
