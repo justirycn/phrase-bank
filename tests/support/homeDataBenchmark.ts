@@ -67,7 +67,7 @@ export async function runHomeDataBenchmark() {
   const base = new LocalPhraseRepository(`home-benchmark-${crypto.randomUUID()}`);
   await base.initialize();
   await base.importSnapshot(fixture, "overwrite");
-  const names = ["listPhrases", "listCategories", "listDuePhrases", "listTrainingEvents", "listTrainingSessions", "listPhraseLearningStates", "getActiveTrainingSession", "getActiveLearningSession", "exportSnapshot"] as const;
+  const names = ["listPhrases", "listCategories", "listDuePhrases", "listTrainingEvents", "listTrainingSessions", "listPhraseLearningStates", "getActiveTrainingSession", "getActiveLearningSession", "getAppPreferences", "exportSnapshot"] as const;
   const calls = Object.fromEntries(names.map((name) => [name, 0])) as Record<(typeof names)[number], number>;
   const rows = { trainingEvents: 0, trainingSessions: 0, activeTrainingSessions: 0, activeLearningSessions: 0, heatmapDays: 0 };
   const requests = { activeTrainingSession: 0, activeLearningSession: 0 };

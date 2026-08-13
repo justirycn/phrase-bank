@@ -22,6 +22,7 @@ describe("2,000 phrase home-data benchmark", () => {
       listPhraseLearningStates: 1,
       getActiveTrainingSession: 1,
       getActiveLearningSession: 1,
+      getAppPreferences: 1,
       exportSnapshot: 0,
     });
     expect(report.rows.trainingEvents).toBe(6_636);

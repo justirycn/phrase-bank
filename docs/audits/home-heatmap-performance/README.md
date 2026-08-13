@@ -46,7 +46,7 @@ Run `npm run benchmark:home-data`. It creates a uniquely named fake IndexedDB da
 
 - Seed: `20260811`
 - Fixture: 10 categories, 2,000 phrases, 2,000 learning states, 10,080 events, 1,440 sessions
-- Startup calls: each of the eight bounded/core home reads exactly once; `exportSnapshot` zero times
+- Startup calls: each of the nine bounded/core home reads exactly once; `exportSnapshot` zero times
 - Returned bounded history: 6,636 events and 948 sessions; heatmap 84 days
 - Current service-ready observation: runner-generated in `metrics.json`
 - Regression ceiling: 5,000 ms
