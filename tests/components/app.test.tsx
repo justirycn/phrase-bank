@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { PhraseBankApp } from "../../app/PhraseBankApp";
-import type { BackupEnvelopeV4, Category, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import type { AppPreferences, BackupEnvelopeV5, Category, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 
 class MemoryRepository {
   phrases: Phrase[] = [];
@@ -35,6 +35,9 @@ class MemoryRepository {
   learningSessions: import("../../app/domain/types").LearningSessionRecord[] = [];
   preferenceLoad?: Promise<SpeechPreferences>;
   savePreferenceImpl?: (value: SpeechPreferences) => Promise<void>;
+  appPreferences: AppPreferences = { dailyMasteryGoal: 10 };
+  appPreferenceSaves: AppPreferences[] = [];
+  failAppPreferenceSave = false;
   async getPhrase(id: string) { return this.phrases.find((phrase) => phrase.id === id); }
   async submitTrainingReview(event: TrainingEvent) { this.events.push(event); }
   async saveTrainingEvent(event: TrainingEvent) { this.events = [...this.events.filter((item) => item.id !== event.id), event]; }
@@ -45,6 +48,8 @@ class MemoryRepository {
   async completeTrainingSession(id: string, completedAt: Date) { this.sessions = this.sessions.map((session) => session.id === id ? { ...session, completedAt: completedAt.toISOString() } : session); }
   async getSpeechPreferences() { if (this.preferenceLoad) return this.preferenceLoad; if (this.failPreferenceLoad) throw new Error("preference load failed"); return this.preferences; }
   async saveSpeechPreferences(value: SpeechPreferences) { this.preferenceSaves.push(value); if (this.savePreferenceImpl) return this.savePreferenceImpl(value); if (this.failPreferenceSave) throw new Error("preference save failed"); this.preferences = value; }
+  async getAppPreferences() { return this.appPreferences; }
+  async saveAppPreferences(value: AppPreferences) { this.appPreferenceSaves.push(value); if (this.failAppPreferenceSave) throw new Error("app preference save failed"); this.appPreferences = value; }
   async listPhraseLearningStates() { return [...this.learningStates]; }
   async getPhraseLearningState(id: string) { return this.learningStates.find((state) => state.phraseId === id); }
   async savePhraseLearningState(state: PhraseLearningState) { if (this.failLearningStateSave) throw new Error("state failed"); this.learningStates = [...this.learningStates.filter((item) => item.phraseId !== state.phraseId), state]; }
@@ -61,7 +66,7 @@ class MemoryRepository {
   async rollbackSystemContentPackage() {}
   async saveCategory(category: Category) { this.categories.push(category); }
   async deleteCategoryAndMigrate() {}
-  async exportSnapshot(): Promise<BackupEnvelopeV4> { this.exportSnapshotAttempts += 1; return { format: "personal-phrase-bank", version: 4, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [], trainingEvents: this.events, trainingSessions: this.sessions, phraseLearningStates: this.learningStates, learningSessions: this.learningSessions }; }
+  async exportSnapshot(): Promise<BackupEnvelopeV5> { this.exportSnapshotAttempts += 1; return { format: "personal-phrase-bank", version: 5, exportedAt: new Date().toISOString(), categories: this.categories, phrases: this.phrases, reviewLogs: [], trainingEvents: this.events, trainingSessions: this.sessions, phraseLearningStates: this.learningStates, learningSessions: this.learningSessions, appPreferences: this.appPreferences }; }
   async importSnapshot() {}
 }
 
@@ -138,7 +143,7 @@ describe("PhraseBankApp", () => {
 
     expect(await screen.findByText("学习足迹暂时无法加载")).toBeVisible();
     expect(screen.getByRole("button", { name: /学习新句/ })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /今日复习/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /到期复习/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /继续今日任务/ })).toBeEnabled();
     expect(screen.queryByRole("button", { name: /三分钟速练/ })).not.toBeInTheDocument();
 
@@ -166,8 +171,8 @@ describe("PhraseBankApp", () => {
       { ...learnedState("mastered"), stage: "mastered" },
     ];
     render(<PhraseBankApp repository={repo as never} />);
-    const review = await screen.findByRole("button", { name: /今日复习/ });
-    expect(review).toHaveTextContent("2 句待复习");
+    const review = await screen.findByRole("button", { name: /到期复习/ });
+    expect(review).toHaveTextContent("2 句到期");
     await user.click(review);
     expect(await screen.findByText("已学习提示")).toBeVisible();
     expect(screen.getByText(/第\s*1\s*\/\s*2\s*个/)).toBeVisible();
@@ -180,7 +185,7 @@ describe("PhraseBankApp", () => {
     await user.click(screen.getByRole("button", { name: /掌握/ }));
     expect(await screen.findByRole("heading", { name: "这一组完成了" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "回到首页" }));
-    expect(await screen.findByRole("button", { name: /今日复习/ })).toHaveTextContent("2 句待复习");
+    expect(await screen.findByRole("button", { name: /到期复习/ })).toHaveTextContent("2 句到期");
   });
   it("shows continue, new learning, and resumable review entries without quick practice", async () => {
     const repo = new MemoryRepository();
@@ -191,7 +196,7 @@ describe("PhraseBankApp", () => {
     repo.learningStates = [learnedState("learned")];
     render(<PhraseBankApp repository={repo as never} />);
     expect(await screen.findByRole("button", { name: /学习新句/ })).toHaveTextContent("0 / 15");
-    expect(screen.getByRole("button", { name: /今日复习/ })).toHaveTextContent("1");
+    expect(screen.getByRole("button", { name: /到期复习/ })).toHaveTextContent("1");
     expect(screen.getByRole("button", { name: /继续今日任务/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: /三分钟速练/ })).not.toBeInTheDocument();
   });
@@ -238,7 +243,7 @@ describe("PhraseBankApp", () => {
     expect(await screen.findByText("I'll get back to you.")).toBeVisible();
     expect(screen.queryByRole("navigation", { name: "主导航" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /关闭学习并返回首页/ }));
-    expect(await screen.findByRole("button", { name: /今日复习/ })).toBeVisible();
+    expect(await screen.findByRole("button", { name: /到期复习/ })).toBeVisible();
   });
 
   it("refreshes today's learned count after completing a short learning group", async () => {
@@ -498,10 +503,10 @@ describe("PhraseBankApp", () => {
       { id: "e3", sessionId: "s1", phraseId: "p2", source: "new", result: "hard", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: now },
     );
     render(<PhraseBankApp repository={repo as never} />);
-    expect(await screen.findByText("1 句")).toBeVisible();
+    expect(await screen.findByText("1 / 10 句")).toBeVisible();
     expect(screen.getByText("新学 0 句 · 复习 1 句")).toBeVisible();
     expect(screen.queryByText(/30 分钟/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /今日复习/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: /到期复习/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: /三分钟速练/ })).not.toBeInTheDocument();
   });
 
@@ -512,8 +517,8 @@ describe("PhraseBankApp", () => {
     repo.sessions.push({ id: "s1", mode: "quick", startedAt: now, updatedAt: now, completedAt: now, phraseIds: ["p1"], currentIndex: 1, activeSeconds: 1800 });
     render(<PhraseBankApp repository={repo as never} />);
     expect(await screen.findByText("今天有进步")).toBeVisible();
-    expect(screen.getByText("1 句")).toBeVisible();
-    expect(screen.getByRole("button", { name: /今日复习/ })).toBeVisible();
+    expect(screen.getByText("1 / 10 句")).toBeVisible();
+    expect(screen.getByRole("button", { name: /到期复习/ })).toBeVisible();
   });
 
   it("starts daily review with Chinese before English", async () => {
@@ -521,7 +526,7 @@ describe("PhraseBankApp", () => {
     repo.phrases.push(makePhrase({ chinese: "我还没决定。", english: "I haven't decided yet." }));
     repo.learningStates = repo.phrases.map(({ id }) => learnedState(id));
     render(<PhraseBankApp repository={repo as never} />);
-    await user.click(await screen.findByRole("button", { name: /今日复习/ }));
+    await user.click(await screen.findByRole("button", { name: /到期复习/ }));
     expect(await screen.findByText("我还没决定。")).toBeVisible();
     expect(screen.queryByText("I haven't decided yet.")).not.toBeInTheDocument();
     expect(screen.getByText(/第\s*1\s*\/\s*1\s*个/)).toBeVisible();
@@ -536,7 +541,7 @@ describe("PhraseBankApp", () => {
     repo.sessions = [{ id: "active-review", mode: "standard", startedAt: now, updatedAt: now, phraseIds: ["p0", "p1", "p2"], sources: ["due", "due", "due"], currentIndex: 1, activeSeconds: 3 }];
     render(<PhraseBankApp repository={repo as never} />);
     const continueButton = await screen.findByRole("button", { name: /继续今日任务/ });
-    expect(continueButton).toHaveTextContent("继续未完成的复习 · 剩余 2 句");
+    expect(continueButton).toHaveTextContent("继续未完成的到期复习 · 剩余 2 句");
     await user.click(continueButton);
     expect(await screen.findByText("中文 1")).toBeVisible();
     expect(screen.queryByText("中文 0")).not.toBeInTheDocument();
@@ -558,7 +563,7 @@ describe("PhraseBankApp", () => {
     render(<PhraseBankApp repository={repo as never} />);
     await screen.findByText("今天，说出来");
     repo.failPhraseReads = true;
-    await user.click(screen.getByRole("button", { name: /今日复习/ }));
+    await user.click(screen.getByRole("button", { name: /到期复习/ }));
     expect(await screen.findByRole("heading", { name: "训练暂时打不开" })).toBeVisible();
     const attemptsBeforeRetry = repo.phraseReadAttempts;
     await user.click(screen.getByRole("button", { name: "重试" }));
@@ -599,6 +604,42 @@ describe("PhraseBankApp", () => {
     await vi.waitFor(() => expect(repo.preferenceSaves.at(-1)).toEqual({ accent: "en-GB", autoSpeak: false }));
     await user.click(screen.getByRole("radio", { name: "美式英语" }));
     await vi.waitFor(() => expect(repo.preferenceSaves.at(-1)).toEqual({ accent: "en-US", autoSpeak: false }));
+  });
+
+  it("saves a positive integer mastery goal and refreshes the home target", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    render(<PhraseBankApp repository={repo as never} />);
+    expect(await screen.findByText("0 / 10 句")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const input = await screen.findByRole("spinbutton", { name: "每日掌握目标" });
+    expect(input).toHaveValue(10);
+    await user.clear(input); await user.type(input, "18");
+    await user.click(screen.getByRole("button", { name: "保存每日目标" }));
+    await vi.waitFor(() => expect(repo.appPreferenceSaves).toEqual([{ dailyMasteryGoal: 18 }]));
+    await user.click(screen.getByRole("button", { name: "复习" }));
+    expect(await screen.findByText("0 / 18 句")).toBeVisible();
+  });
+
+  it.each(["", "0", "-2", "1.5", "abc"])("rejects invalid mastery goal %j", async (value) => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const input = await screen.findByRole("spinbutton", { name: "每日掌握目标" });
+    await user.clear(input); if (value) await user.type(input, value);
+    await user.click(screen.getByRole("button", { name: "保存每日目标" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("每日掌握目标必须是正整数");
+    expect(repo.appPreferenceSaves).toEqual([]);
+  });
+
+  it("keeps the stored mastery goal when saving fails", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository(); repo.failAppPreferenceSave = true;
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: "设置" }));
+    const input = await screen.findByRole("spinbutton", { name: "每日掌握目标" });
+    await user.clear(input); await user.type(input, "20");
+    await user.click(screen.getByRole("button", { name: "保存每日目标" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("每日掌握目标保存失败");
+    expect(input).toHaveValue(10);
   });
 
   it("keeps settings usable when speech preferences cannot be loaded or saved", async () => {

@@ -1,6 +1,6 @@
 import {
   ArrowLeft, ArrowRight, BookmarkSimple, Books, CaretRight, CheckCircle,
-  Clock, DownloadSimple, GearSix, House, MagnifyingGlass, Microphone, Play, Plus, Repeat, SpeakerHigh, Sparkle, Stop,
+  Clock, ClockCounterClockwise, DownloadSimple, GearSix, House, MagnifyingGlass, Microphone, Play, Plus, Repeat, SpeakerHigh, Sparkle, Stop,
   UploadSimple, X, type Icon, type IconProps,
 } from "@phosphor-icons/react";
 
@@ -10,6 +10,7 @@ const icons = {
   home: House, library: Books, next: CaretRight, review: Sparkle,
   search: MagnifyingGlass, settings: GearSix, upload: UploadSimple,
   microphone: Microphone, speaker: SpeakerHigh, play: Play, stop: Stop, repeat: Repeat, clock: Clock,
+  dueReview: ClockCounterClockwise,
 } satisfies Record<string, Icon>;
 
 export type AppIconName = keyof typeof icons;

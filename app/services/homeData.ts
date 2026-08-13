@@ -43,6 +43,7 @@ export async function loadHomeData(repository: PhraseRepository, now = new Date(
     learningStates,
     activeTrainingSession,
     activeLearningSession,
+    appPreferences,
   ] = await Promise.all([
     repository.listPhrases(),
     repository.listCategories(),
@@ -51,6 +52,7 @@ export async function loadHomeData(repository: PhraseRepository, now = new Date(
     repository.listPhraseLearningStates(),
     repository.getActiveTrainingSession(),
     repository.getActiveLearningSession(),
+    repository.getAppPreferences(),
   ]);
   const eventRead = await eventsResult;
   const events = eventRead.ok ? eventRead.events : [];
@@ -62,6 +64,7 @@ export async function loadHomeData(repository: PhraseRepository, now = new Date(
     learningStates,
     activeTrainingSession,
     activeLearningSession,
+    appPreferences,
     events,
     heatmap: eventRead.ok ? buildLearningHeatmap(events, now) : [],
     heatmapError: eventRead.ok ? "" : "学习足迹暂时无法加载",

@@ -11,6 +11,7 @@ function repository(overrides: Partial<PhraseRepository> = {}): PhraseRepository
     listPhraseLearningStates: vi.fn(async () => [{ phraseId: "phrase" }]),
     getActiveTrainingSession: vi.fn(async () => ({ id: "active-training" })),
     getActiveLearningSession: vi.fn(async () => ({ id: "active-learning" })),
+    getAppPreferences: vi.fn(async () => ({ dailyMasteryGoal: 12 })),
     listTrainingEvents: vi.fn(async () => []),
     exportSnapshot: vi.fn(),
     ...overrides,
@@ -42,6 +43,7 @@ describe("loadHomeData", () => {
     expect(repo.listPhraseLearningStates).toHaveBeenCalledTimes(1);
     expect(repo.getActiveTrainingSession).toHaveBeenCalledTimes(1);
     expect(repo.getActiveLearningSession).toHaveBeenCalledTimes(1);
+    expect(repo.getAppPreferences).toHaveBeenCalledTimes(1);
     expect(repo.listTrainingEvents).toHaveBeenCalledTimes(1);
     expect(repo.listTrainingEvents).toHaveBeenCalledWith(from, to);
     expect(repo.exportSnapshot).not.toHaveBeenCalled();
@@ -49,6 +51,7 @@ describe("loadHomeData", () => {
       phrases: [{ id: "phrase" }], categories: [{ id: "category" }], duePhrases: [{ id: "due" }],
       trainingSessions: [{ id: "session" }], learningStates: [{ phraseId: "phrase" }],
       activeTrainingSession: { id: "active-training" }, activeLearningSession: { id: "active-learning" },
+      appPreferences: { dailyMasteryGoal: 12 },
       events: [], heatmapError: "",
     });
     expect(result.heatmap).toHaveLength(84);
