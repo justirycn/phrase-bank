@@ -46,7 +46,7 @@ export function applyLearningResult(
   if (result !== "good") {
     const masteredDates = normalizeMasteryDates(state.masteredDates);
     const effectiveDates = effectiveMasteryDates({ ...state, masteredDates });
-    if (effectiveDates.length < 3) {
+    if (!firstMasteryAchievedDate({ ...state, masteredDates })) {
       return {
         ...state,
         masteredDates,

@@ -96,6 +96,26 @@ describe("learning progress", () => {
     });
   });
 
+  it("moves the reset boundary on every later failure after historical mastery", () => {
+    const mastered = state({
+      stage: "mastered", consecutiveGood: 3,
+      masteredDates: ["2026-08-01", "2026-08-02", "2026-08-03"],
+    });
+    const failedDayFour = applyLearningResult(mastered, "hard", new Date("2026-08-04T04:00:00.000Z"));
+    const goodDayFive = applyLearningResult(failedDayFour, "good", new Date("2026-08-05T04:00:00.000Z"));
+    const failedDaySix = applyLearningResult(goodDayFive, "again", new Date("2026-08-06T04:00:00.000Z"));
+    const goodDaySeven = applyLearningResult(failedDaySix, "good", new Date("2026-08-07T04:00:00.000Z"));
+    const goodDayEight = applyLearningResult(goodDaySeven, "good", new Date("2026-08-08T04:00:00.000Z"));
+    const goodDayNine = applyLearningResult(goodDayEight, "good", new Date("2026-08-09T04:00:00.000Z"));
+
+    expect(failedDaySix).toMatchObject({
+      stage: "learned", consecutiveGood: 0, masteryResetAt: "2026-08-06T04:00:00.000Z",
+    });
+    expect(effectiveMasteryDates(goodDayEight)).toEqual(["2026-08-07", "2026-08-08"]);
+    expect(goodDayEight.stage).toBe("learned");
+    expect(goodDayNine).toMatchObject({ stage: "mastered", consecutiveGood: 3 });
+  });
+
   it("ignores invalid and duplicate legacy mastery dates", () => {
     const legacy = state({
       masteredDates: ["2026-08-12", "not-a-date", "2026-02-30", "2026-08-10", "2026-08-12", "2026-08-11"],
