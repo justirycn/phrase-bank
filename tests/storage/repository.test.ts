@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocalPhraseRepository } from "../../app/storage/indexedDbRepository";
 import { createNewPhrase } from "../../app/domain/review";
-import type { BackupEnvelopeV1, BackupEnvelopeV2, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewLog, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import type { BackupEnvelopeV1, BackupEnvelopeV2, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewLog, ReviewResult, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 import { parseBackup } from "../../app/storage/backup";
 
 describe("LocalPhraseRepository", () => {
