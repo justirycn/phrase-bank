@@ -9,6 +9,7 @@ function homeRepository() {
     listTrainingEvents: vi.fn(async () => []), listTrainingSessions: vi.fn(async () => []),
     listPhraseLearningStates: vi.fn(async () => []), getActiveLearningSession: vi.fn(async () => undefined),
     getActiveTrainingSession: vi.fn(async () => undefined),
+    getAppPreferences: vi.fn(async () => ({ dailyMasteryGoal: 10 })),
   } as unknown as PhraseRepository;
 }
 
