@@ -14,13 +14,13 @@ The first run did not expose a reliable, reversible way to inject an IndexedDB h
 
 Run `npm run benchmark:home-before-after`. The command resolves true pre-feature baseline SHA `3e2026060494ba8108a6da45ab7bd15e88882758`, exports it without registering a Git worktree into a unique `C:\Temp\phb-*` directory, links the existing dependency installation as a junction, and uses the same vinext CLI for both builds. It starts vinext directly as one Node child, terminates it, waits for `exit`, removes the dependency junction, removes the unique temporary directory, then verifies that directory is gone.
 
-The generated current measurement records stable application source tree `2d10a55a162d6013d7b7edac531721477c7158b1`. The `current.sha` value in `metrics.json` is a runner-generated informational field and changes when the command is rerun after an evidence commit; README and tests intentionally do not pin it. Tests compare only the recorded source tree with `git rev-parse HEAD:app`, so evidence-only commits do not create a self-referential identity loop. Before creating any temporary directory or updating metrics, the runner rejects tracked or untracked changes under `app/`.
+The generated current measurement records stable application source tree `a6cd78bd2c81acfea9fe1508ea63a05dacf8883a`. The `current.sha` value in `metrics.json` is a runner-generated informational field and changes when the command is rerun after an evidence commit; README and tests intentionally do not pin it. Tests compare only the recorded source tree with `git rev-parse HEAD:app`, so evidence-only commits do not create a self-referential identity loop. Before creating any temporary directory or updating metrics, the runner rejects tracked or untracked changes under `app/`.
 
 | Production metric | Baseline | Current | Change |
 | --- | ---: | ---: | ---: |
-| Authenticated home chunk | 157,491 B | 63,462 B | -59.7% |
-| Initial JS set from manifests | 524,925 B | 496,994 B | -5.3% |
-| Local uncompressed HTML/RSC response | 446,625 B | 446,909 B | +0.1% |
+| Authenticated home chunk | 157,491 B | 62,067 B | -60.6% |
+| Initial JS set from manifests | 524,925 B | 497,309 B | -5.3% |
+| Local uncompressed HTML/RSC response | 446,625 B | 447,008 B | +0.1% |
 | Startup `exportSnapshot()` call sites | 1 | 0 | removed |
 
 The startup call-site metric follows eager local imports from `PhraseBankApp` and inspects only the startup `refresh` / `loadHomeData` functions. At the baseline it identifies `PhraseBankApp.refresh`; it deliberately excludes the separate inline Settings export action. This is a startup dependency graph metric, not a whole-file text count.
@@ -47,7 +47,7 @@ Run `npm run benchmark:home-data`. It creates a uniquely named fake IndexedDB da
 - Seed: `20260811`
 - Fixture: 10 categories, 2,000 phrases, 2,000 learning states, 10,080 events, 1,440 sessions
 - Startup calls: each of the nine bounded/core home reads exactly once; `exportSnapshot` zero times
-- Returned bounded history: 6,636 events and 948 sessions; heatmap 84 days
+- Returned bounded history: 7,056 events and 948 sessions; heatmap 84 days
 - Current service-ready observation: runner-generated in `metrics.json`
 - Regression ceiling: 5,000 ms
 
