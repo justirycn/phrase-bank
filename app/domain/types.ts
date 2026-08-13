@@ -88,6 +88,7 @@ export interface PhraseLearningState {
   firstResult?: ReviewResult;
   consecutiveGood: number;
   masteredDates: string[];
+  masteryResetAt?: string;
   unlockedAt?: string;
   updatedAt: string;
 }

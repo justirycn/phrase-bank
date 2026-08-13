@@ -73,6 +73,7 @@ describe("speaking practice domain types", () => {
       firstResult: "good",
       consecutiveGood: 1,
       masteredDates: ["2026-08-10"],
+      masteryResetAt: "2026-08-09T08:03:00.000Z",
       unlockedAt: "2026-08-10T07:59:00.000Z",
       updatedAt: "2026-08-10T08:03:00.000Z",
     } satisfies PhraseLearningState;
