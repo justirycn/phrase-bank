@@ -25,6 +25,16 @@ function controller(overrides: Partial<TrainingSessionController> = {}): Trainin
 }
 
 describe("SpeakingPractice", () => {
+  it("updates the visible progress total when the session queue grows", () => {
+    const { rerender } = render(<SpeakingPractice controller={controller()} onPause={vi.fn()} onHome={vi.fn()} onAgain={vi.fn()} />);
+    expect(screen.getByText(/1 \/ 3/)).toBeVisible();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "3");
+
+    rerender(<SpeakingPractice controller={controller({ total: 4 })} onPause={vi.fn()} onHome={vi.fn()} onAgain={vi.fn()} />);
+    expect(screen.getByText(/1 \/ 4/)).toBeVisible();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "4");
+  });
+
   it("labels daily review as Chinese recall while keeping English out of the prompt", async () => {
     const user = userEvent.setup();
     const value = controller();

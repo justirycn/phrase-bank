@@ -213,34 +213,142 @@ describe("useTrainingSession", () => {
     expect(store.getSession()?.phraseIds).toEqual([]);
   });
 
-  it("records unknown once, reveals it and appends the phrase once", async () => {
-    const store = memoryRepository();
-    const api = services();
-    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "day" }));
-    await waitFor(() => expect(result.current.current).toBeDefined());
-    const first = result.current.current!.phrase.id;
-    await act(() => result.current.revealAsUnknown());
-    expect(result.current.phase).toBe("answer");
-    expect(result.current.total).toBe(4);
-    expect(store.events).toHaveLength(1);
-    expect(store.events[0]).toMatchObject({ phraseId: first, result: "again" });
-    await act(() => result.current.revealAsUnknown());
-    expect(store.events).toHaveLength(1);
-    expect(store.getSession()?.phraseIds.filter((id) => id === first)).toHaveLength(2);
+  it.each([
+    { label: "direct unknown reveal", fail: async (result: ReturnType<typeof renderHook<ReturnType<typeof useTrainingSession>, unknown>>["result"]) => result.current.revealAsUnknown() },
+    { label: "revealed again grade", fail: async (result: ReturnType<typeof renderHook<ReturnType<typeof useTrainingSession>, unknown>>["result"]) => {
+      await result.current.revealForSelfAssessment();
+      await result.current.grade("again");
+    } },
+  ])("inserts a failed due phrase after two intervening items from $label", async ({ fail }) => {
+    const items = ["p1", "p2", "p3", "p4", "p5"].map(phrase);
+    const active: TrainingSessionRecord = {
+      id: "active-requeue", mode: "standard", startedAt: "2026-08-09T01:00:00.000Z",
+      updatedAt: "2026-08-09T01:00:00.000Z", phraseIds: items.map(({ id }) => id),
+      sources: items.map(() => "due"), currentIndex: 0, activeSeconds: 0,
+    };
+    const store = memoryRepository(items, undefined, [active]);
+    const hook = renderHook(() => useTrainingSession({ repository: store.repository, mode: "standard", ...services() }));
+    await waitFor(() => expect(hook.result.current.current?.phrase.id).toBe("p1"));
+
+    await act(() => fail(hook.result));
+
+    expect(store.getSession()).toMatchObject({
+      phraseIds: ["p1", "p2", "p3", "p1", "p4", "p5"],
+      sources: ["due", "due", "due", "requeue", "due", "due"],
+    });
+    expect(hook.result.current.total).toBe(6);
+    expect(store.events[0]).toMatchObject({ phraseId: "p1", result: "again" });
   });
 
-  it("does not append a requeue occurrence again when it is still unknown", async () => {
-    const store = memoryRepository(); const api = services();
-    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api, seed: "requeue-once" }));
-    await waitFor(() => expect(result.current.total).toBe(3));
-    await act(() => result.current.revealAsUnknown());
-    expect(result.current.total).toBe(4);
+  it("requeues repeated again results up to three added occurrences per phrase", async () => {
+    const items = ["p1", "p2", "p3", "p4", "p5"].map(phrase);
+    const active: TrainingSessionRecord = {
+      id: "active-bounded-requeue", mode: "standard", startedAt: "2026-08-09T01:00:00.000Z",
+      updatedAt: "2026-08-09T01:00:00.000Z", phraseIds: items.map(({ id }) => id),
+      sources: items.map(() => "due"), currentIndex: 0, activeSeconds: 0,
+    };
+    const store = memoryRepository(items, undefined, [active]);
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "standard", ...services() }));
+    await waitFor(() => expect(result.current.current?.phrase.id).toBe("p1"));
+
+    for (let occurrence = 0; occurrence < 4; occurrence += 1) {
+      await act(() => result.current.grade("again"));
+      while (result.current.phase !== "complete" && result.current.current?.phrase.id !== "p1") {
+        await act(() => result.current.grade("hard"));
+      }
+    }
+
+    expect(store.getSession()?.phraseIds.filter((id) => id === "p1")).toHaveLength(4);
+    expect(store.getSession()?.sources.filter((source) => source === "requeue")).toHaveLength(3);
+    expect(result.current.total).toBe(8);
+  });
+
+  it("does not requeue a hard result", async () => {
+    const items = ["p1", "p2", "p3", "p4", "p5"].map(phrase);
+    const active: TrainingSessionRecord = {
+      id: "active-hard", mode: "standard", startedAt: "2026-08-09T01:00:00.000Z",
+      updatedAt: "2026-08-09T01:00:00.000Z", phraseIds: items.map(({ id }) => id),
+      sources: items.map(() => "due"), currentIndex: 0, activeSeconds: 0,
+    };
+    const store = memoryRepository(items, undefined, [active]);
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "standard", ...services() }));
+    await waitFor(() => expect(result.current.current?.phrase.id).toBe("p1"));
+
+    await act(() => result.current.revealForSelfAssessment());
     await act(() => result.current.grade("hard"));
+
+    expect(result.current.total).toBe(5);
+    expect(store.getSession()?.phraseIds).toEqual(["p1", "p2", "p3", "p4", "p5"]);
+    expect(store.getSession()?.sources).toEqual(["due", "due", "due", "due", "due"]);
+  });
+
+  it("restores the exact dynamic queue, cursor and total after an unknown reveal and remount", async () => {
+    const items = ["p1", "p2", "p3", "p4", "p5"].map(phrase);
+    const active: TrainingSessionRecord = {
+      id: "active-remount-requeue", mode: "standard", startedAt: "2026-08-09T01:00:00.000Z",
+      updatedAt: "2026-08-09T01:00:00.000Z", phraseIds: items.map(({ id }) => id),
+      sources: items.map(() => "due"), currentIndex: 0, activeSeconds: 0,
+    };
+    const store = memoryRepository(items, undefined, [active]);
+    const first = renderHook(() => useTrainingSession({ repository: store.repository, mode: "standard", ...services() }));
+    await waitFor(() => expect(first.result.current.current?.phrase.id).toBe("p1"));
+    await act(() => first.result.current.revealAsUnknown());
+    await act(() => first.result.current.grade("hard"));
+    const saved = structuredClone(store.getSession()!);
+    first.unmount();
+
+    const second = renderHook(() => useTrainingSession({ repository: store.repository, mode: "standard", ...services() }));
+    await waitFor(() => expect(second.result.current.index).toBe(saved.currentIndex));
+    expect(second.result.current.total).toBe(saved.phraseIds.length);
+    expect(second.result.current.current?.phrase.id).toBe(saved.phraseIds[saved.currentIndex]);
+    expect(store.getSession()).toMatchObject(saved);
+  });
+
+  it("leaves the queue and cursor unchanged when an again review fails and retries safely", async () => {
+    const items = ["p1", "p2", "p3", "p4", "p5"].map(phrase);
+    const active: TrainingSessionRecord = {
+      id: "active-failed-requeue", mode: "standard", startedAt: "2026-08-09T01:00:00.000Z",
+      updatedAt: "2026-08-09T01:00:00.000Z", phraseIds: items.map(({ id }) => id),
+      sources: items.map(() => "due"), currentIndex: 0, activeSeconds: 0,
+    };
+    const store = memoryRepository(items, undefined, [active]);
+    const submit = store.repository.submitTrainingReview as ReturnType<typeof vi.fn>;
+    submit.mockRejectedValueOnce(new Error("temporary failure"));
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "standard", ...services() }));
+    await waitFor(() => expect(result.current.current?.phrase.id).toBe("p1"));
+    const before = structuredClone(store.getSession()!);
+
+    await expect(act(() => result.current.grade("again"))).rejects.toThrow("temporary failure");
+    expect(result.current).toMatchObject({ index: 0, total: 5 });
+    expect(store.getSession()).toMatchObject(before);
+
+    await act(() => result.current.grade("again"));
+    expect(result.current).toMatchObject({ index: 1, total: 6 });
+    expect(submit.mock.calls[1][0]).toEqual(submit.mock.calls[0][0]);
+    expect(store.events).toHaveLength(1);
+  });
+
+  it("retains a successful again result when the expanded session save is retried", async () => {
+    const items = ["p1", "p2", "p3", "p4", "p5"].map(phrase);
+    const active: TrainingSessionRecord = {
+      id: "active-failed-requeue-save", mode: "standard", startedAt: "2026-08-09T01:00:00.000Z",
+      updatedAt: "2026-08-09T01:00:00.000Z", phraseIds: items.map(({ id }) => id),
+      sources: items.map(() => "due"), currentIndex: 0, activeSeconds: 0,
+    };
+    const store = memoryRepository(items, undefined, [active]);
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "standard", ...services() }));
+    await waitFor(() => expect(result.current.current?.phrase.id).toBe("p1"));
+    const save = store.repository.saveTrainingSession as ReturnType<typeof vi.fn>;
+    save.mockRejectedValueOnce(new Error("session write failed"));
+
+    await expect(act(() => result.current.grade("again"))).rejects.toThrow("session write failed");
+    expect(result.current).toMatchObject({ index: 0, total: 5 });
+    expect(store.events).toHaveLength(1);
+
     await act(() => result.current.grade("hard"));
-    await act(() => result.current.grade("hard"));
-    expect(result.current.current?.source).toBe("requeue");
-    await act(() => result.current.revealAsUnknown());
-    expect(result.current.total).toBe(4);
+    expect(result.current).toMatchObject({ index: 1, total: 6 });
+    expect(store.getSession()?.phraseIds).toEqual(["p1", "p2", "p3", "p1", "p4", "p5"]);
+    expect(store.repository.submitTrainingReview).toHaveBeenCalledTimes(1);
   });
 
   it("uses pronunciation without revealing and caps a good grade", async () => {
