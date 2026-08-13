@@ -207,8 +207,7 @@ describe("summarizeWeek", () => {
       { ...event("start", "promoted", "good", "2026-08-02T16:00:00.000Z", 200, true), source: "new" },
       event("alpha-first", "alpha", "again", "2026-08-04T00:00:00.000Z", 300),
       event("alpha-latest", "alpha", "good", "2026-08-05T00:00:00.000Z", 400),
-      event("beta-first", "beta", "good", "2026-08-06T00:00:00.000Z", 500),
-      event("beta-latest", "beta", "hard", "2026-08-07T00:00:00.000Z", 600),
+      event("beta", "beta", "hard", "2026-08-07T00:00:00.000Z", 600),
       event("charlie", "charlie", "good", "2026-08-08T00:00:00.000Z", 700),
       event("end", "omega", "good", "2026-08-09T15:59:59.000Z", 800),
       event("after", "outside", "again", "2026-08-09T16:00:00.000Z", 900),
@@ -226,7 +225,7 @@ describe("summarizeWeek", () => {
 
     expect(summarizeWeek(events, sessions, states, "2026-08-03", "2026-08-09")).toMatchObject({
       weekStart: "2026-08-03",
-      activeSeconds: 3500,
+      activeSeconds: 3000,
       completedGroups: 2,
       spokenCount: 1,
       masteredCount: 1,
@@ -260,7 +259,8 @@ describe("summarizeWeek", () => {
   it("evaluates mastery and resets as of the requested date, ignoring future state changes", () => {
     const events = [
       event("future-master-failure", "future-master", "again", "2026-08-08T08:00:00.000Z"),
-      event("future-reset-failure", "future-reset", "again", "2026-08-08T09:00:00.000Z"),
+      event("pre-mastery-failure", "future-reset", "again", "2026-08-05T09:00:00.000Z"),
+      event("future-reset", "future-reset", "again", "2026-08-10T08:00:00.000Z"),
     ];
     const states = [
       state("future-master", { stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-08", "2026-08-09", "2026-08-10"], updatedAt: "2026-08-10T08:00:00.000Z" }),
