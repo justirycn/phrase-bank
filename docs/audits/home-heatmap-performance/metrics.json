@@ -21,8 +21,8 @@
       "htmlBytes": 446625
     },
     "current": {
-      "homeChunkBytes": 62076,
-      "initialJavaScriptBytes": 497562,
+      "homeChunkBytes": 62261,
+      "initialJavaScriptBytes": 497788,
       "nonHomeScreenChunks": 6,
       "htmlBytes": 447008
     },
@@ -85,11 +85,11 @@
       }
     },
     "current": {
-      "sha": "45440d55c5adada32d3866a13493d8978b84abff",
-      "sourceTree": "d77890c967c6a4b8b7ce2f4330e727d210b6dd3c",
+      "sha": "cff945ccce328e1413f92ff4e5de93e071534df7",
+      "sourceTree": "c8e37928690794c0e66fe1eed74b3241db11e96f",
       "build": {
-        "homeChunkBytes": 62076,
-        "initialJavaScriptBytes": 497562,
+        "homeChunkBytes": 62261,
+        "initialJavaScriptBytes": 497788,
         "htmlBytes": 447008
       },
       "startupSource": {
@@ -151,7 +151,7 @@
           "activeLearningSessions": 0,
           "heatmapDays": 84
         },
-        "serviceReadyMilliseconds": 202.05119999999806
+        "serviceReadyMilliseconds": 208.09449999999924
       }
     },
     "cleanup": {
@@ -191,7 +191,7 @@
       "activeLearningSessions": 0,
       "heatmapDays": 84
     },
-    "serviceReadyMilliseconds": 202.05119999999806,
+    "serviceReadyMilliseconds": 208.09449999999924,
     "regressionBudgetMilliseconds": 5000,
     "budgetNote": "The ceiling is deliberately generous; this is a regression smoke budget, not a microbenchmark or Web Vital.",
     "requests": {

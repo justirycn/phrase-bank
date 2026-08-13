@@ -14,12 +14,12 @@ The first run did not expose a reliable, reversible way to inject an IndexedDB h
 
 Run `npm run benchmark:home-before-after`. The command resolves true pre-feature baseline SHA `3e2026060494ba8108a6da45ab7bd15e88882758`, exports it without registering a Git worktree into a unique `C:\Temp\phb-*` directory, links the existing dependency installation as a junction, and uses the same vinext CLI for both builds. It starts vinext directly as one Node child, terminates it, waits for `exit`, removes the dependency junction, removes the unique temporary directory, then verifies that directory is gone.
 
-The generated current measurement records stable application source tree `d77890c967c6a4b8b7ce2f4330e727d210b6dd3c`. The `current.sha` value in `metrics.json` is a runner-generated informational field and changes when the command is rerun after an evidence commit; README and tests intentionally do not pin it. Tests compare only the recorded source tree with `git rev-parse HEAD:app`, so evidence-only commits do not create a self-referential identity loop. Before creating any temporary directory or updating metrics, the runner rejects tracked or untracked changes under `app/`.
+The generated current measurement records stable application source tree `c8e37928690794c0e66fe1eed74b3241db11e96f`. The `current.sha` value in `metrics.json` is a runner-generated informational field and changes when the command is rerun after an evidence commit; README and tests intentionally do not pin it. Tests compare only the recorded source tree with `git rev-parse HEAD:app`, so evidence-only commits do not create a self-referential identity loop. Before creating any temporary directory or updating metrics, the runner rejects tracked or untracked changes under `app/`.
 
 | Production metric | Baseline | Current | Change |
 | --- | ---: | ---: | ---: |
-| Authenticated home chunk | 157,491 B | 62,076 B | -60.6% |
-| Initial JS set from manifests | 524,925 B | 497,562 B | -5.2% |
+| Authenticated home chunk | 157,491 B | 62,261 B | -60.5% |
+| Initial JS set from manifests | 524,925 B | 497,788 B | -5.2% |
 | Local uncompressed HTML/RSC response | 446,625 B | 447,008 B | +0.1% |
 | Startup `exportSnapshot()` call sites | 1 | 0 | removed |
 
