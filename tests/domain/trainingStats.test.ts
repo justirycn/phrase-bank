@@ -134,6 +134,7 @@ describe("summarizeDailySentenceProgress", () => {
       event("hard", "phrase-4", "hard", "2026-08-09T06:00:00.000Z"),
       event("good-before-reset", "phrase-5", "good", "2026-08-09T07:00:00.000Z"),
       event("reset", "phrase-5", "again", "2026-08-09T08:00:00.000Z"),
+      event("already-mastered-good", "phrase-6", "good", "2026-08-09T09:00:00.000Z"),
       event("outside", "phrase-4", "good", "2026-08-09T16:00:00.000Z"),
     ], [
       state("phrase-1", { stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-07", "2026-08-08", "2026-08-09"] }),
@@ -141,9 +142,10 @@ describe("summarizeDailySentenceProgress", () => {
       state("phrase-3", { consecutiveGood: 1, masteredDates: ["2026-08-09"] }),
       state("phrase-4"),
       state("phrase-5", { masteredDates: ["2026-08-09"], masteryResetAt: "2026-08-09T08:00:00.000Z" }),
+      state("phrase-6", { stage: "mastered", consecutiveGood: 4, masteredDates: ["2026-08-05", "2026-08-06", "2026-08-07", "2026-08-09"] }),
     ]);
 
-    expect(result).toEqual({ mastered: 1, consolidated: 3, reviewed: 4 });
+    expect(result).toEqual({ mastered: 1, consolidated: 3, reviewed: 5 });
   });
 
   it("returns zero for an invalid day", () => {

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { buildLearningHeatmap } from "../domain/learningHeatmap";
-import { loadHomeData, shanghaiHeatmapRange, type HomeData } from "../services/homeData";
+import { loadHomeData, shanghaiOutcomeRange, type HomeData } from "../services/homeData";
 import type { PhraseRepository } from "../storage/repository";
 
 export interface HomeDataController {
@@ -75,7 +75,7 @@ export function useHomeData(
     if (!repository || snapshot?.repository !== repository) return;
     const generation = ++heatmapGenerationRef.current;
     const currentNow = now();
-    const { from, to } = shanghaiHeatmapRange(currentNow);
+    const { from, to } = shanghaiOutcomeRange(currentNow);
     try {
       const events = await repository.listTrainingEvents(from, to);
       if (!mountedRef.current || generation !== heatmapGenerationRef.current) return;

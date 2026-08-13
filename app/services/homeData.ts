@@ -29,7 +29,7 @@ export function shanghaiHeatmapRange(now = new Date()): { from: Date; to: Date }
   return { from, to: new Date(tomorrow.getTime() - 1) };
 }
 
-function shanghaiEventRange(now: Date): { from: Date; to: Date } {
+export function shanghaiOutcomeRange(now = new Date()): { from: Date; to: Date } {
   const { year, month, day } = shanghaiCalendarDate(now);
   const fromDate = new Date(Date.UTC(year, month - 1, day));
   fromDate.setUTCDate(fromDate.getUTCDate() - 83);
@@ -40,7 +40,7 @@ function shanghaiEventRange(now: Date): { from: Date; to: Date } {
 
 export async function loadHomeData(repository: PhraseRepository, now = new Date()) {
   const heatmapRange = shanghaiHeatmapRange(now);
-  const eventRange = shanghaiEventRange(now);
+  const eventRange = shanghaiOutcomeRange(now);
   const eventsResult = repository.listTrainingEvents(eventRange.from, eventRange.to).then(
     (events) => ({ ok: true as const, events }),
     () => ({ ok: false as const }),

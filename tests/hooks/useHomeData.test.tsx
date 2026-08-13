@@ -234,16 +234,16 @@ describe("useHomeData", () => {
     expect(result.current.error).toBe("");
   });
 
-  it("retries only the heatmap with the exact range and merges only heatmap fields", async () => {
-    const repo = repository(); const now = () => new Date("2026-08-10T12:34:56.000Z");
+  it("retries the heatmap without dropping the earlier rolling outcome window", async () => {
+    const repo = repository(); const now = () => new Date("2026-08-11T12:34:56.000Z");
     const original = data("core", { heatmapError: "学习足迹暂时无法加载" });
     vi.spyOn(homeDataService, "loadHomeData").mockResolvedValueOnce(original);
-    const events = [event("fresh")];
+    const events = [event("rolling-boundary", "2026-05-20T08:00:00.000Z"), event("fresh")];
     vi.mocked(repo.listTrainingEvents).mockResolvedValueOnce(events);
     const { result } = renderHook(() => useHomeData(repo, now));
     await waitFor(() => expect(result.current.data).toBe(original));
     await act(() => result.current.retryHeatmap());
-    const range = homeDataService.shanghaiHeatmapRange(now());
+    const range = homeDataService.shanghaiOutcomeRange(now());
     expect(repo.listTrainingEvents).toHaveBeenCalledWith(range.from, range.to);
     expect(result.current.data).toMatchObject({
       phrases: original.phrases, categories: original.categories, duePhrases: original.duePhrases,
@@ -252,6 +252,8 @@ describe("useHomeData", () => {
       events, heatmapError: "",
     });
     expect(result.current.data?.heatmap).toHaveLength(84);
+    expect(result.current.data?.heatmap.some(({ date }) => date === "2026-05-20")).toBe(false);
+    expect(result.current.data?.events).toContain(events[0]);
     expect(result.current.data?.phrases).toBe(original.phrases);
   });
 

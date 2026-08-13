@@ -46,7 +46,8 @@ describe("TrainingHome heatmap", () => {
     const progress = screen.getByRole("progressbar", { name: "今日掌握进度" });
     expect(progress).toHaveAttribute("aria-valuemin", "0");
     expect(progress).toHaveAttribute("aria-valuemax", "10");
-    expect(progress).toHaveAttribute("aria-valuenow", String(mastered));
+    expect(progress).toHaveAttribute("aria-valuenow", String(Math.min(10, mastered)));
+    expect(progress).toHaveAttribute("aria-valuetext", mastered > 10 ? `${mastered} / 10 句，超额 ${mastered - 10} 句` : `${mastered} / 10 句`);
     expect(screen.getByText(`${mastered} / 10 句`)).toBeVisible();
     expect(screen.getByText(status)).toBeVisible();
     expect(progress.querySelector("i")).toHaveStyle({ width: `${Math.min(100, mastered * 10)}%` });
