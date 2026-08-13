@@ -17,12 +17,12 @@
     "before": {
       "sha": "3e2026060494ba8108a6da45ab7bd15e88882758",
       "homeChunkBytes": 157491,
-      "initialJavaScriptBytes": 524919,
+      "initialJavaScriptBytes": 524917,
       "htmlBytes": 446625
     },
     "current": {
-      "homeChunkBytes": 62155,
-      "initialJavaScriptBytes": 492809,
+      "homeChunkBytes": 63401,
+      "initialJavaScriptBytes": 496933,
       "nonHomeScreenChunks": 6,
       "htmlBytes": 446909
     },
@@ -39,7 +39,7 @@
       "sourceTree": "c05481d8e96f2f2a1ce5bdf889def71e058e90e5",
       "build": {
         "homeChunkBytes": 157491,
-        "initialJavaScriptBytes": 524919,
+        "initialJavaScriptBytes": 524917,
         "htmlBytes": 446625
       },
       "startupSource": {
@@ -85,11 +85,11 @@
       }
     },
     "current": {
-      "sha": "45f47878a81cf93904911fafa5435c7e803b540f",
-      "sourceTree": "85beca8294dda848ada579f501d7f968de6409b5",
+      "sha": "5816dd616541f17d6a155d1b0678c5b5493fbe77",
+      "sourceTree": "c21fb6473f80fddcbb2c1a9266179eb153adeef6",
       "build": {
-        "homeChunkBytes": 62155,
-        "initialJavaScriptBytes": 492809,
+        "homeChunkBytes": 63401,
+        "initialJavaScriptBytes": 496933,
         "htmlBytes": 446909
       },
       "startupSource": {
@@ -137,6 +137,7 @@
           "listPhraseLearningStates": 1,
           "getActiveTrainingSession": 1,
           "getActiveLearningSession": 1,
+          "getAppPreferences": 1,
           "exportSnapshot": 0
         },
         "requests": {
@@ -150,7 +151,7 @@
           "activeLearningSessions": 0,
           "heatmapDays": 84
         },
-        "serviceReadyMilliseconds": 105.81269999999859
+        "serviceReadyMilliseconds": 102.76000000000204
       }
     },
     "cleanup": {
@@ -180,6 +181,7 @@
       "listPhraseLearningStates": 1,
       "getActiveTrainingSession": 1,
       "getActiveLearningSession": 1,
+      "getAppPreferences": 1,
       "exportSnapshot": 0
     },
     "rows": {
@@ -189,7 +191,7 @@
       "activeLearningSessions": 0,
       "heatmapDays": 84
     },
-    "serviceReadyMilliseconds": 105.81269999999859,
+    "serviceReadyMilliseconds": 102.76000000000204,
     "regressionBudgetMilliseconds": 5000,
     "budgetNote": "The ceiling is deliberately generous; this is a regression smoke budget, not a microbenchmark or Web Vital.",
     "requests": {
