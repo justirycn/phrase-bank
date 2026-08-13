@@ -18,7 +18,7 @@ describe("TrainingHome heatmap", () => {
   });
 
   it("renders it after the weekly summary and preserves all entries", () => {
-    const { container } = render(<TrainingHome {...base} heatmapDays={[{ date: "2026-08-10", count: 0, level: 0, future: false }]} />);
+    const { container } = render(<TrainingHome {...base} dueCount={1} heatmapDays={[{ date: "2026-08-10", count: 0, level: 0, future: false }]} />);
     const weekly = container.querySelector(".weekly-summary");
     const heatmap = container.querySelector(".learning-heatmap");
     expect(weekly?.compareDocumentPosition(heatmap as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -53,12 +53,18 @@ describe("TrainingHome heatmap", () => {
   it("labels only scheduled phrases as due review and uses a distinct review icon", () => {
     const { container, rerender } = render(<TrainingHome {...base} dueCount={0} />);
 
-    expect(screen.getByRole("button", { name: /到期复习/ })).toHaveTextContent("今天暂无到期内容");
+    expect(screen.getByRole("button", { name: /^到期复习/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^到期复习/ })).toHaveTextContent("今天暂无到期内容");
     expect(container.querySelector('.standard-start [data-icon="due-review"]')).toBeInTheDocument();
 
     rerender(<TrainingHome {...base} dueCount={4} />);
-    expect(screen.getByRole("button", { name: /到期复习/ })).toHaveTextContent("4 句到期");
+    expect(screen.getByRole("button", { name: /^到期复习/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^到期复习/ })).toHaveTextContent("4 句到期");
     expect(screen.getByRole("button", { name: /继续今日任务/ })).toHaveTextContent("4 句到期");
+
+    rerender(<TrainingHome {...base} dueCount={0} activeReview reviewRemaining={2} />);
+    expect(screen.getByRole("button", { name: /^到期复习/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^到期复习/ })).toHaveTextContent("继续未完成 · 剩余 2 句");
   });
 
   it("does not show speaking count in the weekly summary", () => {

@@ -560,6 +560,7 @@ describe("PhraseBankApp", () => {
 
   it("retries and returns home even when repository refresh keeps failing", async () => {
     const user = userEvent.setup(); const repo = new MemoryRepository(); repo.phrases.push(makePhrase());
+    repo.learningStates.push(learnedState("p1"));
     render(<PhraseBankApp repository={repo as never} />);
     await screen.findByText("今天，说出来");
     repo.failPhraseReads = true;

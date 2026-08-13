@@ -126,17 +126,6 @@ export function selectTrainingGroup(
     return selected;
   }
 
-  const freshFirst = (pool: Phrase[]) => [
-    ...pool.filter((phrase) => !practicedTodayIds.has(phrase.id)),
-    ...pool.filter((phrase) => practicedTodayIds.has(phrase.id)),
-  ];
-  const personal = priorityPools(unique.filter((phrase) => (phrase.origin ?? "personal") === "personal"));
-  add(freshFirst([...personal.due, ...personal.weak, ...personal.mature]), 5);
-
-  const remaining = priorityPools(unique.filter((phrase) => !selectedIds.has(phrase.id)));
-  add(freshFirst(remaining.due), 3);
-  add(freshFirst(remaining.weak), 1);
-  add(freshFirst(remaining.mature), 1);
-  add(freshFirst([...remaining.due, ...remaining.weak, ...remaining.mature]));
+  add(seededOrder(unique.filter((phrase) => sourceFor(phrase, nowTime) === "due"), orderSeed));
   return selected;
 }
