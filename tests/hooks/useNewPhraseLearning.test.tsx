@@ -8,6 +8,7 @@ import type {
   SpeechPreferences,
   TrainingEvent,
 } from "../../app/domain/types";
+import { applyLearningResult } from "../../app/domain/learningProgress";
 import { useNewPhraseLearning } from "../../app/hooks/useNewPhraseLearning";
 import type { PhraseRepository } from "../../app/storage/repository";
 
@@ -86,7 +87,21 @@ function memoryRepository(options: MemoryOptions = {}) {
       else sessions.push(structuredClone(next));
     }),
     submitFirstLearningReview: vi.fn(async (event: TrainingEvent, next: LearningSessionRecord) => {
-      if (!events.some((item) => item.id === event.id)) events.push(structuredClone(event));
+      if (!events.some((item) => item.id === event.id)) {
+        events.push(structuredClone(event));
+        const stateIndex = states.findIndex((item) => item.phraseId === event.phraseId);
+        const current = stateIndex >= 0 ? states[stateIndex] : unseen(event.phraseId);
+        const progressed = applyLearningResult(current, event.result, new Date(event.occurredAt));
+        const reviewed: PhraseLearningState = {
+          ...progressed,
+          firstSeenAt: current.firstSeenAt ?? event.occurredAt,
+          firstTestedAt: current.firstTestedAt ?? event.occurredAt,
+          firstResult: current.firstResult ?? event.result,
+          updatedAt: event.occurredAt,
+        };
+        if (stateIndex >= 0) states[stateIndex] = structuredClone(reviewed);
+        else states.push(structuredClone(reviewed));
+      }
       const index = sessions.findIndex((item) => item.id === next.id);
       if (index >= 0 && sessions[index].testIndex < next.testIndex) sessions[index] = structuredClone(next);
     }),
@@ -318,6 +333,63 @@ describe("useNewPhraseLearning", () => {
     expect(hook.result.current.current?.id).toBe(store.sessions[0].phraseIds[0]);
   });
 
+  it.each([
+    { result: "good" as const, masteredDates: ["2026-08-11"], consecutiveGood: 1 },
+    { result: "hard" as const, masteredDates: [], consecutiveGood: 0 },
+    { result: "again" as const, masteredDates: [], consecutiveGood: 0 },
+  ])("persists the repository-owned first-learning state for $result", async ({ result, masteredDates, consecutiveGood }) => {
+    const item = phrase(`first-${result}`);
+    const reviewAt = "2026-08-10T16:05:00.000Z";
+    const store = memoryRepository({ phrases: [item], states: [unseen(item.id)] });
+    const hook = renderLearning(store, speech(), { now: () => new Date(reviewAt) });
+    await waitFor(() => expect(hook.result.current.phase).toBe("study"));
+
+    await act(() => hook.result.current.nextStudyPhrase());
+    expect(hook.result.current).toMatchObject({ phase: "test", testIndex: 0, revealed: false });
+    expect(hook.result.current.current).toMatchObject({ english: item.english, chinese: item.chinese });
+    await act(() => hook.result.current.reveal());
+    await act(() => hook.result.current.grade(result));
+
+    expect(store.states.find((state) => state.phraseId === item.id)).toMatchObject({
+      stage: "learned",
+      firstTestedAt: reviewAt,
+      firstResult: result,
+      masteredDates,
+      consecutiveGood,
+    });
+    expect(store.states.find((state) => state.phraseId === item.id)?.stage).not.toBe("mastered");
+  });
+
+  it("reuses a committed good event after a lost acknowledgement without adding a same-day mastery date", async () => {
+    const item = phrase("idempotent-good");
+    const reviewAt = "2026-08-10T16:05:00.000Z";
+    const active: LearningSessionRecord = {
+      id: "active", date: "2026-08-11", themeCategoryId: "daily", phraseIds: [item.id],
+      studyIndex: 1, testIndex: 0, phase: "test", startedAt: timestamp, updatedAt: timestamp,
+    };
+    const store = memoryRepository({ phrases: [item], states: [unseen(item.id)], active });
+    const submit = store.repository.submitFirstLearningReview as ReturnType<typeof vi.fn>;
+    const persist = submit.getMockImplementation()!;
+    submit.mockImplementationOnce(async (event: TrainingEvent, next: LearningSessionRecord) => {
+      await persist(event, next);
+      throw new Error("lost acknowledgement");
+    });
+    const hook = renderLearning(store, speech(), { now: () => new Date(reviewAt) });
+    await waitFor(() => expect(hook.result.current.phase).toBe("test"));
+    await act(() => hook.result.current.reveal());
+
+    await act(() => hook.result.current.grade("good"));
+    expect(hook.result.current).toMatchObject({ phase: "test", testIndex: 0, revealed: true });
+    const committedEvent = structuredClone(submit.mock.calls[0][0]);
+    await act(() => hook.result.current.grade("good"));
+
+    expect(submit.mock.calls[1][0]).toEqual(committedEvent);
+    expect(store.events).toHaveLength(1);
+    expect(store.states.find((state) => state.phraseId === item.id)).toMatchObject({
+      stage: "learned", masteredDates: ["2026-08-11"], consecutiveGood: 1,
+    });
+  });
+
   it("requires reveal, keeps the answer visible until atomic grade commits, and guards double clicks", async () => {
     const items = [phrase("first"), phrase("second")];
     const active: LearningSessionRecord = {
@@ -421,6 +493,28 @@ describe("useNewPhraseLearning", () => {
     expect(hook.result.current.total).toBe(3);
     expect(store.repository.saveLearningSession).not.toHaveBeenCalled();
     expect(store.sessions[0].themeCategoryId).toBe("saved-theme");
+  });
+
+  it("remounts at the exact test cursor with the English answer hidden again", async () => {
+    const items = [phrase("first"), phrase("second"), phrase("third")];
+    const active: LearningSessionRecord = {
+      id: "active", date: "2026-08-10", themeCategoryId: "daily", phraseIds: items.map((item) => item.id),
+      studyIndex: 3, testIndex: 1, phase: "test", startedAt: timestamp, updatedAt: timestamp,
+    };
+    const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)), active });
+    const firstVoice = speech();
+    const first = renderLearning(store, firstVoice);
+    await waitFor(() => expect(first.result.current.current?.id).toBe("second"));
+    await act(() => first.result.current.reveal());
+    expect(first.result.current.revealed).toBe(true);
+    first.unmount();
+
+    const resumedVoice = speech();
+    const resumed = renderLearning(store, resumedVoice);
+    await waitFor(() => expect(resumed.result.current.current?.id).toBe("second"));
+
+    expect(resumed.result.current).toMatchObject({ phase: "test", studyIndex: 3, testIndex: 1, revealed: false });
+    expect(resumedVoice.speak).not.toHaveBeenCalled();
   });
 
   it.each([

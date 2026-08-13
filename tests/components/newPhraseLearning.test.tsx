@@ -95,6 +95,24 @@ describe("NewPhraseLearning", () => {
     expect(screen.getByRole("button", { name: "掌握" })).toBeVisible();
   });
 
+  it("returns to the same Chinese-only test prompt after closing and remounting", async () => {
+    const user = userEvent.setup();
+    const onHome = vi.fn();
+    const hidden = controller({ phase: "test", current: phrase, testIndex: 2, revealed: false });
+    const view = render(<NewPhraseLearning controller={hidden} onHome={onHome} />);
+    expect(screen.getByText(phrase.chinese)).toBeVisible();
+    expect(screen.queryByText(phrase.english)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "关闭学习并返回首页" }));
+    expect(onHome).toHaveBeenCalledOnce();
+    view.unmount();
+    render(<NewPhraseLearning controller={hidden} onHome={onHome} />);
+
+    expect(screen.getByText("3 / 5")).toBeVisible();
+    expect(screen.getByText(phrase.chinese)).toBeVisible();
+    expect(screen.queryByText(phrase.english)).not.toBeInTheDocument();
+  });
+
   it("reveals the answer and maps the three self-ratings", async () => {
     const user = userEvent.setup();
     const value = controller({ phase: "test", revealed: true });
