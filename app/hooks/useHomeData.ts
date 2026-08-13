@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { buildLearningHeatmap } from "../domain/learningHeatmap";
-import { loadHomeData, shanghaiOutcomeRange, type HomeData } from "../services/homeData";
+import { loadHomeData, shanghaiOutcomeRange, summarizeHomeOutcomes, type HomeData } from "../services/homeData";
 import type { PhraseRepository } from "../storage/repository";
 
 export interface HomeDataController {
@@ -81,8 +81,10 @@ export function useHomeData(
       if (!mountedRef.current || generation !== heatmapGenerationRef.current) return;
       const latest = dataRef.current;
       if (latest?.repository !== repository) return;
+      const outcomes = await summarizeHomeOutcomes(events, latest.value.trainingSessions, latest.value.learningStates, currentNow);
+      if (!mountedRef.current || generation !== heatmapGenerationRef.current || dataRef.current?.repository !== repository) return;
       replaceData({ repository, value: {
-        ...latest.value, events, heatmap: buildLearningHeatmap(events, currentNow), heatmapError: "",
+        ...latest.value, outcomes, events, heatmap: buildLearningHeatmap(events, currentNow), heatmapError: "",
       } });
     } catch {
       if (!mountedRef.current || generation !== heatmapGenerationRef.current) return;

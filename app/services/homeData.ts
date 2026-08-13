@@ -1,5 +1,8 @@
 import { buildLearningHeatmap } from "../domain/learningHeatmap";
+import type { PhraseLearningState, TrainingEvent, TrainingSessionRecord } from "../domain/types";
 import type { PhraseRepository } from "../storage/repository";
+
+const trainingStats = import("../domain/trainingStats");
 
 const shanghaiDateFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Shanghai",
@@ -16,6 +19,34 @@ function shanghaiCalendarDate(date: Date) {
 
 function shanghaiStartUtc(year: number, month: number, day: number) {
   return new Date(Date.UTC(year, month - 1, day) - 8 * 60 * 60 * 1000);
+}
+
+function calendarDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+export async function summarizeHomeOutcomes(
+  events: TrainingEvent[],
+  sessions: TrainingSessionRecord[],
+  states: PhraseLearningState[],
+  now: Date,
+) {
+  const { calculateStreak, summarizeDailySentenceProgress, summarizeWeek } = await trainingStats;
+  const { year, month, day } = shanghaiCalendarDate(now);
+  const today = calendarDate(new Date(Date.UTC(year, month - 1, day)));
+  const monday = new Date(`${today}T00:00:00.000Z`);
+  monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  const activeSecondsByDate = new Map<string, number>();
+  for (const event of events) {
+    const date = shanghaiDateFormatter.format(new Date(event.occurredAt));
+    activeSecondsByDate.set(date, (activeSecondsByDate.get(date) ?? 0) + event.activeSeconds);
+  }
+  const trainingDays = [...activeSecondsByDate].map(([date, activeSeconds]) => ({ date, activeSeconds }));
+  return {
+    dailyProgress: summarizeDailySentenceProgress(today, events, states),
+    streak: calculateStreak(trainingDays, today),
+    weeklySummary: summarizeWeek(events, sessions, states, calendarDate(monday), today),
+  };
 }
 
 export function shanghaiHeatmapRange(now = new Date()): { from: Date; to: Date } {
@@ -66,6 +97,7 @@ export async function loadHomeData(repository: PhraseRepository, now = new Date(
   ]);
   const eventRead = await eventsResult;
   const events = eventRead.ok ? eventRead.events : [];
+  const outcomes = await summarizeHomeOutcomes(events, trainingSessions, learningStates, now);
   return {
     phrases,
     categories,
@@ -75,6 +107,7 @@ export async function loadHomeData(repository: PhraseRepository, now = new Date(
     activeTrainingSession,
     activeLearningSession,
     appPreferences,
+    outcomes,
     events,
     heatmap: eventRead.ok ? buildLearningHeatmap(events, now) : [],
     heatmapError: eventRead.ok ? "" : "学习足迹暂时无法加载",

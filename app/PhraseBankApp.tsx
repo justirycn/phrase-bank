@@ -6,7 +6,6 @@ import { TrainingHome } from "./components/TrainingHome";
 import type { PhraseInput, PhraseLearningState, ReviewResult, TrainingMode } from "./domain/types";
 import { createNewPhrase } from "./domain/review";
 import { DAILY_NEW_PHRASE_LIMIT, previewLearningGroup } from "./domain/learningSelection";
-import { calculateStreak, summarizeDailySentenceProgress, summarizeDailyTraining, summarizeWeek } from "./domain/trainingStats";
 import { useHomeData } from "./hooks/useHomeData";
 import { installBundledSystemContent } from "./services/systemContentInstaller";
 import { LocalPhraseRepository } from "./storage/indexedDbRepository";
@@ -28,7 +27,6 @@ const repositoryReviewKey = (repository: PhraseRepository | undefined) => {
 };
 const shanghaiDate = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const shanghaiTimestampDate = (timestamp: string) => { const value = new Date(timestamp); return Number.isNaN(value.getTime()) ? "" : new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(value); };
-const mondayOf = (date: string) => { const value = new Date(`${date}T00:00:00.000Z`); value.setUTCDate(value.getUTCDate() - ((value.getUTCDay() + 6) % 7)); return value.toISOString().slice(0, 10); };
 
 export type AddSaveResult = { status: "saved" } | { status: "partial"; state: PhraseLearningState };
 
@@ -99,7 +97,6 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const categories = home.data?.categories ?? [];
   const due = home.data?.duePhrases ?? [];
   const trainingEvents = home.data?.events ?? [];
-  const trainingSessions = home.data?.trainingSessions ?? [];
   const learningStates = home.data?.learningStates ?? [];
   const activeLearningSession = home.data?.activeLearningSession;
   const activeTrainingSession = home.data?.activeTrainingSession;
@@ -155,9 +152,8 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   if (screen === "home" && !home.data && !home.error) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
   if (screen === "home" && home.error && !home.data) return <main className="loading"><p role="alert">{home.error}</p><button onClick={() => { void home.retry(); }}>重试</button></main>;
   const today = shanghaiDate();
-  const dailyProgress = summarizeDailySentenceProgress(today, trainingEvents, learningStates);
-  const trainingDays = [...new Set(trainingEvents.map((event) => shanghaiTimestampDate(event.occurredAt)))].map((date) => summarizeDailyTraining(date, trainingEvents, trainingSessions));
-  const weeklySummary = summarizeWeek(trainingEvents, trainingSessions, learningStates, mondayOf(today), today);
+  const dailyProgress = home.data?.outcomes.dailyProgress ?? { mastered: 0, consolidated: 0, reviewed: 0 };
+  const weeklySummary = home.data?.outcomes.weeklySummary ?? { weekStart: today, activeSeconds: 0, completedGroups: 0, spokenCount: 0, masteredCount: 0, promotedCount: 0, retentionRate: undefined, forgettableCount: 0, weakPhraseIds: [] };
   const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
   const weeklyFocus = weeklySummary.weakPhraseIds.flatMap((id) => { const phrase = phrases.find((item) => item.id === id); return phrase ? [{ id, english: phrase.english, chinese: phrase.chinese, categoryName: categoryNames.get(phrase.categoryId) ?? "未分类" }] : []; });
   const newIntroducedToday = new Set(trainingEvents.filter((event) => event.source === "new" && shanghaiTimestampDate(event.occurredAt) === today).map((event) => event.phraseId)).size;
@@ -184,7 +180,7 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
     <main className="app-main">
       {(error || home.error) && <div className="toast error" role="alert">{error || home.error}</div>}
       {notice && <div className="toast" role="status">{notice}</div>}
-      {screen === "home" && <TrainingHome dailyProgress={dailyProgress} dailyMasteryGoal={home.data?.appPreferences.dailyMasteryGoal ?? 10} streak={calculateStreak(trainingDays, today)} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} activeLearning={Boolean(activeLearningSession)} activeRemaining={activeRemaining} activeReview={Boolean(activeTrainingSession)} reviewRemaining={activeReviewRemaining} dueCount={eligibleDue.length} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onContinue={continueToday} onStartLearning={() => go("learn")} onStartStandard={() => startTraining("standard")} />}
+      {screen === "home" && <TrainingHome dailyProgress={dailyProgress} dailyMasteryGoal={home.data?.appPreferences.dailyMasteryGoal ?? 10} streak={home.data?.outcomes.streak ?? { current: 0, lightDaysUsedThisWeek: 0 }} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} activeLearning={Boolean(activeLearningSession)} activeRemaining={activeRemaining} activeReview={Boolean(activeTrainingSession)} reviewRemaining={activeReviewRemaining} dueCount={eligibleDue.length} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onContinue={continueToday} onStartLearning={() => go("learn")} onStartStandard={() => startTraining("standard")} />}
       <ScreenLoadBoundary key={screen} onRetry={() => setLazyScreens(createLazyScreens())}><Suspense fallback={<ScreenLoading screen={screen} />}>{screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={saveAddedPhrase} onRetryState={retryAddedPhraseState} onComplete={completeAddedPhrase} />}
       {screen === "learn" && repo && <LearningSession repository={repo} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}
