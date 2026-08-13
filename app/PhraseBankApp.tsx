@@ -1,9 +1,9 @@
 "use client";
 
-import { Component, lazy, Suspense, useCallback, useEffect, useState, type ReactNode } from "react";
+import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AppIcon } from "./components/AppIcon";
 import { TrainingHome } from "./components/TrainingHome";
-import type { PhraseInput, PhraseLearningState, TrainingMode } from "./domain/types";
+import type { PhraseInput, PhraseLearningState, ReviewResult, TrainingMode } from "./domain/types";
 import { createNewPhrase } from "./domain/review";
 import { DAILY_NEW_PHRASE_LIMIT, previewLearningGroup } from "./domain/learningSelection";
 import { calculateStreak, summarizeDailySentenceProgress, summarizeDailyTraining, summarizeWeek } from "./domain/trainingStats";
@@ -31,6 +31,23 @@ const shanghaiTimestampDate = (timestamp: string) => { const value = new Date(ti
 const mondayOf = (date: string) => { const value = new Date(`${date}T00:00:00.000Z`); value.setUTCDate(value.getUTCDate() - ((value.getUTCDay() + 6) % 7)); return value.toISOString().slice(0, 10); };
 
 export type AddSaveResult = { status: "saved" } | { status: "partial"; state: PhraseLearningState };
+
+export async function submitReviewForCurrentRepository(
+  repository: Repository,
+  generation: number,
+  current: () => { repository?: Repository; generation: number },
+  refresh: () => Promise<void>,
+  id: string,
+  result: ReviewResult,
+  operationId: string,
+) {
+  await repository.submitReview(id, result, undefined, operationId);
+  let active = current();
+  if (active.repository !== repository || active.generation !== generation) throw new Error("复习仓库已更换");
+  await refresh();
+  active = current();
+  if (active.repository !== repository || active.generation !== generation) throw new Error("复习仓库已更换");
+}
 
 const loadLibraryScreen = () => import("./components/screens/LibraryScreen");
 const loadAddPhraseScreen = () => import("./components/screens/AddPhraseScreen");
@@ -64,9 +81,16 @@ class ScreenLoadBoundary extends Component<{ children: ReactNode; onRetry: () =>
   }
 }
 
-export function PhraseBankApp({ repository, contentInstaller }: { repository?: Repository; contentInstaller?: (repository: Repository) => Promise<unknown> }) {
+export function PhraseBankApp({ repository, contentInstaller, initialScreen = "home" }: { repository?: Repository; contentInstaller?: (repository: Repository) => Promise<unknown>; initialScreen?: Screen }) {
   const repo = repository ?? defaultRepository;
-  const [screen, setScreen] = useState<Screen>("home");
+  const repositoryRef = useRef(repo);
+  const repositoryGenerationRef = useRef(0);
+  useLayoutEffect(() => {
+    if (repositoryRef.current === repo) return;
+    repositoryRef.current = repo;
+    repositoryGenerationRef.current += 1;
+  }, [repo]);
+  const [screen, setScreen] = useState<Screen>(initialScreen);
   const [initialization, setInitialization] = useState<{ repository?: Repository; status: InitializationStatus; attempt: number; message?: string }>(() => ({ repository: repo, status: repo ? "loading" : "ready", attempt: 0 }));
   const initializationStatus: InitializationStatus = initialization.repository === repo ? initialization.status : repo ? "loading" : "ready";
   const initializationAttempt = initialization.repository === repo ? initialization.attempt : 0;
@@ -164,7 +188,21 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
       <ScreenLoadBoundary key={screen} onRetry={() => setLazyScreens(createLazyScreens())}><Suspense fallback={<ScreenLoading screen={screen} />}>{screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={saveAddedPhrase} onRetryState={retryAddedPhraseState} onComplete={completeAddedPhrase} />}
       {screen === "learn" && repo && <LearningSession repository={repo} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}
-      {screen === "review" && <Review key={repositoryReviewKey(repo)} phrases={eligibleDue} onBack={() => go("home")} onGrade={async (id, result, operationId) => { if (!repo) return; await repo.submitReview(id, result, undefined, operationId); await refresh(); }} />}
+      {screen === "review" && (repo && home.readyRepository === repo
+        ? <Review key={repositoryReviewKey(repo)} phrases={eligibleDue} onBack={() => go("home")} onGrade={async (id, result, operationId) => {
+          const generation = repositoryGenerationRef.current;
+          const gradingRepository = repo;
+          await submitReviewForCurrentRepository(
+            gradingRepository,
+            generation,
+            () => ({ repository: repositoryRef.current, generation: repositoryGenerationRef.current }),
+            refresh,
+            id,
+            result,
+            operationId,
+          );
+        }} />
+        : <ScreenLoading screen="review" />)}
       {screen === "practice" && repo && <PracticeSession key={`${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => { setTrainingRun((run) => run + 1); void refresh().catch(() => setError("本地数据暂时无法刷新，请稍后再试。")); }} setError={setError} />}
       {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} appPreferences={home.data?.appPreferences ?? { dailyMasteryGoal: 10 }} refresh={refresh} setNotice={setNotice} setError={setError} />}</Suspense></ScreenLoadBoundary>
     </main>

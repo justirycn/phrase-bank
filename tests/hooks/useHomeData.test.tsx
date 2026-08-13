@@ -85,9 +85,10 @@ describe("useHomeData", () => {
 
     hook.rerender({ repo: b });
 
-    expect(hook.result.current).toMatchObject({ data: undefined, loading: true, error: "" });
+    expect(hook.result.current).toMatchObject({ data: undefined, readyRepository: undefined, loading: true, error: "" });
     replacement.resolve(data("repository B"));
     await waitFor(() => expect(hook.result.current.data).toEqual(data("repository B")));
+    expect(hook.result.current.readyRepository).toBe(b);
   });
 
   it("reports an initial error without stale data when a replacement repository fails", async () => {

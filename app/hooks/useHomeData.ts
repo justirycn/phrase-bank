@@ -7,6 +7,7 @@ import type { PhraseRepository } from "../storage/repository";
 
 export interface HomeDataController {
   data?: HomeData;
+  readyRepository?: PhraseRepository;
   loading: boolean;
   error: string;
   refresh(): Promise<void>;
@@ -113,5 +114,6 @@ export function useHomeData(
   }, [now, refresh, replaceData, repository]);
 
   const data = repository && repositoryData?.repository === repository ? repositoryData.value : undefined;
-  return { data, loading, error, refresh, retry, retryHeatmap };
+  const readyRepository = data ? repository : undefined;
+  return { data, readyRepository, loading, error, refresh, retry, retryHeatmap };
 }

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { PhraseBankApp } from "../../app/PhraseBankApp";
+import { PhraseBankApp, submitReviewForCurrentRepository } from "../../app/PhraseBankApp";
 import type { AppPreferences, BackupEnvelopeV5, Category, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 
 class MemoryRepository {
@@ -14,10 +14,11 @@ class MemoryRepository {
   phraseSaveAttempts = 0;
   failLearningStateSave = false;
   savePhraseImpl?: (phrase: Phrase) => Promise<void>;
+  phraseReadPromise?: Promise<Phrase[]>;
   phraseReadAttempts = 0;
   categories: Category[] = [{ id: "daily", name: "日常", isDefault: true, createdAt: "2026-08-07T00:00:00.000Z", updatedAt: "2026-08-07T00:00:00.000Z" }];
   async initialize() { this.initializeAttempts += 1; if (this.initializePromise) await this.initializePromise; if (this.failInitialize) throw new Error("initialize failed"); }
-  async listPhrases() { this.phraseReadAttempts += 1; if (this.failPhraseReads) throw new Error("db failed"); return [...this.phrases]; }
+  async listPhrases() { this.phraseReadAttempts += 1; if (this.phraseReadPromise) return this.phraseReadPromise; if (this.failPhraseReads) throw new Error("db failed"); return [...this.phrases]; }
   async listCategories() { return [...this.categories]; }
   async listDuePhrases() { return [...this.phrases]; }
   async savePhrase(phrase: Phrase) { this.phraseSaveAttempts += 1; if (this.savePhraseImpl) return this.savePhraseImpl(phrase); if (this.failPhraseSave) throw new Error("save failed"); this.phrases = [...this.phrases.filter((p) => p.id !== phrase.id), phrase]; }
@@ -92,6 +93,75 @@ function learnedState(phraseId: string): PhraseLearningState {
 }
 
 describe("PhraseBankApp", () => {
+  it("keeps replacement review loading until repository B data is ready, then starts at B's first phrase", async () => {
+    const user = userEvent.setup();
+    let resolveOldGrade!: () => void;
+    let resolveNewPhrases!: (phrases: Phrase[]) => void;
+    const oldRepository = new MemoryRepository();
+    const newRepository = new MemoryRepository();
+    const oldPhrase = makePhrase({ id: "old-a", chinese: "旧仓库 A" });
+    const newPhrase = makePhrase({ id: "new-b", chinese: "新仓库 B" });
+    oldRepository.phrases = [oldPhrase];
+    oldRepository.learningStates = [learnedState(oldPhrase.id)];
+    oldRepository.submitReview = vi.fn(() => new Promise<void>((resolve) => { resolveOldGrade = resolve; }));
+    newRepository.phrases = [newPhrase];
+    newRepository.learningStates = [learnedState(newPhrase.id)];
+    newRepository.phraseReadPromise = new Promise<Phrase[]>((resolve) => { resolveNewPhrases = resolve; });
+    const view = render(<PhraseBankApp repository={oldRepository as never} initialScreen="review" />);
+    expect(await screen.findByText("旧仓库 A")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "显示英文答案" }));
+    await user.click(screen.getByRole("button", { name: /掌握/ }));
+
+    view.rerender(<PhraseBankApp repository={newRepository as never} initialScreen="review" />);
+    expect(screen.getByRole("status", { name: /正在打开训练/ })).toBeVisible();
+    expect(screen.queryByText(/今天完成了/)).not.toBeInTheDocument();
+    resolveOldGrade();
+    await Promise.resolve();
+    expect(screen.queryByText(/今天完成了/)).not.toBeInTheDocument();
+
+    resolveNewPhrases([newPhrase]);
+    expect(await screen.findByText("新仓库 B")).toBeVisible();
+    expect(screen.queryByText("旧仓库 A")).not.toBeInTheDocument();
+    expect(oldRepository.submitReview).toHaveBeenCalledTimes(1);
+    expect(newRepository.phraseReadAttempts).toBe(1);
+  });
+
+  it("does not refresh or authorize advancement when an old repository grade settles after replacement", async () => {
+    let resolveOld!: () => void;
+    const oldRepository = new MemoryRepository();
+    const newRepository = new MemoryRepository();
+    oldRepository.submitReview = vi.fn(() => new Promise<void>((resolve) => { resolveOld = resolve; }));
+    const refresh = vi.fn(async () => undefined);
+    let current = { repository: oldRepository, generation: 0 };
+    const pending = submitReviewForCurrentRepository(
+      oldRepository as never, 0, () => current as never, refresh, "old-a", "good", "old-operation",
+    );
+
+    current = { repository: newRepository, generation: 1 };
+    resolveOld();
+
+    await expect(pending).rejects.toThrow("复习仓库已更换");
+    expect(refresh).not.toHaveBeenCalled();
+    expect(newRepository.phrases).toHaveLength(0);
+  });
+
+  it("rejects advancement when the repository changes while the original refresh is pending", async () => {
+    let resolveRefresh!: () => void;
+    const oldRepository = new MemoryRepository();
+    const newRepository = new MemoryRepository();
+    const refresh = vi.fn(() => new Promise<void>((resolve) => { resolveRefresh = resolve; }));
+    let current = { repository: oldRepository, generation: 0 };
+    const pending = submitReviewForCurrentRepository(
+      oldRepository as never, 0, () => current as never, refresh, "old-a", "good", "old-operation",
+    );
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+
+    current = { repository: newRepository, generation: 1 };
+    resolveRefresh();
+
+    await expect(pending).rejects.toThrow("复习仓库已更换");
+  });
+
   it("waits for storage initialization before reading home data", async () => {
     let resolveInitialize!: () => void;
     const repo = new MemoryRepository();

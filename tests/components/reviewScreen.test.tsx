@@ -75,4 +75,15 @@ describe("ReviewScreen operation identity", () => {
     expect(await screen.findByText("中文 new-a")).toBeVisible();
     expect(screen.queryByText("中文 new-b")).not.toBeInTheDocument();
   });
+
+  it("does not mount an empty replacement queue before its home data is ready", () => {
+    const view = render(<Review key="repo-a" phrases={[phrase("old-a")]} onBack={vi.fn()} onGrade={vi.fn()} />);
+
+    view.rerender(<div role="status">loading replacement</div>);
+
+    expect(screen.getByRole("status")).toHaveTextContent("loading replacement");
+    expect(screen.queryByText(/今天完成了/)).not.toBeInTheDocument();
+    view.rerender(<Review key="repo-b" phrases={[phrase("new-a")]} onBack={vi.fn()} onGrade={vi.fn()} />);
+    expect(screen.getByText("中文 new-a")).toBeVisible();
+  });
 });
