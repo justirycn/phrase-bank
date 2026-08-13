@@ -58,7 +58,9 @@ describe("selectTrainingGroup", () => {
       mode, now, seed: "eligibility", newIntroducedToday: 0, learningStates,
     });
 
-    expect(new Set(result.map(({ phrase: item }) => item.id))).toEqual(new Set(["learned", "mastered"]));
+    expect(new Set(result.map(({ phrase: item }) => item.id))).toEqual(
+      new Set(mode === "standard" ? ["learned"] : ["learned", "mastered"]),
+    );
     expect(result.every(({ source }) => source !== "new")).toBe(true);
   });
 
@@ -83,7 +85,7 @@ describe("selectTrainingGroup", () => {
     expect(new Set(result.map(({ phrase: item }) => item.id))).toEqual(new Set(["unlocked-learned", "core-learned"]));
   });
 
-  it("keeps standard practice at ten with personal priority and due/weak/mature coverage", () => {
+  it("keeps standard review due-only while preserving personal due phrases", () => {
     const personal = Array.from({ length: 6 }, (_, index) => ({
       ...phrase(`personal-${index}`, index < 3 ? 1 : 3, index < 3 ? "2026-08-08T00:00:00.000Z" : "2026-08-12T00:00:00.000Z"),
       origin: "personal" as const,
@@ -100,12 +102,27 @@ describe("selectTrainingGroup", () => {
       learningStates: [...eligibleStates(phrases.filter((item) => item.id !== unseen.id)), state(unseen.id, "unseen")],
     });
 
-    expect(result).toHaveLength(10);
-    expect(result.filter(({ phrase: item }) => item.origin === "personal")).toHaveLength(5);
-    expect(result.some(({ source }) => source === "due")).toBe(true);
-    expect(result.some(({ source }) => source === "weak")).toBe(true);
-    expect(result.some(({ source }) => source === "mature")).toBe(true);
+    expect(result).toHaveLength(8);
+    expect(result.filter(({ phrase: item }) => item.origin === "personal")).toHaveLength(3);
+    expect(result.every(({ source }) => source === "due")).toBe(true);
     expect(result.map(({ phrase: item }) => item.id)).not.toContain(unseen.id);
+  });
+
+  it("keeps due review empty instead of backfilling phrases scheduled for the future", () => {
+    const due = phrase("due-now", 3, "2026-08-09T10:00:00.000Z");
+    const futureWeak = phrase("future-weak", 1, "2026-08-12T00:00:00.000Z");
+    const futureMature = phrase("future-mature", 3, "2026-08-20T00:00:00.000Z");
+    const phrases = [due, futureWeak, futureMature];
+
+    expect(selectTrainingGroup(phrases, {
+      mode: "standard", now, seed: "due-only", newIntroducedToday: 0,
+      learningStates: eligibleStates(phrases),
+    }).map(({ phrase: item, source }) => [item.id, source])).toEqual([["due-now", "due"]]);
+
+    expect(selectTrainingGroup([futureWeak, futureMature], {
+      mode: "standard", now, seed: "empty-due", newIntroducedToday: 0,
+      learningStates: eligibleStates([futureWeak, futureMature]),
+    })).toEqual([]);
   });
 
   it("prioritizes due, then weak, then the least recently reviewed mature phrases", () => {
