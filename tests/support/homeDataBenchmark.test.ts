@@ -25,7 +25,7 @@ describe("2,000 phrase home-data benchmark", () => {
       getAppPreferences: 1,
       exportSnapshot: 0,
     });
-    expect(report.rows.trainingEvents).toBe(6_636);
+    expect(report.rows.trainingEvents).toBe(7_056);
     expect(report.rows.trainingSessions).toBe(948);
     expect(report.requests).toEqual({ activeTrainingSession: 1, activeLearningSession: 1 });
     expect(report.rows.activeTrainingSessions).toBe(0);

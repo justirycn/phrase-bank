@@ -61,6 +61,47 @@ describe("CloudPhraseRepository", () => {
     expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({ stage: "learned", consecutiveGood: 1 });
   });
 
+  it("preserves mastery resets and dynamic training queues across cloud snapshot sync", async () => {
+    const resetAt = "2026-08-10T08:00:00.000Z";
+    const now = "2026-08-11T08:00:00.000Z";
+    const phrase = { ...createNewPhrase({ english: "Cloud requeue", chinese: "云端重排", categoryId: "daily" }, new Date(now)), id: "cloud-requeue" };
+    const dynamicSession = {
+      id: "dynamic-session", mode: "due" as const, startedAt: now, updatedAt: now,
+      phraseIds: [phrase.id, phrase.id], sources: ["due", "requeue"] as const,
+      currentIndex: 1, activeSeconds: 5,
+    };
+    const uploads: Array<{ snapshot: { phraseLearningStates: unknown[]; trainingSessions: unknown[] } }> = [];
+    const snapshot = {
+      format: "personal-phrase-bank" as const, version: 5 as const, exportedAt: now,
+      categories: [{ id: "daily", name: "日常", isDefault: true, createdAt: now, updatedAt: now }],
+      phrases: [phrase], reviewLogs: [], trainingEvents: [], trainingSessions: [dynamicSession], learningSessions: [], appPreferences: { dailyMasteryGoal: 10 },
+      phraseLearningStates: [{
+        phraseId: phrase.id, stage: "mastered" as const, firstSeenAt: now, firstTestedAt: now, firstResult: "good" as const,
+        consecutiveGood: 3, masteredDates: ["2026-08-07", "2026-08-11"], masteryResetAt: resetAt, updatedAt: now,
+      }],
+    };
+    const repo = new CloudPhraseRepository(async (_input, init) => {
+      if (init?.method === "PUT") {
+        uploads.push(JSON.parse(String(init.body)));
+        return Response.json({ ok: true });
+      }
+      return Response.json({ snapshot });
+    });
+
+    await repo.initialize();
+    await repo.saveAppPreferences({ dailyMasteryGoal: 12 });
+
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({
+      stage: "learned", consecutiveGood: 1, masteryResetAt: resetAt,
+    });
+    expect(await repo.getActiveTrainingSession()).toEqual(dynamicSession);
+    const uploaded = uploads.at(-1)?.snapshot;
+    expect(uploaded?.phraseLearningStates.find((state) => (state as { phraseId?: string }).phraseId === phrase.id)).toMatchObject({
+      stage: "learned", consecutiveGood: 1, masteryResetAt: resetAt,
+    });
+    expect(uploaded?.trainingSessions.find((session) => (session as { id?: string }).id === dynamicSession.id)).toEqual(dynamicSession);
+  });
+
   it("retries a failed cloud upload after local review persistence without double-applying", async () => {
     let failNextUpload = false;
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
