@@ -1,4 +1,4 @@
-import type { BackupEnvelope, BackupEnvelopeV4, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+import type { AppPreferences, BackupEnvelope, BackupEnvelopeV5, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
 
 export interface PhraseRepository {
   initialize(): Promise<void>;
@@ -20,6 +20,8 @@ export interface PhraseRepository {
   completeTrainingSession(id: string, completedAt: Date): Promise<void>;
   getSpeechPreferences(): Promise<SpeechPreferences>;
   saveSpeechPreferences(preferences: SpeechPreferences): Promise<void>;
+  getAppPreferences(): Promise<AppPreferences>;
+  saveAppPreferences(preferences: AppPreferences): Promise<void>;
   listPhraseLearningStates(): Promise<PhraseLearningState[]>;
   getPhraseLearningState(id: string): Promise<PhraseLearningState | undefined>;
   savePhraseLearningState(state: PhraseLearningState): Promise<void>;
@@ -30,6 +32,6 @@ export interface PhraseRepository {
   getActiveSystemContentVersion(): Promise<string | undefined>;
   installSystemContentPackage(content: SystemContentPackage): Promise<void>;
   rollbackSystemContentPackage(version: string): Promise<void>;
-  exportSnapshot(): Promise<BackupEnvelopeV4>;
+  exportSnapshot(): Promise<BackupEnvelopeV5>;
   importSnapshot(snapshot: BackupEnvelope, policy: "skip" | "overwrite"): Promise<void>;
 }

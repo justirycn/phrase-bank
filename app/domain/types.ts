@@ -36,6 +36,12 @@ export interface SpeechPreferences {
   autoSpeak: boolean;
 }
 
+export interface AppPreferences {
+  dailyMasteryGoal: number;
+}
+
+export const DEFAULT_DAILY_MASTERY_GOAL = 10;
+
 export interface DailyTrainingSummary {
   date: string;
   activeSeconds: number;
@@ -184,4 +190,19 @@ export interface BackupEnvelopeV4 {
   learningSessions: LearningSessionRecord[];
 }
 
-export type BackupEnvelope = BackupEnvelopeV1 | BackupEnvelopeV2 | BackupEnvelopeV3 | BackupEnvelopeV4;
+export interface BackupEnvelopeV5 {
+  format: "personal-phrase-bank";
+  version: 5;
+  exportedAt: string;
+  categories: Category[];
+  phrases: Phrase[];
+  reviewLogs: ReviewLog[];
+  trainingEvents: TrainingEvent[];
+  trainingSessions: TrainingSessionRecord[];
+  phraseLearningStates: PhraseLearningState[];
+  activeSystemContentVersion?: string;
+  learningSessions: LearningSessionRecord[];
+  appPreferences: AppPreferences;
+}
+
+export type BackupEnvelope = BackupEnvelopeV1 | BackupEnvelopeV2 | BackupEnvelopeV3 | BackupEnvelopeV4 | BackupEnvelopeV5;

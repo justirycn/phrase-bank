@@ -24,6 +24,21 @@ describe("CloudPhraseRepository", () => {
     expect(fetcher).toHaveBeenCalledWith("/api/repository", expect.objectContaining({ method: "PUT" }));
   });
 
+  it("uploads daily mastery preference changes", async () => {
+    const uploads: unknown[] = [];
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        uploads.push(JSON.parse(String(init.body)));
+        return Response.json({ ok: true });
+      }
+      return Response.json({ snapshot: null });
+    });
+    const repo = new CloudPhraseRepository(fetcher);
+    await repo.initialize();
+    await repo.saveAppPreferences({ dailyMasteryGoal: 12 });
+    expect(uploads.at(-1)).toMatchObject({ snapshot: { version: 5, appPreferences: { dailyMasteryGoal: 12 } } });
+  });
+
   it("raises an authentication error on 401", async () => {
     const repo = new CloudPhraseRepository(async () => Response.json({}, { status: 401 }));
     await expect(repo.initialize()).rejects.toMatchObject({ name: "AuthenticationError" });

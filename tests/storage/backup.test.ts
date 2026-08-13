@@ -12,7 +12,7 @@ const valid = {
 
 describe("backup parsing", () => {
   it("accepts a valid version-one backup", () => {
-    expect(parseBackup(JSON.stringify(valid))).toMatchObject({ version: 4, trainingEvents: [], trainingSessions: [], phraseLearningStates: [], learningSessions: [] });
+    expect(parseBackup(JSON.stringify(valid))).toMatchObject({ version: 5, trainingEvents: [], trainingSessions: [], phraseLearningStates: [], learningSessions: [], appPreferences: { dailyMasteryGoal: 10 } });
   });
 
   it("accepts and validates a version-two backup", () => {
@@ -24,7 +24,7 @@ describe("backup parsing", () => {
       phrases: [{ id: "p1", english: "A", chinese: "A", categoryId: "daily", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt }],
     };
     expect(parseBackup(JSON.stringify(v2))).toMatchObject({
-      ...v2, version: 4, phrases: [{ ...v2.phrases[0], origin: "personal", kind: "standalone" }], learningSessions: [],
+      ...v2, version: 5, phrases: [{ ...v2.phrases[0], origin: "personal", kind: "standalone" }], learningSessions: [], appPreferences: { dailyMasteryGoal: 10 },
       phraseLearningStates: [{
         phraseId: "p1", stage: "learned", firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt,
         firstResult: "good", consecutiveGood: 1, masteredDates: [], updatedAt: valid.exportedAt,
@@ -59,15 +59,18 @@ describe("backup parsing", () => {
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingSessions: [{ ...v2.trainingSessions[0], sources: ["invalid"] }] }))).toThrow();
   });
 
-  it("rejects an unsupported version", () => {
-    expect(() => parseBackup(JSON.stringify({ ...valid, version: 5 }))).toThrow();
+  it("accepts version five preferences and rejects invalid or unsupported values", () => {
+    const v5 = { ...valid, version: 5, trainingEvents: [], trainingSessions: [], phraseLearningStates: [], learningSessions: [], appPreferences: { dailyMasteryGoal: 18 } };
+    expect(parseBackup(JSON.stringify(v5))).toMatchObject({ version: 5, appPreferences: { dailyMasteryGoal: 18 } });
+    expect(() => parseBackup(JSON.stringify({ ...v5, appPreferences: { dailyMasteryGoal: 0 } }))).toThrow("每日掌握目标无效");
+    expect(() => parseBackup(JSON.stringify({ ...valid, version: 6 }))).toThrow();
   });
 
   it("preserves version-three learning and content state", () => {
     const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "system", kind: "core", subcategory: "routine", cefrLevel: "A2", intent: "state", contentVersion: "v1", qualityVersion: "q1", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
     const v3 = { ...valid, version: 3, phrases: [phrase], trainingEvents: [], trainingSessions: [], phraseLearningStates: [{ phraseId: "p1", masteredDates: ["2026-08-07"], unlockedAt: valid.exportedAt, updatedAt: valid.exportedAt }], activeSystemContentVersion: "v1" };
     expect(parseBackup(JSON.stringify(v3))).toMatchObject({
-      ...v3, version: 4, learningSessions: [],
+      ...v3, version: 5, learningSessions: [], appPreferences: { dailyMasteryGoal: 10 },
       phraseLearningStates: [{
         ...v3.phraseLearningStates[0], stage: "learning", firstSeenAt: valid.exportedAt, consecutiveGood: 0,
       }],
@@ -97,7 +100,7 @@ describe("backup parsing", () => {
       phraseLearningStates: [{ phraseId: "p1", masteredDates: ["2026-08-08"], unlockedAt: valid.exportedAt, updatedAt: "2026-08-10T08:00:00.000Z", legacyNote: "keep" }],
     };
     expect(parseBackup(JSON.stringify(v3))).toMatchObject({
-      version: 4, learningSessions: [],
+      version: 5, learningSessions: [], appPreferences: { dailyMasteryGoal: 10 },
       phraseLearningStates: [{
         phraseId: "p1", stage: "mastered", firstSeenAt: "2026-08-08T08:00:00.000Z",
         firstTestedAt: "2026-08-08T08:00:00.000Z", firstResult: "good", consecutiveGood: 1,
@@ -142,12 +145,14 @@ describe("backup parsing", () => {
     expect(parseBackup(JSON.stringify(normalized))).toEqual(normalized);
   });
 
-  it("accepts and round-trips a complete v4 backup", () => {
+  it("migrates a complete v4 backup and round-trips it as v5", () => {
     const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 1, masteryLevel: 1, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
     const state = { phraseId: "p1", stage: "learned", firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt, firstResult: "good", consecutiveGood: 1, masteredDates: ["2026-08-07"], updatedAt: valid.exportedAt };
     const session = { id: "ls1", date: "2026-08-07", themeCategoryId: "daily", phraseIds: ["p1"], studyIndex: 1, testIndex: 1, phase: "test", startedAt: valid.exportedAt, updatedAt: valid.exportedAt, completedAt: valid.exportedAt };
     const v4 = { ...valid, version: 4, phrases: [phrase], trainingEvents: [], trainingSessions: [], phraseLearningStates: [state], learningSessions: [session] };
-    expect(parseBackup(JSON.stringify(v4))).toEqual(v4);
+    const migrated = { ...v4, version: 5, appPreferences: { dailyMasteryGoal: 10 } };
+    expect(parseBackup(JSON.stringify(v4))).toEqual(migrated);
+    expect(parseBackup(JSON.stringify(migrated))).toEqual(migrated);
   });
 
   it("requires learningSessions in v4 and validates learning-session fields and references", () => {

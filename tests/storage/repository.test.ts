@@ -332,7 +332,7 @@ describe("LocalPhraseRepository", () => {
     await persistedRepo.saveSpeechPreferences({ accent: "en-GB", autoSpeak: false });
     expect(await new LocalPhraseRepository(persistedName).getSpeechPreferences()).toEqual({ accent: "en-GB", autoSpeak: false });
     const snapshot = await repo.exportSnapshot();
-    expect(snapshot.version).toBe(4);
+    expect(snapshot.version).toBe(5);
     const dbName = `phrase-bank-${crypto.randomUUID()}`;
     const corruptRepo = new LocalPhraseRepository(dbName);
     await corruptRepo.initialize();
@@ -350,16 +350,39 @@ describe("LocalPhraseRepository", () => {
     }
   });
 
+  it("persists daily mastery preferences and falls back for invalid metadata", async () => {
+    expect(await repo.getAppPreferences()).toEqual({ dailyMasteryGoal: 10 });
+    await repo.saveAppPreferences({ dailyMasteryGoal: 18 });
+    expect(await repo.getAppPreferences()).toEqual({ dailyMasteryGoal: 18 });
+    expect((await repo.exportSnapshot()).appPreferences).toEqual({ dailyMasteryGoal: 18 });
+
+    const persistedName = `phrase-bank-app-preferences-${crypto.randomUUID()}`;
+    await new LocalPhraseRepository(persistedName).saveAppPreferences({ dailyMasteryGoal: 7 });
+    expect(await new LocalPhraseRepository(persistedName).getAppPreferences()).toEqual({ dailyMasteryGoal: 7 });
+
+    const dbName = `phrase-bank-invalid-app-preferences-${crypto.randomUUID()}`;
+    const invalidRepo = new LocalPhraseRepository(dbName);
+    await invalidRepo.initialize();
+    const request = indexedDB.open(dbName, 5);
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    for (const value of ["{", JSON.stringify({ dailyMasteryGoal: 0 }), JSON.stringify({ dailyMasteryGoal: 1.5 })]) {
+      const tx = db.transaction("metadata", "readwrite");
+      tx.objectStore("metadata").put({ key: "appPreferences", value });
+      await new Promise<void>((resolve, reject) => { tx.oncomplete = () => resolve(); tx.onerror = () => reject(tx.error); });
+      expect(await invalidRepo.getAppPreferences()).toEqual({ dailyMasteryGoal: 10 });
+    }
+  });
+
   it("exports v2 and imports v1/v2 training data with skip and overwrite policies", async () => {
     const base = await repo.exportSnapshot();
-    expect(base).toMatchObject({ version: 4, trainingEvents: [], trainingSessions: [], learningSessions: [] });
+    expect(base).toMatchObject({ version: 5, trainingEvents: [], trainingSessions: [], learningSessions: [], appPreferences: { dailyMasteryGoal: 10 } });
     const v1: BackupEnvelopeV1 = { format: base.format, version: 1, exportedAt: base.exportedAt, categories: [], phrases: [], reviewLogs: [] };
     const event: TrainingEvent = { id: "event", sessionId: "session", phraseId: "starter-daily-not-sure", source: "due", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: base.exportedAt };
     const session: TrainingSessionRecord = { id: "session", mode: "quick", startedAt: base.exportedAt, updatedAt: base.exportedAt, phraseIds: [event.phraseId], sources: ["due"], currentIndex: 0, activeSeconds: 1 };
     await repo.saveTrainingEvent(event);
     await repo.saveTrainingSession(session);
     const normalizedV1 = parseBackup(JSON.stringify(v1));
-    expect(normalizedV1).toMatchObject({ version: 4, trainingEvents: [], trainingSessions: [], phraseLearningStates: [], learningSessions: [] });
+    expect(normalizedV1).toMatchObject({ version: 5, trainingEvents: [], trainingSessions: [], phraseLearningStates: [], learningSessions: [], appPreferences: { dailyMasteryGoal: 10 } });
     await repo.importSnapshot(normalizedV1, "overwrite");
     expect((await repo.exportSnapshot()).trainingEvents).toEqual([event]);
     expect((await repo.exportSnapshot()).trainingSessions).toEqual([session]);
@@ -644,7 +667,7 @@ describe("LocalPhraseRepository", () => {
     const existing = learningSession({ id: "existing", phase: "study", studyIndex: 0, updatedAt: "2026-08-10T08:00:00.000Z" });
     await repo.saveLearningSession(existing);
     const exported = await repo.exportSnapshot();
-    expect(exported).toMatchObject({ version: 4, learningSessions: [existing] });
+    expect(exported).toMatchObject({ version: 5, learningSessions: [existing], appPreferences: { dailyMasteryGoal: 10 } });
 
     const legacy: BackupEnvelopeV1 = {
       format: "personal-phrase-bank", version: 1, exportedAt: exported.exportedAt,

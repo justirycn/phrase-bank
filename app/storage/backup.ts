@@ -1,14 +1,19 @@
-import type { BackupEnvelope, BackupEnvelopeV1, BackupEnvelopeV4, LearningSessionRecord, Phrase, PhraseLearningState, ReviewLog, ReviewResult, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+import { DEFAULT_DAILY_MASTERY_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV1, type BackupEnvelopeV5, type LearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
 
 type LegacyLearningState = Partial<PhraseLearningState> & Pick<PhraseLearningState, "phraseId">;
 type BackupCandidate = Omit<Partial<BackupEnvelopeV1>, "version"> & {
-  version?: 1 | 2 | 3 | 4;
+  version?: 1 | 2 | 3 | 4 | 5;
   trainingEvents?: TrainingEvent[];
   trainingSessions?: TrainingSessionRecord[];
   phraseLearningStates?: LegacyLearningState[];
   activeSystemContentVersion?: string;
   learningSessions?: LearningSessionRecord[];
+  appPreferences?: AppPreferences;
 };
+
+const defaultAppPreferences = (): AppPreferences => ({ dailyMasteryGoal: DEFAULT_DAILY_MASTERY_GOAL });
+const validAppPreferences = (value: unknown): value is AppPreferences => Boolean(value && typeof value === "object"
+  && Number.isInteger((value as AppPreferences).dailyMasteryGoal) && (value as AppPreferences).dailyMasteryGoal > 0);
 
 const validDuration = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const validIndex = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -81,8 +86,9 @@ export function normalizeLegacyLearningState(phrase: Phrase, legacy: LegacyLearn
   return migrated;
 }
 
-export function normalizeLegacyBackup(backup: BackupEnvelope): BackupEnvelopeV4 {
-  if (backup.version === 4) return backup;
+export function normalizeLegacyBackup(backup: BackupEnvelope): BackupEnvelopeV5 {
+  if (backup.version === 5) return backup;
+  if (backup.version === 4) return { ...backup, version: 5, appPreferences: defaultAppPreferences() };
   const phrases = backup.phrases.map((phrase) => ({ origin: "personal", kind: "standalone", ...phrase })) as Phrase[];
   const trainingEvents = backup.version === 1 ? [] : backup.trainingEvents;
   const trainingSessions = backup.version === 1 ? [] : backup.trainingSessions;
@@ -90,7 +96,7 @@ export function normalizeLegacyBackup(backup: BackupEnvelope): BackupEnvelopeV4 
   const statesByPhrase = new Map(legacyStates.map((state) => [state.phraseId, state]));
   return {
     format: "personal-phrase-bank",
-    version: 4,
+    version: 5,
     exportedAt: backup.exportedAt,
     categories: backup.categories,
     phrases,
@@ -99,6 +105,7 @@ export function normalizeLegacyBackup(backup: BackupEnvelope): BackupEnvelopeV4 
     trainingSessions,
     phraseLearningStates: phrases.map((phrase) => normalizeLegacyLearningState(phrase, statesByPhrase.get(phrase.id), backup.reviewLogs, trainingEvents)),
     learningSessions: [],
+    appPreferences: defaultAppPreferences(),
     ...(backup.version === 3 && backup.activeSystemContentVersion ? { activeSystemContentVersion: backup.activeSystemContentVersion } : {}),
   };
 }
@@ -148,13 +155,13 @@ function invalidLearningState(state: LegacyLearningState, phraseIds: Set<string>
   return !hasSeen || !hasTested || !hasResult;
 }
 
-export function parseBackup(raw: string): BackupEnvelopeV4 {
+export function parseBackup(raw: string): BackupEnvelopeV5 {
   let value: unknown;
   try { value = JSON.parse(raw); } catch { throw new Error("备份文件不是有效的 JSON"); }
   if (!value || typeof value !== "object") throw new Error("备份文件格式不正确");
   const backup = value as BackupCandidate;
   if (backup.format !== "personal-phrase-bank") throw new Error("这不是 Phrase Bank 备份文件");
-  if (backup.version !== 1 && backup.version !== 2 && backup.version !== 3 && backup.version !== 4) throw new Error("不支持的备份版本");
+  if (backup.version !== 1 && backup.version !== 2 && backup.version !== 3 && backup.version !== 4 && backup.version !== 5) throw new Error("不支持的备份版本");
   if (!validDate(backup.exportedAt) || !Array.isArray(backup.categories) || !Array.isArray(backup.phrases) || !Array.isArray(backup.reviewLogs)) throw new Error("备份文件缺少必要数据");
   const categoryIds = new Set(backup.categories.map(({ id }) => id));
   if (backup.categories.some(({ id, name }) => !id || !name)) throw new Error("备份中的分类数据不完整");
@@ -185,7 +192,7 @@ export function parseBackup(raw: string): BackupEnvelopeV4 {
     || !validDuration(session.activeSeconds);
   if (trainingSessions.some(invalidSession)) throw new Error("备份包含无效的训练会话");
 
-  const learningSessions = backup.version === 4 ? backup.learningSessions : [];
+  const learningSessions = backup.version >= 4 ? backup.learningSessions : [];
   if (!Array.isArray(learningSessions)) throw new Error("备份缺少学习会话");
   const references = { categoryIds, phraseIds };
   if (learningSessions.some((session) => !validateLearningSession(session, references)) || new Set(learningSessions.map(({ id }) => id)).size !== learningSessions.length) throw new Error("备份包含无效的学习会话");
@@ -199,7 +206,7 @@ export function parseBackup(raw: string): BackupEnvelopeV4 {
   if (trainingEvents.some(invalidEvent)) throw new Error("备份包含无效的训练记录");
 
   let phraseLearningStates: PhraseLearningState[];
-  if (backup.version === 4) {
+  if (backup.version >= 4) {
     if (!Array.isArray(backup.phraseLearningStates)) throw new Error("备份缺少学习状态");
     phraseLearningStates = backup.phraseLearningStates as PhraseLearningState[];
     if (phraseLearningStates.some((state) => invalidLearningState(state, phraseIds))
@@ -215,14 +222,16 @@ export function parseBackup(raw: string): BackupEnvelopeV4 {
     phraseLearningStates = [];
   }
 
-  if (backup.version !== 4) {
+  if (backup.version !== 5) {
     return normalizeLegacyBackup({ ...backup, phrases, trainingEvents, trainingSessions } as BackupEnvelope);
   }
 
+  if (!validAppPreferences(backup.appPreferences)) throw new Error("每日掌握目标无效");
+
   return {
-    format: "personal-phrase-bank", version: 4, exportedAt: backup.exportedAt,
+    format: "personal-phrase-bank", version: 5, exportedAt: backup.exportedAt,
     categories: backup.categories, phrases, reviewLogs: backup.reviewLogs,
-    trainingEvents, trainingSessions, phraseLearningStates, learningSessions,
+    trainingEvents, trainingSessions, phraseLearningStates, learningSessions, appPreferences: backup.appPreferences,
     ...(backup.version >= 3 && backup.activeSystemContentVersion ? { activeSystemContentVersion: backup.activeSystemContentVersion } : {}),
   };
 }

@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import type { BackupEnvelope, BackupEnvelopeV4, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewLog, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+import { DEFAULT_DAILY_MASTERY_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV5, type Category, type LearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type SpeechPreferences, type SystemContentPackage, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
 import { scheduleReview } from "../domain/review";
 import { personalPhraseDefaults, validateSystemContentPackage } from "../domain/systemContent";
 import { applyLearningResult, nextExampleToUnlock } from "../domain/learningProgress";
@@ -460,6 +460,19 @@ export class LocalPhraseRepository implements PhraseRepository {
   async saveSpeechPreferences(preferences: SpeechPreferences) {
     await (await this.db()).put("metadata", { key: "speechPreferences", value: JSON.stringify(preferences) });
   }
+  async getAppPreferences(): Promise<AppPreferences> {
+    const fallback = { dailyMasteryGoal: DEFAULT_DAILY_MASTERY_GOAL };
+    const item = await (await this.db()).get("metadata", "appPreferences");
+    if (!item) return fallback;
+    try {
+      const value = JSON.parse(item.value) as Partial<AppPreferences>;
+      return Number.isInteger(value.dailyMasteryGoal) && (value.dailyMasteryGoal ?? 0) > 0 ? value as AppPreferences : fallback;
+    } catch { return fallback; }
+  }
+  async saveAppPreferences(preferences: AppPreferences) {
+    if (!Number.isInteger(preferences.dailyMasteryGoal) || preferences.dailyMasteryGoal <= 0) throw new Error("每日掌握目标必须是正整数");
+    await (await this.db()).put("metadata", { key: "appPreferences", value: JSON.stringify(preferences) });
+  }
   async listPhraseLearningStates() { return (await this.db()).getAll("phraseLearningState"); }
   async getPhraseLearningState(id: string) { return (await this.db()).get("phraseLearningState", id); }
   async savePhraseLearningState(state: PhraseLearningState) { await (await this.db()).put("phraseLearningState", state); }
@@ -656,10 +669,10 @@ export class LocalPhraseRepository implements PhraseRepository {
     if (!content) throw new Error("找不到可回滚的系统内容版本");
     await this.installSystemContentPackage(content);
   }
-  async exportSnapshot(): Promise<BackupEnvelopeV4> {
+  async exportSnapshot(): Promise<BackupEnvelopeV5> {
     const db = await this.db();
     const tx = db.transaction(["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions", "phraseLearningState", "learningSessions", "metadata"]);
-    const [categories, phrases, reviewLogs, trainingEvents, trainingSessions, phraseLearningStates, learningSessions, activeVersion] = await Promise.all([
+    const [categories, phrases, reviewLogs, trainingEvents, trainingSessions, phraseLearningStates, learningSessions, activeVersion, appPreferences] = await Promise.all([
       tx.objectStore("categories").getAll(),
       tx.objectStore("phrases").getAll(),
       tx.objectStore("reviewLogs").getAll(),
@@ -668,9 +681,10 @@ export class LocalPhraseRepository implements PhraseRepository {
       tx.objectStore("phraseLearningState").getAll(),
       tx.objectStore("learningSessions").getAll(),
       tx.objectStore("metadata").get("activeSystemContentVersion"),
+      this.getAppPreferences(),
     ]);
     await tx.done;
-    return { format: "personal-phrase-bank", version: 4, exportedAt: new Date().toISOString(), categories, phrases, reviewLogs, trainingEvents, trainingSessions, phraseLearningStates, activeSystemContentVersion: activeVersion?.value, learningSessions };
+    return { format: "personal-phrase-bank", version: 5, exportedAt: new Date().toISOString(), categories, phrases, reviewLogs, trainingEvents, trainingSessions, phraseLearningStates, activeSystemContentVersion: activeVersion?.value, learningSessions, appPreferences };
   }
 
   async importSnapshot(snapshot: BackupEnvelope, policy: "skip" | "overwrite") {
@@ -722,6 +736,7 @@ export class LocalPhraseRepository implements PhraseRepository {
       if (activeLearningId) await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEY, value: activeLearningId });
       else await tx.objectStore("metadata").delete(ACTIVE_LEARNING_SESSION_KEY);
       if (normalized.activeSystemContentVersion) await tx.objectStore("metadata").put({ key: "activeSystemContentVersion", value: normalized.activeSystemContentVersion });
+      await tx.objectStore("metadata").put({ key: "appPreferences", value: JSON.stringify(normalized.appPreferences) });
       await tx.done;
     } catch (error) {
       try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }

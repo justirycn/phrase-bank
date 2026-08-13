@@ -1,4 +1,4 @@
-import type { BackupEnvelope, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+import type { AppPreferences, BackupEnvelope, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
 import { LocalPhraseRepository } from "./indexedDbRepository";
 
 export class AuthenticationError extends Error { name = "AuthenticationError"; }
@@ -32,6 +32,7 @@ export class CloudPhraseRepository extends LocalPhraseRepository {
   override async saveTrainingSession(v: TrainingSessionRecord) { await super.saveTrainingSession(v); await this.sync(); }
   override async completeTrainingSession(id: string, at: Date) { await super.completeTrainingSession(id, at); await this.sync(); }
   override async saveSpeechPreferences(v: SpeechPreferences) { await super.saveSpeechPreferences(v); await this.sync(); }
+  override async saveAppPreferences(v: AppPreferences) { await super.saveAppPreferences(v); await this.sync(); }
   override async savePhraseLearningState(v: PhraseLearningState) { await super.savePhraseLearningState(v); await this.sync(); }
   override async saveLearningSession(v: LearningSessionRecord) { await super.saveLearningSession(v); await this.sync(); }
   override async completeLearningSession(id: string, at: Date) { await super.completeLearningSession(id, at); await this.sync(); }
