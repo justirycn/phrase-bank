@@ -16,11 +16,11 @@ describe("review scheduling", () => {
     expect(result.phrase.nextReviewAt).toBe("2026-08-08T08:00:00.000Z");
   });
 
-  it("schedules hard in three days without advancing", () => {
+  it("schedules hard the next day without advancing", () => {
     const phrase = { ...createNewPhrase({ english: "A", chinese: "甲", categoryId: "daily" }, now), reviewStep: 2 };
     const result = scheduleReview(phrase, "hard", now);
     expect(result.phrase.reviewStep).toBe(2);
-    expect(result.phrase.nextReviewAt).toBe("2026-08-10T08:00:00.000Z");
+    expect(result.phrase.nextReviewAt).toBe("2026-08-08T08:00:00.000Z");
   });
 
   it("advances good answers through 1, 3, 7, 14, 30 and 60 days", () => {

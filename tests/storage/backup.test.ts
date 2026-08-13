@@ -27,7 +27,7 @@ describe("backup parsing", () => {
       ...v2, version: 5, phrases: [{ ...v2.phrases[0], origin: "personal", kind: "standalone" }], learningSessions: [], appPreferences: { dailyMasteryGoal: 10 },
       phraseLearningStates: [{
         phraseId: "p1", stage: "learned", firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt,
-        firstResult: "good", consecutiveGood: 1, masteredDates: [], updatedAt: valid.exportedAt,
+        firstResult: "good", consecutiveGood: 0, masteredDates: [], updatedAt: valid.exportedAt,
       }],
     });
     expect(() => parseBackup(JSON.stringify({ ...v2, trainingEvents: [{ ...v2.trainingEvents[0], id: "" }] }))).toThrow();
@@ -102,14 +102,14 @@ describe("backup parsing", () => {
     expect(parseBackup(JSON.stringify(v3))).toMatchObject({
       version: 5, learningSessions: [], appPreferences: { dailyMasteryGoal: 10 },
       phraseLearningStates: [{
-        phraseId: "p1", stage: "mastered", firstSeenAt: "2026-08-08T08:00:00.000Z",
+        phraseId: "p1", stage: "learned", firstSeenAt: "2026-08-08T08:00:00.000Z",
         firstTestedAt: "2026-08-08T08:00:00.000Z", firstResult: "good", consecutiveGood: 1,
         masteredDates: ["2026-08-08"], unlockedAt: valid.exportedAt, legacyNote: "keep",
       }],
     });
   });
 
-  it("derives consecutiveGood only from training events, never review logs", () => {
+  it("derives legacy mastery progress from persisted Shanghai dates, never old counters", () => {
     const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 3, masteryLevel: 3, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
     const session = { id: "s1", mode: "quick", startedAt: valid.exportedAt, updatedAt: valid.exportedAt, phraseIds: ["p1"], currentIndex: 0, activeSeconds: 1 };
     const logOnly = {
@@ -117,14 +117,14 @@ describe("backup parsing", () => {
       reviewLogs: [{ id: "log-only", phraseId: "p1", result: "good", reviewedAt: "2026-08-09T08:00:00.000Z", previousStep: 2, nextReviewAt: valid.exportedAt }],
       phraseLearningStates: [{ phraseId: "p1", masteredDates: [], updatedAt: valid.exportedAt }],
     };
-    expect(parseBackup(JSON.stringify(logOnly)).phraseLearningStates[0]).toMatchObject({ stage: "mastered", firstResult: "good", consecutiveGood: 0 });
+    expect(parseBackup(JSON.stringify(logOnly)).phraseLearningStates[0]).toMatchObject({ stage: "learned", firstResult: "good", consecutiveGood: 0 });
 
     const mixed = {
       ...logOnly, trainingSessions: [session],
       trainingEvents: [{ id: "event-good", sessionId: "s1", phraseId: "p1", source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-10T08:00:00.000Z" }],
       reviewLogs: [{ ...logOnly.reviewLogs[0], id: "later-hard-log", result: "hard", reviewedAt: "2026-08-11T08:00:00.000Z" }],
     };
-    expect(parseBackup(JSON.stringify(mixed)).phraseLearningStates[0]).toMatchObject({ consecutiveGood: 1 });
+    expect(parseBackup(JSON.stringify(mixed)).phraseLearningStates[0]).toMatchObject({ consecutiveGood: 0 });
   });
 
   it("normalizes lastReviewed-only v3 phrases to legal learning states that round-trip as v4", () => {
@@ -189,6 +189,40 @@ describe("backup parsing", () => {
     for (const state of invalidStates) expect(() => parseBackup(JSON.stringify({ ...base, phraseLearningStates: [state] }))).toThrow("无效学习状态");
   });
 
+  it("round-trips an optional mastery reset timestamp without changing the backup version", () => {
+    const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const state = {
+      phraseId: "p1", stage: "learned", firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt,
+      firstResult: "good", consecutiveGood: 0, masteredDates: ["2026-08-07"],
+      masteryResetAt: "2026-08-10T08:00:00.000Z", updatedAt: "2026-08-10T08:00:00.000Z",
+    };
+    const v5 = { ...valid, version: 5, phrases: [phrase], trainingEvents: [], trainingSessions: [], phraseLearningStates: [state], learningSessions: [], appPreferences: { dailyMasteryGoal: 10 } };
+    expect(parseBackup(JSON.stringify(v5))).toMatchObject({ version: 5, phraseLearningStates: [state] });
+    expect(() => parseBackup(JSON.stringify({ ...v5, phraseLearningStates: [{ ...state, masteryResetAt: "not-a-date" }] }))).toThrow();
+
+    const legacyCompatibleState = Object.fromEntries(Object.entries(state).filter(([key]) => key !== "masteryResetAt"));
+    expect(parseBackup(JSON.stringify({ ...v5, phraseLearningStates: [legacyCompatibleState] }))).toMatchObject({
+      version: 5, phraseLearningStates: [legacyCompatibleState],
+    });
+  });
+
+  it("normalizes legacy mastery using only three effective dates after its reset", () => {
+    const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 4, masteryLevel: 3, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: "2026-08-12T08:00:00.000Z", lastReviewedAt: "2026-08-12T08:00:00.000Z" };
+    const state = {
+      phraseId: "p1", masteredDates: ["2026-08-07", "2026-08-08", "2026-08-12"],
+      masteryResetAt: "2026-08-10T08:00:00.000Z", updatedAt: "2026-08-12T08:00:00.000Z",
+    };
+    const v3 = {
+      ...valid, version: 3, phrases: [phrase], trainingEvents: [], trainingSessions: [],
+      reviewLogs: [{ id: "review", phraseId: "p1", result: "good", reviewedAt: phrase.lastReviewedAt, previousStep: 3, nextReviewAt: phrase.nextReviewAt }],
+      phraseLearningStates: [state],
+    };
+
+    expect(parseBackup(JSON.stringify(v3)).phraseLearningStates[0]).toMatchObject({
+      stage: "learned", consecutiveGood: 1, masteryResetAt: state.masteryResetAt,
+    });
+  });
+
   it("normalizes v1 review logs and v2 training events into legal learning states", () => {
     const phrase = (id: string, masteryLevel: number) => ({
       id, english: id, chinese: id, categoryId: "daily", reviewStep: masteryLevel, masteryLevel,
@@ -213,8 +247,8 @@ describe("backup parsing", () => {
       ],
     };
     expect(parseBackup(JSON.stringify(v2)).phraseLearningStates).toEqual([{
-      phraseId: "v2-phrase", stage: "mastered", firstSeenAt: "2026-08-08T08:00:00.000Z",
-      firstTestedAt: "2026-08-08T08:00:00.000Z", firstResult: "good", consecutiveGood: 2,
+      phraseId: "v2-phrase", stage: "learned", firstSeenAt: "2026-08-08T08:00:00.000Z",
+      firstTestedAt: "2026-08-08T08:00:00.000Z", firstResult: "good", consecutiveGood: 0,
       masteredDates: [], updatedAt: valid.exportedAt,
     }]);
   });

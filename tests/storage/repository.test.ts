@@ -75,7 +75,9 @@ describe("LocalPhraseRepository", () => {
     expect((await repo.listPhraseLearningStates()).find(({ phraseId }) => phraseId === "sys-core")?.masteredDates).toEqual(["2026-08-09"]);
     expect((await repo.listPhraseLearningStates()).find(({ phraseId }) => phraseId === "sys-example")?.unlockedAt).toBeUndefined();
     await repo.submitTrainingReview(event("core-2", "sys-core", "2026-08-10T08:00:00.000Z"));
-    expect((await repo.listPhraseLearningStates()).find(({ phraseId }) => phraseId === "sys-example")?.unlockedAt).toBe("2026-08-10T08:00:00.000Z");
+    expect((await repo.listPhraseLearningStates()).find(({ phraseId }) => phraseId === "sys-example")?.unlockedAt).toBeUndefined();
+    await repo.submitTrainingReview(event("core-3", "sys-core", "2026-08-11T08:00:00.000Z"));
+    expect((await repo.listPhraseLearningStates()).find(({ phraseId }) => phraseId === "sys-example")?.unlockedAt).toBe("2026-08-11T08:00:00.000Z");
   });
 
   it("round-trips system version and learning state through a v3 backup", async () => {
@@ -472,6 +474,100 @@ describe("LocalPhraseRepository", () => {
     expect((await repo.exportSnapshot()).reviewLogs.filter(({ phraseId }) => phraseId === phrase.id)).toHaveLength(1);
   });
 
+  it("derives mastery from three distinct Shanghai review days and resets a mastered phrase on failure", async () => {
+    const phrase = {
+      ...createNewPhrase({ english: "Durable mastery", chinese: "持久掌握", categoryId: "daily" }, new Date("2026-08-07T08:00:00.000Z")),
+      id: "durable-mastery",
+      masteryLevel: 3,
+    };
+    await repo.savePhrase(phrase);
+    await repo.savePhraseLearningState({
+      phraseId: phrase.id, stage: "learned", firstSeenAt: "2026-08-07T08:00:00.000Z",
+      firstTestedAt: "2026-08-07T08:00:00.000Z", firstResult: "good", consecutiveGood: 0,
+      masteredDates: [], updatedAt: "2026-08-07T08:00:00.000Z",
+    });
+
+    await repo.submitReview(phrase.id, "good", new Date("2026-08-08T15:59:00.000Z"));
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({ stage: "learned", consecutiveGood: 1, masteredDates: ["2026-08-08"] });
+    await repo.submitReview(phrase.id, "good", new Date("2026-08-08T15:59:30.000Z"));
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({ stage: "learned", consecutiveGood: 1, masteredDates: ["2026-08-08"] });
+    await repo.submitReview(phrase.id, "good", new Date("2026-08-08T16:00:00.000Z"));
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({ stage: "learned", consecutiveGood: 2, masteredDates: ["2026-08-08", "2026-08-09"] });
+    await repo.submitReview(phrase.id, "good", new Date("2026-08-09T16:00:00.000Z"));
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({ stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-08", "2026-08-09", "2026-08-10"] });
+
+    const resetAt = new Date("2026-08-10T08:00:00.000Z");
+    await repo.submitReview(phrase.id, "again", resetAt);
+    expect(await repo.getPhrase(phrase.id)).toMatchObject({ reviewStep: 0, nextReviewAt: "2026-08-11T08:00:00.000Z" });
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({
+      stage: "learned", consecutiveGood: 0, masteryResetAt: resetAt.toISOString(),
+    });
+  });
+
+  it("uses the same next-day failure schedule for the first learning review", async () => {
+    const phraseId = "starter-daily-not-sure";
+    const session = learningSession({ id: "first-hard-schedule", phraseIds: [phraseId] });
+    await beginTestingSession(session);
+    const event: TrainingEvent = {
+      id: "first-hard-event", sessionId: session.id, phraseId, source: "new", result: "hard",
+      usedPronunciationHint: false, recorded: false, activeSeconds: 1, occurredAt: "2026-08-10T08:05:00.000Z",
+    };
+    await repo.submitFirstLearningReview(event, { ...session, testIndex: 1, updatedAt: event.occurredAt });
+    expect(await repo.getPhrase(phraseId)).toMatchObject({ reviewStep: 0, nextReviewAt: "2026-08-11T08:05:00.000Z" });
+    expect(await repo.getPhraseLearningState(phraseId)).toMatchObject({
+      stage: "learned", consecutiveGood: 0, masteryResetAt: event.occurredAt,
+    });
+  });
+
+  it("downgrades and resets a mastered phrase graded hard without advancing its review step", async () => {
+    const now = new Date("2026-08-10T08:00:00.000Z");
+    const phrase = {
+      ...createNewPhrase({ english: "Hard reset", chinese: "困难重置", categoryId: "daily" }, now),
+      id: "hard-reset", reviewStep: 4, masteryLevel: 3,
+    };
+    await repo.savePhrase(phrase);
+    await repo.savePhraseLearningState({
+      phraseId: phrase.id, stage: "mastered", firstSeenAt: "2026-08-07T08:00:00.000Z",
+      firstTestedAt: "2026-08-07T08:00:00.000Z", firstResult: "good", consecutiveGood: 3,
+      masteredDates: ["2026-08-07", "2026-08-08", "2026-08-09"], updatedAt: "2026-08-09T08:00:00.000Z",
+    });
+
+    await repo.submitReview(phrase.id, "hard", now);
+
+    expect(await repo.getPhrase(phrase.id)).toMatchObject({ reviewStep: 4, nextReviewAt: "2026-08-11T08:00:00.000Z" });
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({
+      stage: "learned", consecutiveGood: 0, masteryResetAt: now.toISOString(),
+    });
+  });
+
+  it("rolls back a mastered reset when its learning-state write fails", async () => {
+    const now = new Date("2026-08-10T08:00:00.000Z");
+    const phrase = {
+      ...createNewPhrase({ english: "Atomic reset", chinese: "原子重置", categoryId: "daily" }, now),
+      id: "atomic-reset", reviewStep: 4, masteryLevel: 3,
+    };
+    await repo.savePhrase(phrase);
+    await repo.savePhraseLearningState({
+      phraseId: phrase.id, stage: "mastered", firstSeenAt: "2026-08-07T08:00:00.000Z",
+      firstTestedAt: "2026-08-07T08:00:00.000Z", firstResult: "good", consecutiveGood: 3,
+      masteredDates: ["2026-08-07", "2026-08-08", "2026-08-09"], updatedAt: "2026-08-09T08:00:00.000Z",
+    });
+    const before = await repo.exportSnapshot();
+    const originalPut = IDBObjectStore.prototype.put;
+    const failedPut = vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(function (this: IDBObjectStore, value, key) {
+      if (this.name === "phraseLearningState" && (value as PhraseLearningState).masteryResetAt) {
+        throw new DOMException("forced state write failure", "DataCloneError");
+      }
+      return originalPut.call(this, value, key);
+    });
+
+    await expect(repo.submitReview(phrase.id, "again", now)).rejects.toThrow("forced state write failure");
+    failedPut.mockRestore();
+
+    const after = await repo.exportSnapshot();
+    expect({ ...after, exportedAt: before.exportedAt }).toEqual(before);
+  });
+
   it("persists legal phrase states and learning-session CRUD in updated order", async () => {
     const state: PhraseLearningState = {
       phraseId: "starter-daily-not-sure", stage: "learning",
@@ -651,7 +747,7 @@ describe("LocalPhraseRepository", () => {
       stage: "learned", firstSeenAt: "2026-08-08T09:00:00.000Z", firstTestedAt: "2026-08-08T09:00:00.000Z",
       firstResult: "good", consecutiveGood: 1, masteredDates: ["2026-08-08"], unlockedAt: "2026-08-07T00:00:00.000Z", legacyNote: "keep",
     });
-    expect(await migrated.getPhraseLearningState("mastered")).toMatchObject({ stage: "mastered", consecutiveGood: 0, firstResult: "good" });
+    expect(await migrated.getPhraseLearningState("mastered")).toMatchObject({ stage: "learned", consecutiveGood: 0, firstResult: "good" });
     expect(await migrated.getPhraseLearningState("last-reviewed-only")).toEqual({
       phraseId: "last-reviewed-only", stage: "learning", firstSeenAt: "2026-08-09T07:00:00.000Z",
       consecutiveGood: 0, masteredDates: [], updatedAt: timestamp,
@@ -879,7 +975,7 @@ describe("LocalPhraseRepository", () => {
     expect({ ...after, exportedAt: before.exportedAt }).toEqual(before);
   });
 
-  it("normalizes direct v1 and v2 imports into learned and mastered states", async () => {
+  it("normalizes direct v1 and v2 imports without trusting legacy mastery counters", async () => {
     const exported = await repo.exportSnapshot();
     const phrase = (id: string, masteryLevel: number): Phrase => ({
       id, english: id, chinese: id, categoryId: "daily", origin: "personal", kind: "standalone",
@@ -905,7 +1001,7 @@ describe("LocalPhraseRepository", () => {
       ],
     };
     await repo.importSnapshot(v2, "overwrite");
-    expect(await repo.getPhraseLearningState(v2Phrase.id)).toMatchObject({ stage: "mastered", firstResult: "good", consecutiveGood: 2 });
+    expect(await repo.getPhraseLearningState(v2Phrase.id)).toMatchObject({ stage: "learned", firstResult: "good", consecutiveGood: 0 });
   });
 
   it("allows only one active learning session, including concurrent creates", async () => {

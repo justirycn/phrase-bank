@@ -87,17 +87,15 @@ function unseenState(phraseId: string, updatedAt: string, unlockedAt?: string): 
   return { phraseId, stage: "unseen", consecutiveGood: 0, masteredDates: [], unlockedAt, updatedAt };
 }
 
-function reviewedState(current: PhraseLearningState | undefined, phrase: Phrase, result: ReviewResult, now: Date): PhraseLearningState {
+function reviewedState(current: PhraseLearningState | undefined, phraseId: string, result: ReviewResult, now: Date): PhraseLearningState {
   const timestamp = now.toISOString();
-  const base = current ?? unseenState(phrase.id, timestamp);
+  const base = current ?? unseenState(phraseId, timestamp);
   const progressed = applyLearningResult(base, result, now);
   return {
     ...progressed,
-    stage: phrase.masteryLevel === 3 ? "mastered" : "learned",
     firstSeenAt: base.firstSeenAt ?? timestamp,
     firstTestedAt: base.firstTestedAt ?? timestamp,
     firstResult: base.firstResult ?? result,
-    consecutiveGood: result === "good" ? base.consecutiveGood + 1 : 0,
     updatedAt: timestamp,
   };
 }
@@ -309,31 +307,35 @@ export class LocalPhraseRepository implements PhraseRepository {
   async submitReview(id: string, result: ReviewResult, now = new Date()) {
     const db = await this.db();
     const tx = db.transaction(["phrases", "reviewLogs", "phraseLearningState"], "readwrite");
-    const phrase = await tx.objectStore("phrases").get(id);
-    if (!phrase) throw new Error("找不到这条语言块");
-    const stateStore = tx.objectStore("phraseLearningState");
-    const currentState = await stateStore.get(id);
-    if (currentState?.stage !== "learned" && currentState?.stage !== "mastered") {
-      try { tx.abort(); } catch { /* Transaction may already be inactive. */ }
-      try { await tx.done; } catch { /* Preserve the domain error. */ }
-      throw new Error("这句话尚未完成新句学习，不能进入复习");
-    }
-    const scheduled = scheduleReview(phrase, result, now);
-    await tx.objectStore("phrases").put(scheduled.phrase);
-    await tx.objectStore("reviewLogs").put(scheduled.log);
-    const nextState = reviewedState(currentState, scheduled.phrase, result, now);
-    await stateStore.put(nextState);
-    if (phrase.origin === "system") {
-      const parentId = phrase.kind === "core" ? phrase.id : phrase.parentPhraseId;
-      const examples = parentId ? await tx.objectStore("phrases").index("by-parent").getAll(parentId) : [];
-      const states = await stateStore.getAll();
-      const unlock = nextExampleToUnlock(phrase, examples, [...states.filter(({ phraseId }) => phraseId !== id), nextState]);
-      if (unlock) {
-        const target = await stateStore.get(unlock.id) ?? unseenState(unlock.id, now.toISOString());
-        await stateStore.put({ ...target, unlockedAt: now.toISOString(), updatedAt: now.toISOString() });
+    try {
+      const phrase = await tx.objectStore("phrases").get(id);
+      if (!phrase) throw new Error("找不到这条语言块");
+      const stateStore = tx.objectStore("phraseLearningState");
+      const currentState = await stateStore.get(id);
+      if (currentState?.stage !== "learned" && currentState?.stage !== "mastered") {
+        throw new Error("这句话尚未完成新句学习，不能进入复习");
       }
+      const scheduled = scheduleReview(phrase, result, now);
+      await tx.objectStore("phrases").put(scheduled.phrase);
+      await tx.objectStore("reviewLogs").put(scheduled.log);
+      const nextState = reviewedState(currentState, phrase.id, result, now);
+      await stateStore.put(nextState);
+      if (phrase.origin === "system") {
+        const parentId = phrase.kind === "core" ? phrase.id : phrase.parentPhraseId;
+        const examples = parentId ? await tx.objectStore("phrases").index("by-parent").getAll(parentId) : [];
+        const states = await stateStore.getAll();
+        const unlock = nextExampleToUnlock(phrase, examples, [...states.filter(({ phraseId }) => phraseId !== id), nextState]);
+        if (unlock) {
+          const target = await stateStore.get(unlock.id) ?? unseenState(unlock.id, now.toISOString());
+          await stateStore.put({ ...target, unlockedAt: now.toISOString(), updatedAt: now.toISOString() });
+        }
+      }
+      await tx.done;
+    } catch (error) {
+      try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }
+      try { await tx.done; } catch { /* Preserve the original error. */ }
+      throw error;
     }
-    await tx.done;
   }
   async listCategories() { return (await (await this.db()).getAll("categories")).sort((a, b) => a.createdAt.localeCompare(b.createdAt)); }
   async saveCategory(category: Category) { await (await this.db()).put("categories", category); }
@@ -433,7 +435,7 @@ export class LocalPhraseRepository implements PhraseRepository {
     const stateStore = tx.objectStore("phraseLearningState");
     const reviewTime = new Date(event.occurredAt);
     const currentState = await stateStore.get(phrase.id);
-    const nextState = reviewedState(currentState, scheduled.phrase, event.result, reviewTime);
+    const nextState = reviewedState(currentState, phrase.id, event.result, reviewTime);
     await stateStore.put(nextState);
     if (phrase.origin === "system") {
       const parentId = phrase.kind === "core" ? phrase.id : phrase.parentPhraseId;
@@ -603,7 +605,7 @@ export class LocalPhraseRepository implements PhraseRepository {
       const scheduled = scheduleReview(phrase, event.result, reviewTime);
       await phraseStore.put(scheduled.phrase);
       await tx.objectStore("reviewLogs").put(scheduled.log);
-      const nextState = reviewedState(currentState, scheduled.phrase, event.result, reviewTime);
+      const nextState = reviewedState(currentState, phrase.id, event.result, reviewTime);
       await stateStore.put(nextState);
       if (phrase.origin === "system") {
         const parentId = phrase.kind === "core" ? phrase.id : phrase.parentPhraseId;

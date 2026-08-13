@@ -36,7 +36,7 @@ export function scheduleReview(phrase: Phrase, result: ReviewResult, now = new D
     due = addDays(now, 1);
   } else if (result === "hard") {
     masteryLevel = Math.max(1, masteryLevel);
-    due = addDays(now, 3);
+    due = addDays(now, 1);
   } else {
     const intervalIndex = Math.min(reviewStep, REVIEW_INTERVAL_DAYS.length - 1);
     due = addDays(now, REVIEW_INTERVAL_DAYS[intervalIndex]);
