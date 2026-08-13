@@ -16,6 +16,16 @@ type Screen = "home" | "library" | "add" | "learn" | "review" | "practice" | "se
 type Repository = PhraseRepository;
 type InitializationStatus = "loading" | "ready" | "error";
 const defaultRepository = typeof window === "undefined" ? undefined : new LocalPhraseRepository();
+const repositoryReviewKeys = new WeakMap<PhraseRepository, number>();
+let nextRepositoryReviewKey = 1;
+const repositoryReviewKey = (repository: PhraseRepository | undefined) => {
+  if (!repository) return 0;
+  const existing = repositoryReviewKeys.get(repository);
+  if (existing) return existing;
+  const key = nextRepositoryReviewKey++;
+  repositoryReviewKeys.set(repository, key);
+  return key;
+};
 const shanghaiDate = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const shanghaiTimestampDate = (timestamp: string) => { const value = new Date(timestamp); return Number.isNaN(value.getTime()) ? "" : new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(value); };
 const mondayOf = (date: string) => { const value = new Date(`${date}T00:00:00.000Z`); value.setUTCDate(value.getUTCDate() - ((value.getUTCDay() + 6) % 7)); return value.toISOString().slice(0, 10); };
@@ -154,7 +164,7 @@ export function PhraseBankApp({ repository, contentInstaller }: { repository?: R
       <ScreenLoadBoundary key={screen} onRetry={() => setLazyScreens(createLazyScreens())}><Suspense fallback={<ScreenLoading screen={screen} />}>{screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={saveAddedPhrase} onRetryState={retryAddedPhraseState} onComplete={completeAddedPhrase} />}
       {screen === "learn" && repo && <LearningSession repository={repo} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}
-      {screen === "review" && <Review phrases={eligibleDue} onBack={() => go("home")} onGrade={async (id, result, operationId) => { if (!repo) return; await repo.submitReview(id, result, undefined, operationId); await refresh(); }} />}
+      {screen === "review" && <Review key={repositoryReviewKey(repo)} phrases={eligibleDue} onBack={() => go("home")} onGrade={async (id, result, operationId) => { if (!repo) return; await repo.submitReview(id, result, undefined, operationId); await refresh(); }} />}
       {screen === "practice" && repo && <PracticeSession key={`${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => { setTrainingRun((run) => run + 1); void refresh().catch(() => setError("本地数据暂时无法刷新，请稍后再试。")); }} setError={setError} />}
       {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} appPreferences={home.data?.appPreferences ?? { dailyMasteryGoal: 10 }} refresh={refresh} setNotice={setNotice} setError={setError} />}</Suspense></ScreenLoadBoundary>
     </main>

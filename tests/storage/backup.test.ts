@@ -155,6 +155,21 @@ describe("backup parsing", () => {
     expect(parseBackup(JSON.stringify(migrated))).toEqual(migrated);
   });
 
+  it("normalizes current backup mastery from effective dates without a version bump", () => {
+    const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 3, masteryLevel: 3, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const base = { ...valid, version: 5, phrases: [phrase], trainingEvents: [], trainingSessions: [], learningSessions: [], appPreferences: { dailyMasteryGoal: 10 } };
+    const metadata = { firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt, firstResult: "good", updatedAt: valid.exportedAt };
+    const falseMastered = { phraseId: "p1", stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-07"], ...metadata };
+    const falseLearned = { phraseId: "p1", stage: "learned", consecutiveGood: 0, masteredDates: ["2026-08-07", "2026-08-08", "2026-08-09"], ...metadata };
+
+    expect(parseBackup(JSON.stringify({ ...base, phraseLearningStates: [falseMastered] }))).toMatchObject({
+      version: 5, phraseLearningStates: [{ stage: "learned", consecutiveGood: 1 }],
+    });
+    expect(parseBackup(JSON.stringify({ ...base, phraseLearningStates: [falseLearned] }))).toMatchObject({
+      version: 5, phraseLearningStates: [{ stage: "mastered", consecutiveGood: 3 }],
+    });
+  });
+
   it("requires learningSessions in v4 and validates learning-session fields and references", () => {
     const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
     const session = { id: "ls1", date: "2026-08-07", themeCategoryId: "daily", phraseIds: ["p1"], studyIndex: 0, testIndex: 0, phase: "study", startedAt: valid.exportedAt, updatedAt: valid.exportedAt };
@@ -177,7 +192,7 @@ describe("backup parsing", () => {
       { phraseId: "p1", stage: "unseen", consecutiveGood: 0, masteredDates: [], updatedAt: valid.exportedAt },
       { phraseId: "p1", stage: "learning", firstSeenAt: valid.exportedAt, consecutiveGood: 0, masteredDates: [], updatedAt: valid.exportedAt },
       { phraseId: "p1", stage: "learned", firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt, firstResult: "hard", consecutiveGood: 0, masteredDates: [], updatedAt: valid.exportedAt },
-      { phraseId: "p1", stage: "mastered", firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt, firstResult: "good", consecutiveGood: 3, masteredDates: [], updatedAt: valid.exportedAt },
+      { phraseId: "p1", stage: "mastered", firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt, firstResult: "good", consecutiveGood: 3, masteredDates: ["2026-08-07", "2026-08-08", "2026-08-09"], updatedAt: valid.exportedAt },
     ];
     for (const state of validStates) expect(parseBackup(JSON.stringify({ ...base, phraseLearningStates: [state] })).phraseLearningStates).toEqual([state]);
     const invalidStates = [
@@ -202,7 +217,7 @@ describe("backup parsing", () => {
 
     const legacyCompatibleState = Object.fromEntries(Object.entries(state).filter(([key]) => key !== "masteryResetAt"));
     expect(parseBackup(JSON.stringify({ ...v5, phraseLearningStates: [legacyCompatibleState] }))).toMatchObject({
-      version: 5, phraseLearningStates: [legacyCompatibleState],
+      version: 5, phraseLearningStates: [{ ...legacyCompatibleState, consecutiveGood: 1 }],
     });
   });
 

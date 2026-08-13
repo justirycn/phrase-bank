@@ -639,6 +639,38 @@ describe("LocalPhraseRepository", () => {
     await expect(repo.completeLearningSession("missing", completedAt)).rejects.toThrow("找不到学习会话");
   });
 
+  it("normalizes already-v5 mastery on import and repairs persisted current database state", async () => {
+    const phrase = { ...createNewPhrase({ english: "Current state", chinese: "当前状态", categoryId: "daily" }), id: "current-state" };
+    await repo.savePhrase(phrase);
+    const snapshot = await repo.exportSnapshot();
+    const metadata = { phraseId: phrase.id, firstSeenAt: snapshot.exportedAt, firstTestedAt: snapshot.exportedAt, firstResult: "good" as const, updatedAt: snapshot.exportedAt };
+    await repo.importSnapshot({
+      ...snapshot,
+      phrases: [...snapshot.phrases.filter(({ id }) => id !== phrase.id), phrase],
+      phraseLearningStates: [...snapshot.phraseLearningStates.filter(({ phraseId }) => phraseId !== phrase.id), {
+        ...metadata, stage: "mastered", consecutiveGood: 3, masteredDates: ["2026-08-07"],
+      }],
+    }, "overwrite");
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({ stage: "learned", consecutiveGood: 1 });
+
+    await repo.savePhraseLearningState({ ...metadata, stage: "learned", consecutiveGood: 0, masteredDates: ["2026-08-07", "2026-08-08", "2026-08-09"] });
+    expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({ stage: "mastered", consecutiveGood: 3 });
+
+    const dbName = `current-v5-${crypto.randomUUID()}`;
+    const persisted = new LocalPhraseRepository(dbName);
+    await persisted.initialize();
+    await persisted.savePhrase(phrase);
+    const request = indexedDB.open(dbName, 5);
+    const rawDb = await new Promise<IDBDatabase>((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+    const rawTx = rawDb.transaction("phraseLearningState", "readwrite");
+    rawTx.objectStore("phraseLearningState").put({ ...metadata, stage: "mastered", consecutiveGood: 3, masteredDates: [] });
+    await new Promise<void>((resolve, reject) => { rawTx.oncomplete = () => resolve(); rawTx.onerror = () => reject(rawTx.error); });
+    rawDb.close();
+    const reopened = new LocalPhraseRepository(dbName);
+    await reopened.initialize();
+    expect(await reopened.getPhraseLearningState(phrase.id)).toMatchObject({ stage: "learned", consecutiveGood: 0 });
+  });
+
   it("creates legal unseen states for seeded and installed phrases", async () => {
     expect(await repo.getPhraseLearningState("starter-daily-not-sure")).toMatchObject({ stage: "unseen", consecutiveGood: 0, masteredDates: [] });
     await repo.installSystemContentPackage(contentPackage("v1"));

@@ -48,6 +48,16 @@ function resultEvidence(phraseId: string, logs: ReviewLog[], events: TrainingEve
   return [...paired.values()].sort(compareEvidence);
 }
 
+export function normalizeCurrentLearningState(state: PhraseLearningState): PhraseLearningState {
+  if (state.stage !== "learned" && state.stage !== "mastered") return state;
+  const consecutiveGood = effectiveMasteryDates(state).length;
+  return {
+    ...state,
+    stage: consecutiveGood >= 3 ? "mastered" : "learned",
+    consecutiveGood,
+  };
+}
+
 export function normalizeLegacyLearningState(phrase: Phrase, legacy: LegacyLearningState | undefined, logs: ReviewLog[], events: TrainingEvent[]): PhraseLearningState {
   const evidence = resultEvidence(phrase.id, logs, events);
   const earliest = evidence[0];
@@ -87,8 +97,8 @@ export function normalizeLegacyLearningState(phrase: Phrase, legacy: LegacyLearn
 }
 
 export function normalizeLegacyBackup(backup: BackupEnvelope): BackupEnvelopeV5 {
-  if (backup.version === 5) return backup;
-  if (backup.version === 4) return { ...backup, version: 5, appPreferences: defaultAppPreferences() };
+  if (backup.version === 5) return { ...backup, phraseLearningStates: backup.phraseLearningStates.map(normalizeCurrentLearningState) };
+  if (backup.version === 4) return { ...backup, version: 5, phraseLearningStates: backup.phraseLearningStates.map(normalizeCurrentLearningState), appPreferences: defaultAppPreferences() };
   const phrases = backup.phrases.map((phrase) => ({ origin: "personal", kind: "standalone", ...phrase })) as Phrase[];
   const trainingEvents = backup.version === 1 ? [] : backup.trainingEvents;
   const trainingSessions = backup.version === 1 ? [] : backup.trainingSessions;
@@ -233,7 +243,7 @@ export function parseBackup(raw: string): BackupEnvelopeV5 {
   return {
     format: "personal-phrase-bank", version: 5, exportedAt: backup.exportedAt,
     categories: backup.categories, phrases, reviewLogs: backup.reviewLogs,
-    trainingEvents, trainingSessions, phraseLearningStates, learningSessions, appPreferences: backup.appPreferences,
+    trainingEvents, trainingSessions, phraseLearningStates: phraseLearningStates.map(normalizeCurrentLearningState), learningSessions, appPreferences: backup.appPreferences,
     ...(backup.version >= 3 && backup.activeSystemContentVersion ? { activeSystemContentVersion: backup.activeSystemContentVersion } : {}),
   };
 }

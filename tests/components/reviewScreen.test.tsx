@@ -47,4 +47,32 @@ describe("ReviewScreen operation identity", () => {
     resolve();
     expect(await screen.findByText(/今天完成了/)).toBeVisible();
   });
+
+  it("keeps the immutable B queue item when refresh removes graded A", async () => {
+    const view = render(<Review phrases={[phrase("p1"), phrase("p2")]} onBack={vi.fn()} onGrade={async () => undefined} />);
+    const onGrade = vi.fn(async () => {
+      view.rerender(<Review phrases={[phrase("p2")]} onBack={vi.fn()} onGrade={onGrade} />);
+    });
+    view.rerender(<Review phrases={[phrase("p1"), phrase("p2")]} onBack={vi.fn()} onGrade={onGrade} />);
+    fireEvent.click(screen.getByRole("button", { name: "显示英文答案" }));
+    fireEvent.click(screen.getByRole("button", { name: /掌握/ }));
+
+    expect(await screen.findByText("中文 p2")).toBeVisible();
+    expect(screen.queryByText(/今天完成了/)).not.toBeInTheDocument();
+  });
+
+  it("does not advance a replacement repository queue when the old grade resolves", async () => {
+    let resolveOld!: () => void;
+    const oldGrade = vi.fn(() => new Promise<void>((resolve) => { resolveOld = resolve; }));
+    const newGrade = vi.fn(async () => undefined);
+    const view = render(<Review key="repo-a" phrases={[phrase("old-a"), phrase("old-b")]} onBack={vi.fn()} onGrade={oldGrade} />);
+    fireEvent.click(screen.getByRole("button", { name: "显示英文答案" }));
+    fireEvent.click(screen.getByRole("button", { name: /掌握/ }));
+    view.rerender(<Review key="repo-b" phrases={[phrase("new-a"), phrase("new-b")]} onBack={vi.fn()} onGrade={newGrade} />);
+
+    resolveOld();
+
+    expect(await screen.findByText("中文 new-a")).toBeVisible();
+    expect(screen.queryByText("中文 new-b")).not.toBeInTheDocument();
+  });
 });

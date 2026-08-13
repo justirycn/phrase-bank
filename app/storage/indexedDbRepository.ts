@@ -6,7 +6,7 @@ import { applyLearningResult, nextExampleToUnlock } from "../domain/learningProg
 import { DAILY_NEW_PHRASE_LIMIT } from "../domain/learningSelection";
 import { defaultCategories } from "./seed";
 import { STARTER_PHRASES } from "./starterPhrases";
-import { assertValidLearningSession, normalizeLegacyBackup, normalizeLegacyLearningState } from "./backup";
+import { assertValidLearningSession, normalizeCurrentLearningState, normalizeLegacyBackup, normalizeLegacyLearningState } from "./backup";
 import type { PhraseRepository } from "./repository";
 
 interface PhraseBankDb extends DBSchema {
@@ -184,6 +184,15 @@ export class LocalPhraseRepository implements PhraseRepository {
     const db = await this.db();
     const tx = db.transaction(["categories", "phrases", "metadata", "phraseLearningState"], "readwrite");
     const metadata = tx.objectStore("metadata");
+    const stateStore = tx.objectStore("phraseLearningState");
+    let stateCursor = await stateStore.openCursor();
+    while (stateCursor) {
+      const normalized = normalizeCurrentLearningState(stateCursor.value);
+      if (normalized.stage !== stateCursor.value.stage || normalized.consecutiveGood !== stateCursor.value.consecutiveGood) {
+        await stateCursor.update(normalized);
+      }
+      stateCursor = await stateCursor.continue();
+    }
     const initialized = await metadata.get("initialized");
     if (!initialized) {
       for (const item of defaultCategories()) await tx.objectStore("categories").put(item);
@@ -198,7 +207,6 @@ export class LocalPhraseRepository implements PhraseRepository {
     if (starterVersion?.value !== "1") {
       const timestamp = new Date().toISOString();
       const phraseStore = tx.objectStore("phrases");
-      const stateStore = tx.objectStore("phraseLearningState");
       for (const starter of STARTER_PHRASES) {
         const existing = await phraseStore.get(starter.id);
         if (!existing) {
@@ -485,9 +493,9 @@ export class LocalPhraseRepository implements PhraseRepository {
     if (!Number.isInteger(preferences.dailyMasteryGoal) || preferences.dailyMasteryGoal <= 0) throw new Error("每日掌握目标必须是正整数");
     await (await this.db()).put("metadata", { key: "appPreferences", value: JSON.stringify(preferences) });
   }
-  async listPhraseLearningStates() { return (await this.db()).getAll("phraseLearningState"); }
-  async getPhraseLearningState(id: string) { return (await this.db()).get("phraseLearningState", id); }
-  async savePhraseLearningState(state: PhraseLearningState) { await (await this.db()).put("phraseLearningState", state); }
+  async listPhraseLearningStates() { return (await (await this.db()).getAll("phraseLearningState")).map(normalizeCurrentLearningState); }
+  async getPhraseLearningState(id: string) { const state = await (await this.db()).get("phraseLearningState", id); return state ? normalizeCurrentLearningState(state) : undefined; }
+  async savePhraseLearningState(state: PhraseLearningState) { await (await this.db()).put("phraseLearningState", normalizeCurrentLearningState(state)); }
   async saveLearningSession(session: LearningSessionRecord) {
     const db = await this.db();
     const tx = db.transaction(["learningSessions", "phrases", "categories", "metadata"], "readwrite");
