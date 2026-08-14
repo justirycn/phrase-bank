@@ -125,7 +125,7 @@ describe("summarizeDailyTraining", () => {
 });
 
 describe("summarizeDailySentenceProgress", () => {
-  it("separates third-day mastery from earlier effective good-day consolidation", () => {
+  it("counts distinct correct phrases separately from third-day mastery", () => {
     const result = summarizeDailySentenceProgress("2026-08-09", [
       event("third-day", "phrase-1", "good", "2026-08-08T16:01:00.000Z"),
       event("third-day-repeat", "phrase-1", "good", "2026-08-09T03:00:00.000Z"),
@@ -145,14 +145,14 @@ describe("summarizeDailySentenceProgress", () => {
       state("phrase-6", { stage: "mastered", consecutiveGood: 4, masteredDates: ["2026-08-05", "2026-08-06", "2026-08-07", "2026-08-09"] }),
     ]);
 
-    expect(result).toEqual({ mastered: 1, consolidated: 3, reviewed: 5 });
+    expect(result).toEqual({ correct: 5, mastered: 1, reviewed: 5 });
   });
 
   it("returns zero for an invalid day", () => {
-    expect(summarizeDailySentenceProgress("invalid", [], [])).toEqual({ mastered: 0, consolidated: 0, reviewed: 0 });
+    expect(summarizeDailySentenceProgress("invalid", [], [])).toEqual({ correct: 0, mastered: 0, reviewed: 0 });
   });
 
-  it("does not count effective remastery as a new first mastery or consolidation", () => {
+  it("counts a correct remastery answer without counting another first mastery", () => {
     const remastered = state("remastered", {
       stage: "mastered", consecutiveGood: 3,
       masteredDates: ["2026-08-01", "2026-08-02", "2026-08-03", "2026-08-10", "2026-08-11", "2026-08-12"],
@@ -161,7 +161,7 @@ describe("summarizeDailySentenceProgress", () => {
 
     expect(summarizeDailySentenceProgress("2026-08-12", [
       event("remastery-good", "remastered", "good", "2026-08-12T08:00:00.000Z"),
-    ], [remastered])).toEqual({ mastered: 0, consolidated: 0, reviewed: 1 });
+    ], [remastered])).toEqual({ correct: 1, mastered: 0, reviewed: 1 });
   });
 });
 

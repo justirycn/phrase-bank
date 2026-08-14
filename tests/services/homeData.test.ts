@@ -54,7 +54,7 @@ describe("loadHomeData", () => {
       activeTrainingSession: { id: "active-training" }, activeLearningSession: { id: "active-learning" },
       appPreferences: { dailyMasteryGoal: 12 },
       outcomes: {
-        dailyProgress: { mastered: 0, consolidated: 0, reviewed: 0 },
+        dailyProgress: { correct: 0, mastered: 0, reviewed: 0 },
         streak: { current: 0, lightDaysUsedThisWeek: 0 },
         weeklySummary: { weekStart: "2026-08-10", masteredCount: 0, retentionRate: undefined, forgettableCount: 0 },
       },
