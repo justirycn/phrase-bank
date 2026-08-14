@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TrainingHome } from "../../app/components/TrainingHome";
 
 const base = {
-  dailyProgress: { mastered: 3, consolidated: 2, reviewed: 4 },
+  dailyProgress: { correct: 3, mastered: 2, reviewed: 4 },
   streak: { current: 0, longest: 0 },
   weeklySummary: { weekStart: "2026-08-03", activeSeconds: 0, completedGroups: 0, spokenCount: 0, masteredCount: 0, promotedCount: 0, retentionRate: undefined, forgettableCount: 0, weakPhraseIds: [] },
   learnedToday: 2, nextLearningCount: 0, dueCount: 0,
@@ -25,8 +25,8 @@ describe("TrainingHome heatmap", () => {
     fireEvent.click(screen.getByRole("button", { name: /继续今日任务/ }));
     fireEvent.click(screen.getByRole("button", { name: /学习新句/ }));
     fireEvent.click(screen.getByRole("button", { name: /到期复习/ }));
-    expect(screen.getByText("今日掌握")).toBeVisible();
-    expect(screen.getByText("今日巩固")).toBeVisible();
+    expect(screen.getByText("今日答对")).toBeVisible();
+    expect(screen.getByText("三日掌握")).toBeVisible();
     expect(screen.getByText("2 句")).toBeVisible();
     expect(screen.getByText("3 / 10 句")).toBeVisible();
     expect(screen.getByText("新学 2 句 · 复习 4 句")).toBeVisible();
@@ -40,17 +40,19 @@ describe("TrainingHome heatmap", () => {
     [7, "还差 3 句"],
     [10, "已完成今日目标"],
     [14, "超额完成 4 句"],
-  ])("shows mastery goal progress for %i mastered phrases", (mastered, status) => {
-    render(<TrainingHome {...base} dailyProgress={{ mastered, consolidated: 1, reviewed: 2 }} dailyMasteryGoal={10} />);
+  ])("shows daily correct goal progress for %i correct phrases", (correct, status) => {
+    render(<TrainingHome {...base} dailyProgress={{ correct, mastered: 1, reviewed: 2 }} dailyMasteryGoal={10} />);
 
-    const progress = screen.getByRole("progressbar", { name: "今日掌握进度" });
+    const progress = screen.getByRole("progressbar", { name: "今日答对进度" });
     expect(progress).toHaveAttribute("aria-valuemin", "0");
     expect(progress).toHaveAttribute("aria-valuemax", "10");
-    expect(progress).toHaveAttribute("aria-valuenow", String(Math.min(10, mastered)));
-    expect(progress).toHaveAttribute("aria-valuetext", mastered > 10 ? `${mastered} / 10 句，超额 ${mastered - 10} 句` : `${mastered} / 10 句`);
-    expect(screen.getByText(`${mastered} / 10 句`)).toBeVisible();
+    expect(progress).toHaveAttribute("aria-valuenow", String(Math.min(10, correct)));
+    expect(progress).toHaveAttribute("aria-valuetext", correct > 10 ? `${correct} / 10 句，超额 ${correct - 10} 句` : `${correct} / 10 句`);
+    expect(screen.getByText(`${correct} / 10 句`)).toBeVisible();
+    expect(screen.getByText("三日掌握").parentElement).toHaveTextContent("1 句");
+    expect(screen.queryByText("今日巩固")).not.toBeInTheDocument();
     expect(screen.getByText(status)).toBeVisible();
-    expect(progress.querySelector("i")).toHaveStyle({ width: `${Math.min(100, mastered * 10)}%` });
+    expect(progress.querySelector("i")).toHaveStyle({ width: `${Math.min(100, correct * 10)}%` });
   });
 
   it("labels only scheduled phrases as due review and uses a distinct review icon", () => {

@@ -6,7 +6,7 @@ import { WeeklySummary, type WeeklyFocusPhrase } from "./WeeklySummary";
 
 export function TrainingHome({ dailyProgress, dailyMasteryGoal = 10, weeklySummary, focusPhrases, learnedToday, nextLearningCount, themeName, activeLearning, activeRemaining, activeReview, reviewRemaining, dueCount, heatmapDays, heatmapError, onRetryHeatmap, onContinue, onStartLearning, onStartStandard }: {
   streak: TrainingStreak; weeklySummary: WeeklySummaryType;
-  dailyProgress: { mastered: number; consolidated: number; reviewed: number };
+  dailyProgress: { correct: number; mastered: number; reviewed: number };
   dailyMasteryGoal?: number;
   focusPhrases?: WeeklyFocusPhrase[];
   learnedToday: number; nextLearningCount: number; themeName?: string; activeLearning?: boolean; activeRemaining?: number; activeReview?: boolean; reviewRemaining?: number; dueCount: number;
@@ -15,17 +15,17 @@ export function TrainingHome({ dailyProgress, dailyMasteryGoal = 10, weeklySumma
   onStartLearning: () => void;
   onStartStandard: () => void;
 }) {
-  const masteryRemaining = dailyMasteryGoal - dailyProgress.mastered;
-  const masteryStatus = masteryRemaining > 0
-    ? `还差 ${masteryRemaining} 句`
-    : masteryRemaining === 0
+  const correctRemaining = dailyMasteryGoal - dailyProgress.correct;
+  const correctStatus = correctRemaining > 0
+    ? `还差 ${correctRemaining} 句`
+    : correctRemaining === 0
       ? "已完成今日目标"
-      : `超额完成 ${Math.abs(masteryRemaining)} 句`;
-  const masteryPercent = Math.min(100, (dailyProgress.mastered / dailyMasteryGoal) * 100);
+      : `超额完成 ${Math.abs(correctRemaining)} 句`;
+  const correctPercent = Math.min(100, (dailyProgress.correct / dailyMasteryGoal) * 100);
 
   return <div className="training-home">
-    <header><p className="eyebrow">TODAY&apos;S SPEAKING</p><h1>{dailyProgress.mastered > 0 ? "今天有进步" : "今天，说出来"}</h1><p>先完成到期复习，再认识几句真正用得上的表达。</p></header>
-    <section className="daily-progress" aria-label="今日句子进度"><div><span>今日掌握</span><strong>{dailyProgress.mastered} / {dailyMasteryGoal} 句</strong></div><div className="daily-progress-track" role="progressbar" aria-label="今日掌握进度" aria-valuemin={0} aria-valuemax={dailyMasteryGoal} aria-valuenow={Math.min(dailyMasteryGoal, dailyProgress.mastered)} aria-valuetext={dailyProgress.mastered > dailyMasteryGoal ? `${dailyProgress.mastered} / ${dailyMasteryGoal} 句，超额 ${dailyProgress.mastered - dailyMasteryGoal} 句` : `${dailyProgress.mastered} / ${dailyMasteryGoal} 句`}><i style={{ width: `${masteryPercent}%` }} /></div><p className="daily-goal-status">{masteryStatus}</p><p className="daily-consolidated"><span>今日巩固</span><strong>{dailyProgress.consolidated} 句</strong></p><p>新学 {learnedToday} 句 · 复习 {dailyProgress.reviewed} 句</p></section>
+    <header><p className="eyebrow">TODAY&apos;S SPEAKING</p><h1>{dailyProgress.correct > 0 ? "今天有进步" : "今天，说出来"}</h1><p>先完成到期复习，再认识几句真正用得上的表达。</p></header>
+    <section className="daily-progress" aria-label="今日句子进度"><div><span>今日答对</span><strong>{dailyProgress.correct} / {dailyMasteryGoal} 句</strong></div><div className="daily-progress-track" role="progressbar" aria-label="今日答对进度" aria-valuemin={0} aria-valuemax={dailyMasteryGoal} aria-valuenow={Math.min(dailyMasteryGoal, dailyProgress.correct)} aria-valuetext={dailyProgress.correct > dailyMasteryGoal ? `${dailyProgress.correct} / ${dailyMasteryGoal} 句，超额 ${dailyProgress.correct - dailyMasteryGoal} 句` : `${dailyProgress.correct} / ${dailyMasteryGoal} 句`}><i style={{ width: `${correctPercent}%` }} /></div><p className="daily-goal-status">{correctStatus}</p><p className="daily-consolidated"><span>三日掌握</span><strong>{dailyProgress.mastered} 句</strong></p><p>新学 {learnedToday} 句 · 复习 {dailyProgress.reviewed} 句</p></section>
     <div className="training-entry">
       <button className="continue-start" onClick={onContinue}><span><AppIcon name="play" size={24} /><b>继续今日任务</b><small>{activeLearning ? "继续未完成的新句学习" : activeReview ? `继续未完成的到期复习 · 剩余 ${reviewRemaining ?? 0} 句` : dueCount > 0 ? `${dueCount} 句到期` : nextLearningCount > 0 ? `下一组 ${nextLearningCount} 句新内容` : "今天的任务已完成"}</small></span><AppIcon name="forward" size={22} /></button>
       <button className="learning-start" onClick={onStartLearning}><span><AppIcon name="library" size={24} /><b>学习新句</b><small>今天已学 {learnedToday} / 15 · {activeLearning ? `恢复本组：剩余 ${activeRemaining ?? nextLearningCount} / 共 ${nextLearningCount} 句${themeName ? ` · ${themeName}` : ""}` : nextLearningCount > 0 ? `下一组 ${nextLearningCount} 句${themeName ? ` · ${themeName}` : ""}` : learnedToday >= 15 ? "今日学习完成" : "暂无新句"}</small></span><AppIcon name="forward" size={22} /></button>

@@ -266,6 +266,31 @@ describe("PhraseBankApp", () => {
     await user.click(screen.getByRole("button", { name: "回到首页" }));
     expect(await screen.findByRole("button", { name: /到期复习/ })).toHaveTextContent("2 句到期");
   });
+
+  it("opens a learned phrase scheduled later on the same Shanghai day", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-14T02:00:00.000Z"));
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const repo = new MemoryRepository();
+      repo.phrases = [makePhrase({
+        id: "later-today",
+        english: "Later today",
+        chinese: "今天按自然日复习",
+        nextReviewAt: "2026-08-14T12:00:00.000Z",
+      })];
+      repo.learningStates = [learnedState("later-today")];
+
+      render(<PhraseBankApp repository={repo as never} />);
+      const review = await screen.findByRole("button", { name: /到期复习/ });
+      expect(review).toHaveTextContent("1 句到期");
+      await user.click(review);
+      expect(await screen.findByText("今天按自然日复习")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("shows continue, new learning, and resumable review entries without quick practice", async () => {
     const repo = new MemoryRepository();
     repo.phrases = [
@@ -585,7 +610,7 @@ describe("PhraseBankApp", () => {
     repo.learningStates.push({ phraseId: "p1", stage: "mastered", consecutiveGood: 3, masteredDates: threeMasteryDatesEndingOn(today), updatedAt: now });
     render(<PhraseBankApp repository={repo as never} />);
     expect(await screen.findByText("1 / 10 句")).toBeVisible();
-    expect(screen.getByText("今日巩固").parentElement).toHaveTextContent("0 句");
+    expect(screen.getByText("三日掌握").parentElement).toHaveTextContent("1 句");
     expect(screen.getByText("新学 0 句 · 复习 1 句")).toBeVisible();
     expect(screen.queryByText(/30 分钟/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /到期复习/ })).toBeVisible();
@@ -699,7 +724,7 @@ describe("PhraseBankApp", () => {
     render(<PhraseBankApp repository={repo as never} />);
     expect(await screen.findByText("0 / 10 句")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "设置" }));
-    const input = await screen.findByRole("spinbutton", { name: "每日掌握目标" });
+    const input = await screen.findByRole("spinbutton", { name: "每日答对目标" });
     expect(input).toHaveValue(10);
     await user.clear(input); await user.type(input, "18");
     await user.click(screen.getByRole("button", { name: "保存每日目标" }));
@@ -712,10 +737,10 @@ describe("PhraseBankApp", () => {
     const user = userEvent.setup(); const repo = new MemoryRepository();
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: "设置" }));
-    const input = await screen.findByRole("spinbutton", { name: "每日掌握目标" });
+    const input = await screen.findByRole("spinbutton", { name: "每日答对目标" });
     await user.clear(input); if (value) await user.type(input, value);
     await user.click(screen.getByRole("button", { name: "保存每日目标" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("每日掌握目标必须是正整数");
+    expect(await screen.findByRole("alert")).toHaveTextContent("每日答对目标必须是正整数");
     expect(repo.appPreferenceSaves).toEqual([]);
   });
 
@@ -723,10 +748,10 @@ describe("PhraseBankApp", () => {
     const user = userEvent.setup(); const repo = new MemoryRepository(); repo.failAppPreferenceSave = true;
     render(<PhraseBankApp repository={repo as never} />);
     await user.click(await screen.findByRole("button", { name: "设置" }));
-    const input = await screen.findByRole("spinbutton", { name: "每日掌握目标" });
+    const input = await screen.findByRole("spinbutton", { name: "每日答对目标" });
     await user.clear(input); await user.type(input, "20");
     await user.click(screen.getByRole("button", { name: "保存每日目标" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("每日掌握目标保存失败");
+    expect(await screen.findByRole("alert")).toHaveTextContent("每日答对目标保存失败");
     expect(input).toHaveValue(10);
   });
 
