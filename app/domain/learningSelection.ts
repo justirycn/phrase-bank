@@ -7,7 +7,7 @@ export interface LearningSelectionOptions {
   reservedPhraseIds?: ReadonlySet<string>;
 }
 
-export const DAILY_NEW_PHRASE_LIMIT = 15;
+export const AUTONOMOUS_LEARNING_GROUP_SIZE = 5;
 
 export interface LearningGroupPreview {
   themeCategoryId?: string;
@@ -76,7 +76,7 @@ export function previewLearningGroup(
   phrases: Phrase[],
   states: PhraseLearningState[],
   categoryIds: readonly string[],
-  options: { date: string; remaining: number },
+  options: { date: string },
 ): LearningGroupPreview {
   const validCategories = new Set(categoryIds);
   const stateById = new Map(states.map((state) => [state.phraseId, state]));
@@ -89,9 +89,9 @@ export function previewLearningGroup(
   const themeCategoryId = systemThemes.length > 0
     ? systemThemes[dateRotationIndex(options.date, systemThemes.length)]
     : personal[0]?.categoryId;
-  if (!themeCategoryId || options.remaining <= 0) return { themeCategoryId, phrases: [] };
+  if (!themeCategoryId) return { themeCategoryId, phrases: [] };
   return {
     themeCategoryId,
-    phrases: selectLearningGroup(phrases, states, { date: options.date, themeCategoryId, target: Math.min(5, options.remaining) }),
+    phrases: selectLearningGroup(phrases, states, { date: options.date, themeCategoryId, target: AUTONOMOUS_LEARNING_GROUP_SIZE }),
   };
 }

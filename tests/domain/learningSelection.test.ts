@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { previewLearningGroup, selectLearningGroup } from "../../app/domain/learningSelection";
+import {
+  AUTONOMOUS_LEARNING_GROUP_SIZE,
+  previewLearningGroup,
+  selectLearningGroup,
+} from "../../app/domain/learningSelection";
 import type { Phrase, PhraseLearningState } from "../../app/domain/types";
 
 const timestamp = "2026-08-10T08:00:00.000Z";
@@ -44,17 +48,34 @@ const options = {
 };
 
 describe("selectLearningGroup", () => {
-  it("rotates sorted system themes before personal fallback and returns the actual capped preview", () => {
+  it("defines autonomous learning groups as five phrases", () => {
+    expect(AUTONOMOUS_LEARNING_GROUP_SIZE).toBe(5);
+  });
+
+  it("rotates sorted system themes before personal fallback and previews five of eight eligible phrases", () => {
     const phrases = [
       phrase("daily", { categoryId: "daily" }), phrase("travel", { categoryId: "travel" }),
       phrase("work-a", { categoryId: "work" }), phrase("work-b", { categoryId: "work" }),
+      phrase("work-c", { categoryId: "work" }), phrase("travel-b", { categoryId: "travel" }),
+      phrase("daily-b", { categoryId: "daily" }),
       phrase("personal", { categoryId: "daily", origin: "personal", kind: "standalone" }),
     ];
-    const preview = previewLearningGroup(phrases, [], ["daily", "travel", "work"], { date: "2026-08-10", remaining: 2 });
+    const preview = previewLearningGroup(phrases, [], ["daily", "travel", "work"], { date: "2026-08-10" });
     expect(preview.themeCategoryId).toBe("work");
-    expect(preview.phrases).toHaveLength(2);
+    expect(preview.phrases).toHaveLength(5);
     expect(preview.phrases.some(({ categoryId }) => categoryId === "work")).toBe(true);
   });
+
+  it("returns the actual two-item autonomous group when eligible inventory is short", () => {
+    const preview = previewLearningGroup([
+      phrase("travel-a"),
+      phrase("travel-b"),
+    ], [], ["travel"], { date: "2026-08-10" });
+
+    expect(preview.themeCategoryId).toBe("travel");
+    expect(preview.phrases).toHaveLength(2);
+  });
+
   it("selects unlearned personal standalone phrases first, newest first", () => {
     const result = selectLearningGroup([
       phrase("system"),
