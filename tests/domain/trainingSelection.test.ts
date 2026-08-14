@@ -125,6 +125,16 @@ describe("selectTrainingGroup", () => {
     })).toEqual([]);
   });
 
+  it("includes a phrase scheduled later on the same Shanghai day", () => {
+    const laterToday = phrase("later-today", 1, "2026-08-09T15:30:00.000Z");
+    const tomorrow = phrase("tomorrow", 1, "2026-08-09T16:00:00.000Z");
+
+    expect(selectTrainingGroup([laterToday, tomorrow], {
+      mode: "standard", now, seed: "calendar-day", newIntroducedToday: 0,
+      learningStates: eligibleStates([laterToday, tomorrow]),
+    }).map(({ phrase: item, source }) => [item.id, source])).toEqual([["later-today", "due"]]);
+  });
+
   it("prioritizes due, then weak, then the least recently reviewed mature phrases", () => {
     const phrases = [
       phrase("due", 3, "2026-08-09T10:00:00.000Z", "2026-08-09T00:00:00.000Z"),

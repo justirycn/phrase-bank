@@ -152,7 +152,7 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   if (screen === "home" && !home.data && !home.error) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
   if (screen === "home" && home.error && !home.data) return <main className="loading"><p role="alert">{home.error}</p><button onClick={() => { void home.retry(); }}>重试</button></main>;
   const today = shanghaiDate();
-  const dailyProgress = home.data?.outcomes.dailyProgress ?? { mastered: 0, consolidated: 0, reviewed: 0 };
+  const dailyProgress = home.data?.outcomes.dailyProgress ?? { correct: 0, mastered: 0, reviewed: 0 };
   const weeklySummary = home.data?.outcomes.weeklySummary ?? { weekStart: today, activeSeconds: 0, completedGroups: 0, spokenCount: 0, masteredCount: 0, promotedCount: 0, retentionRate: undefined, forgettableCount: 0, weakPhraseIds: [] };
   const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
   const weeklyFocus = weeklySummary.weakPhraseIds.flatMap((id) => { const phrase = phrases.find((item) => item.id === id); return phrase ? [{ id, english: phrase.english, chinese: phrase.chinese, categoryName: categoryNames.get(phrase.categoryId) ?? "未分类" }] : []; });

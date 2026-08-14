@@ -106,17 +106,13 @@ function zeroDaily(date: string): DailyTrainingResult {
 }
 
 export function summarizeDailySentenceProgress(date: string, events: TrainingEvent[], states: PhraseLearningState[]) {
-  if (!parseCalendarDate(date)) return { mastered: 0, consolidated: 0, reviewed: 0 };
+  if (!parseCalendarDate(date)) return { correct: 0, mastered: 0, reviewed: 0 };
   const dailyEvents = events.filter((event) => shanghaiDate(event.occurredAt) === date);
   const masteredIds = new Set(states.filter((state) => firstMasteryAchievedDate(state) === date).map((state) => state.phraseId));
-  const everMasteredIds = new Set(states.filter((state) => {
-    const achieved = firstMasteryAchievedDate(state);
-    return achieved !== undefined && achieved <= date;
-  }).map((state) => state.phraseId));
   const goodTodayIds = new Set(dailyEvents.filter((event) => event.result === "good").map((event) => event.phraseId));
   return {
+    correct: goodTodayIds.size,
     mastered: masteredIds.size,
-    consolidated: [...goodTodayIds].filter((phraseId) => !everMasteredIds.has(phraseId)).length,
     reviewed: new Set(dailyEvents.filter((event) => event.source !== "new").map((event) => event.phraseId)).size,
   };
 }
