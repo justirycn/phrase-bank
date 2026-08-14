@@ -25,7 +25,11 @@ export function NewPhraseLearning({ controller, onHome }: {
     setPending(true);
     setStatus("");
     try {
-      await action();
+      const result = action();
+      await result;
+      if (result === undefined) {
+        await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+      }
     } catch {
       if (mountedRef.current) setStatus("操作没有完成，你仍然可以继续学习。请再试一次。");
     } finally {
@@ -39,7 +43,7 @@ export function NewPhraseLearning({ controller, onHome }: {
   const actionStatus = status && <p className="new-learning-status" role="status">{status}</p>;
 
   if (controller.phase === "loading") {
-    return <section className="new-learning-loading" aria-live="polite">正在准备今天的新语言块</section>;
+    return <section className="new-learning-loading" aria-live="polite">正在准备自主学习内容</section>;
   }
 
   if (controller.phase === "error") {
@@ -57,8 +61,8 @@ export function NewPhraseLearning({ controller, onHome }: {
 
   if (controller.phase === "empty") {
     return <section className="new-learning-empty">
-      <h1>今天没有新的语言块需要学习</h1>
-      <p>你已经学完目前可用的新内容，可以先复习已学语言块。</p>
+      <h1>暂无新句</h1>
+      <p>可以去句库添加新的表达，再回来继续学习。</p>
       {actionStatus}
       <button type="button" disabled={disabled} onClick={exit}>返回首页</button>
     </section>;
@@ -70,7 +74,10 @@ export function NewPhraseLearning({ controller, onHome }: {
       <h1>本组学习完成</h1>
       <p>本组已学习 {controller.total} 个语言块</p>
       {actionStatus}
-      <button type="button" disabled={disabled} onClick={exit}>返回首页</button>
+      <div className="new-learning-state-actions">
+        <button type="button" disabled={disabled} onClick={exit}>返回首页</button>
+        <button type="button" className="primary" disabled={disabled} onClick={() => { void run(controller.retry); }}>再学 5 句</button>
+      </div>
     </section>;
   }
 
@@ -80,7 +87,7 @@ export function NewPhraseLearning({ controller, onHome }: {
     && Number.isInteger(index) && index >= 0 && index < controller.total;
   const current = controller.current;
   if (!current || !validProgress) {
-    return <section className="new-learning-loading" aria-live="polite">正在准备今天的新语言块</section>;
+    return <section className="new-learning-loading" aria-live="polite">正在准备自主学习内容</section>;
   }
 
   const showAnswer = isStudy || controller.revealed;
@@ -96,7 +103,7 @@ export function NewPhraseLearning({ controller, onHome }: {
         <AppIcon name="close" size={22} />
       </button>
       <span className="task-mode task-mode-learning">
-        {isStudy ? "新句学习 · 先学后测" : "新句学习 · 小测"}
+        {isStudy ? "自主学习 · 先学后测" : "自主学习 · 小测"}
       </span>
       <span aria-label={`学习进度 ${progress}`}>{progress}</span>
       <div className="learning-track" role="progressbar" aria-label="新句学习进度" aria-valuemin={0} aria-valuemax={controller.total} aria-valuenow={index + 1}>

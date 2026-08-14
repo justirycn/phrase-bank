@@ -36,7 +36,7 @@ describe("NewPhraseLearning", () => {
     ] });
     render(<NewPhraseLearning controller={value} onHome={vi.fn()} />);
 
-    expect(screen.getByText("新句学习 · 先学后测")).toBeVisible();
+    expect(screen.getByText("自主学习 · 先学后测")).toBeVisible();
     expect(screen.getByRole("heading", { level: 1, name: phrase.english })).toBeVisible();
     expect(screen.getByText(phrase.chinese)).toBeVisible();
     expect(screen.getByText(phrase.intent)).toBeVisible();
@@ -79,7 +79,7 @@ describe("NewPhraseLearning", () => {
       return <NewPhraseLearning controller={value} onHome={vi.fn()} />;
     }
     render(<Harness />);
-    expect(screen.getByText("新句学习 · 小测")).toBeVisible();
+    expect(screen.getByText("自主学习 · 小测")).toBeVisible();
     expect(screen.getByText("5 / 5")).toBeVisible();
     expect(screen.getByRole("progressbar", { name: "新句学习进度" })).toHaveAttribute("aria-valuenow", "5");
     expect(screen.getByText(phrase.chinese)).toBeVisible();
@@ -187,14 +187,53 @@ describe("NewPhraseLearning", () => {
   });
 
   it.each([
-    ["loading", "正在准备今天的新语言块"],
-    ["empty", "今天没有新的语言块需要学习"],
+    ["loading", "正在准备自主学习内容"],
+    ["empty", "暂无新句"],
     ["complete", "本组已学习 5 个语言块"],
   ] as const)("renders the %s state", (phase, copy) => {
     const onHome = vi.fn();
     render(<NewPhraseLearning controller={controller({ phase, current: undefined })} onHome={onHome} />);
     expect(screen.getByText(copy)).toBeVisible();
     if (phase !== "loading") expect(screen.getByRole("button", { name: "返回首页" })).toBeVisible();
+  });
+
+  it("explains how to add content when there are no unseen phrases", () => {
+    render(<NewPhraseLearning controller={controller({ phase: "empty", current: undefined })} onHome={vi.fn()} />);
+    expect(screen.getByText("可以去句库添加新的表达，再回来继续学习。")).toBeVisible();
+  });
+
+  it("offers another group after completion and locks a synchronous retry against a double click", async () => {
+    const user = userEvent.setup();
+    const retry = vi.fn();
+    const value = controller({ phase: "complete", current: undefined, retry });
+    render(<NewPhraseLearning controller={value} onHome={vi.fn()} />);
+
+    expect(screen.getByRole("heading", { name: "本组学习完成" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "返回首页" })).toBeVisible();
+    const continueLearning = screen.getByRole("button", { name: "再学 5 句" });
+    expect(continueLearning).toHaveClass("primary");
+
+    await user.dblClick(continueLearning);
+
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it("disables both completion actions while another group is pending", async () => {
+    let release!: () => void;
+    const retrying = new Promise<void>((resolve) => { release = resolve; });
+    const value = controller({ phase: "complete", current: undefined, retry: vi.fn(() => retrying) });
+    const user = userEvent.setup();
+    render(<NewPhraseLearning controller={value} onHome={vi.fn()} />);
+
+    const home = screen.getByRole("button", { name: "返回首页" });
+    const continueLearning = screen.getByRole("button", { name: "再学 5 句" });
+    await user.click(continueLearning);
+
+    expect(home).toBeDisabled();
+    expect(continueLearning).toBeDisabled();
+    await act(async () => { release(); await retrying; });
+    expect(home).toBeEnabled();
+    expect(continueLearning).toBeEnabled();
   });
 
   it("offers error recovery and an accessible exit", async () => {
@@ -211,6 +250,7 @@ describe("NewPhraseLearning", () => {
     render(<NewPhraseLearning controller={value} onHome={vi.fn()} />);
     expect(screen.getByRole("button", { name: "返回首页" })).toBeDisabled();
     if (phase === "error") expect(screen.getByRole("button", { name: "重试" })).toBeDisabled();
+    if (phase === "complete") expect(screen.getByRole("button", { name: "再学 5 句" })).toBeDisabled();
   });
 
   it.each([
@@ -261,7 +301,7 @@ describe("NewPhraseLearning", () => {
     ["test index past total", { phase: "test" as const, testIndex: 5 }],
   ])("shows a safe preparation state for %s", (_, overrides) => {
     const view = render(<NewPhraseLearning controller={controller(overrides)} onHome={vi.fn()} />);
-    expect(screen.getByText("正在准备今天的新语言块")).toBeVisible();
+    expect(screen.getByText("正在准备自主学习内容")).toBeVisible();
     expect(view.container).not.toHaveTextContent("NaN");
     expect(view.container).not.toHaveTextContent("0 / 0");
   });

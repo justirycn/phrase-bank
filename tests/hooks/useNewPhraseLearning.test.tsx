@@ -565,6 +565,31 @@ describe("useNewPhraseLearning", () => {
     expect(store.sessions[0].completedAt).toBeDefined();
   });
 
+  it("starts another group from newly added unseen phrases after completion", async () => {
+    const first = phrase("first");
+    const items = [first];
+    const store = memoryRepository({ phrases: items, states: [unseen(first.id)] });
+    const hook = renderLearning(store);
+    await waitFor(() => expect(hook.result.current.phase).toBe("study"));
+    await act(() => hook.result.current.nextStudyPhrase());
+    await act(() => hook.result.current.reveal());
+    await act(() => hook.result.current.grade("good"));
+    expect(hook.result.current.phase).toBe("complete");
+
+    const second = phrase("second");
+    items.push(second);
+    store.states.push(unseen(second.id));
+    act(() => hook.result.current.retry());
+
+    await waitFor(() => expect(hook.result.current.current?.id).toBe(second.id));
+    expect(hook.result.current).toMatchObject({
+      phase: "study",
+      current: second,
+      studyIndex: 0,
+      total: 1,
+    });
+  });
+
   it("takes over a never-settling initial creation and ignores its late conflict", async () => {
     const items = [phrase("first"), phrase("second")];
     const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
