@@ -19,7 +19,7 @@ The generated current measurement records stable application source tree `c8e379
 | Production metric | Baseline | Current | Change |
 | --- | ---: | ---: | ---: |
 | Authenticated home chunk | 157,491 B | 62,261 B | -60.5% |
-| Initial JS set from manifests | 524,925 B | 497,788 B | -5.2% |
+| Initial JS set from manifests | 524,925 B | 497,794 B | -5.2% |
 | Local uncompressed HTML/RSC response | 446,625 B | 447,008 B | +0.1% |
 | Startup `exportSnapshot()` call sites | 1 | 0 | removed |
 
