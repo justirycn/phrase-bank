@@ -3,7 +3,6 @@ import { DEFAULT_DAILY_MASTERY_GOAL, type AppPreferences, type BackupEnvelope, t
 import { isReviewDueOnShanghaiDay, scheduleReview, shanghaiDayEndIso } from "../domain/review";
 import { personalPhraseDefaults, validateSystemContentPackage } from "../domain/systemContent";
 import { applyLearningResult, nextExampleToUnlock } from "../domain/learningProgress";
-import { DAILY_NEW_PHRASE_LIMIT } from "../domain/learningSelection";
 import { defaultCategories } from "./seed";
 import { STARTER_PHRASES } from "./starterPhrases";
 import { assertValidLearningSession, normalizeCurrentLearningState, normalizeLegacyBackup, normalizeLegacyLearningState } from "./backup";
@@ -620,19 +619,8 @@ export class LocalPhraseRepository implements PhraseRepository {
       if (!phrase || !session || !cursorMatches) throw new Error("首次测试进度不一致");
 
       const reviewTime = new Date(event.occurredAt);
-      const eventDate = shanghaiDate(reviewTime);
+      shanghaiDate(reviewTime);
       const currentState = await stateStore.get(phrase.id);
-      const currentFirstTested = currentState?.firstTestedAt ? new Date(currentState.firstTestedAt) : undefined;
-      if (!currentFirstTested || Number.isNaN(currentFirstTested.getTime())) {
-        const states = await stateStore.getAll();
-        const testedToday = new Set(states.flatMap((state) => {
-          if (!state.firstTestedAt || state.phraseId === phrase.id) return [];
-          const testedAt = new Date(state.firstTestedAt);
-          if (Number.isNaN(testedAt.getTime()) || shanghaiDate(testedAt) !== eventDate) return [];
-          return [state.phraseId];
-        }));
-        if (testedToday.size >= DAILY_NEW_PHRASE_LIMIT) throw new Error("今日学习新句已达到15句上限");
-      }
       const scheduled = scheduleReview(phrase, event.result, reviewTime);
       await phraseStore.put(scheduled.phrase);
       await tx.objectStore("reviewLogs").put(scheduled.log);
