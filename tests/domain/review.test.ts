@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { createNewPhrase, scheduleReview } from "../../app/domain/review";
+import { createNewPhrase, isReviewDueOnShanghaiDay, scheduleReview, shanghaiDayEndIso } from "../../app/domain/review";
 
 const now = new Date("2026-08-07T08:00:00.000Z");
 
 describe("review scheduling", () => {
+  it("treats the whole Shanghai calendar day as due and rejects malformed dates", () => {
+    const morning = new Date("2026-08-14T02:00:00.000Z");
+    expect(isReviewDueOnShanghaiDay("2026-08-14T12:00:00.000Z", morning)).toBe(true);
+    expect(isReviewDueOnShanghaiDay("2026-08-14T16:00:00.000Z", new Date("2026-08-14T15:59:59.999Z"))).toBe(false);
+    expect(isReviewDueOnShanghaiDay("invalid", morning)).toBe(false);
+    expect(shanghaiDayEndIso(morning)).toBe("2026-08-14T15:59:59.999Z");
+  });
+
   it("makes a new phrase due immediately", () => {
     expect(createNewPhrase({ english: "I haven't decided yet.", chinese: "我还没决定。", categoryId: "daily" }, now).nextReviewAt).toBe(now.toISOString());
   });

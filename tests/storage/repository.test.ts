@@ -132,12 +132,14 @@ describe("LocalPhraseRepository", () => {
     expect(await repo.getPhrase(phrase.id)).toBeUndefined();
   });
 
-  it("returns only phrases due by the requested time", async () => {
-    const now = new Date("2026-08-07T08:00:00.000Z");
-    const due = createNewPhrase({ english: "Due", chinese: "到期", categoryId: "daily" }, now);
-    const future = { ...createNewPhrase({ english: "Future", chinese: "未来", categoryId: "daily" }, now), id: "future", nextReviewAt: "2026-08-09T08:00:00.000Z" };
-    await repo.savePhrase(due); await repo.savePhrase(future);
-    expect((await repo.listDuePhrases(now)).map((item) => item.english)).toEqual(["Due"]);
+  it("returns phrases due on the requested Shanghai day without malformed or future dates", async () => {
+    const now = new Date("2026-08-07T02:00:00.000Z");
+    const laterToday = { ...createNewPhrase({ english: "Later today", chinese: "今天", categoryId: "daily" }, now), id: "later-today", nextReviewAt: "2026-08-07T15:00:00.000Z" };
+    const tomorrow = { ...createNewPhrase({ english: "Tomorrow", chinese: "明天", categoryId: "daily" }, now), id: "tomorrow", nextReviewAt: "2026-08-07T16:00:00.000Z" };
+    const malformed = { ...createNewPhrase({ english: "Malformed", chinese: "异常", categoryId: "daily" }, now), id: "malformed", nextReviewAt: "0000" };
+    await repo.savePhrase(laterToday); await repo.savePhrase(tomorrow); await repo.savePhrase(malformed);
+    const targetIds = new Set([laterToday.id, tomorrow.id, malformed.id]);
+    expect((await repo.listDuePhrases(now)).filter(({ id }) => targetIds.has(id)).map(({ id }) => id)).toEqual(["later-today"]);
   });
 
   it("submits a review atomically", async () => {

@@ -1,4 +1,5 @@
 import type { Phrase, PhraseLearningState, TrainingMode, TrainingSource } from "./types";
+import { isReviewDueOnShanghaiDay } from "./review";
 
 export interface TrainingCandidate {
   phrase: Phrase;
@@ -52,8 +53,8 @@ function rotateOrder(phrases: Phrase[], offset: number): Phrase[] {
   return [...phrases.slice(normalizedOffset), ...phrases.slice(0, normalizedOffset)];
 }
 
-function sourceFor(phrase: Phrase, nowTime: number): Exclude<TrainingSource, "new" | "requeue"> {
-  if (new Date(phrase.nextReviewAt).getTime() <= nowTime) return "due";
+function sourceFor(phrase: Phrase, now: Date): Exclude<TrainingSource, "new" | "requeue"> {
+  if (isReviewDueOnShanghaiDay(phrase.nextReviewAt, now)) return "due";
   if (phrase.masteryLevel <= 2) return "weak";
   return "mature";
 }
@@ -67,7 +68,6 @@ export function selectTrainingGroup(
   options: TrainingSelectionOptions,
 ): TrainingCandidate[] {
   const target = options.mode === "quick" ? 3 : 10;
-  const nowTime = options.now.getTime();
   const orderSeed = `${options.seed}:${options.rotationCursor ?? 0}`;
   const states = new Map((options.learningStates ?? []).map((state) => [state.phraseId, state]));
   const practicedTodayIds = options.practicedTodayIds ?? new Set<string>();
@@ -87,16 +87,16 @@ export function selectTrainingGroup(
     for (const phrase of pool) {
       if (selected.length >= target || limit <= 0) break;
       if (selectedIds.has(phrase.id)) continue;
-      selected.push({ phrase, source: sourceFor(phrase, nowTime) });
+      selected.push({ phrase, source: sourceFor(phrase, options.now) });
       selectedIds.add(phrase.id);
       limit -= 1;
     }
   };
 
   const priorityPools = (pool: Phrase[], matureRotation = 0) => {
-    const due = pool.filter((phrase) => sourceFor(phrase, nowTime) === "due");
-    const weak = pool.filter((phrase) => sourceFor(phrase, nowTime) === "weak");
-    const mature = pool.filter((phrase) => sourceFor(phrase, nowTime) === "mature");
+    const due = pool.filter((phrase) => sourceFor(phrase, options.now) === "due");
+    const weak = pool.filter((phrase) => sourceFor(phrase, options.now) === "weak");
+    const mature = pool.filter((phrase) => sourceFor(phrase, options.now) === "mature");
     return {
       due: seededOrder(due, orderSeed),
       weak: seededOrder(weak, orderSeed),
@@ -106,7 +106,7 @@ export function selectTrainingGroup(
 
   if (options.mode === "quick") {
     const practicedMatureCount = eligible.filter((phrase) => practicedTodayIds.has(phrase.id)
-      && sourceFor(phrase, nowTime) === "mature").length;
+      && sourceFor(phrase, options.now) === "mature").length;
     const matureRotation = (options.rotationCursor ?? 0) * target - practicedMatureCount;
     const fresh = priorityPools(
       unique.filter((phrase) => !practicedTodayIds.has(phrase.id)),
@@ -126,6 +126,6 @@ export function selectTrainingGroup(
     return selected;
   }
 
-  add(seededOrder(unique.filter((phrase) => sourceFor(phrase, nowTime) === "due"), orderSeed));
+  add(seededOrder(unique.filter((phrase) => sourceFor(phrase, options.now) === "due"), orderSeed));
   return selected;
 }

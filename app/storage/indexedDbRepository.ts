@@ -1,6 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import { DEFAULT_DAILY_MASTERY_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV5, type Category, type LearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type SpeechPreferences, type SystemContentPackage, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
-import { scheduleReview } from "../domain/review";
+import { isReviewDueOnShanghaiDay, scheduleReview, shanghaiDayEndIso } from "../domain/review";
 import { personalPhraseDefaults, validateSystemContentPackage } from "../domain/systemContent";
 import { applyLearningResult, nextExampleToUnlock } from "../domain/learningProgress";
 import { DAILY_NEW_PHRASE_LIMIT } from "../domain/learningSelection";
@@ -314,8 +314,10 @@ export class LocalPhraseRepository implements PhraseRepository {
     }
   }
   async listDuePhrases(now = new Date()) {
-    const items = await (await this.db()).getAllFromIndex("phrases", "by-due", IDBKeyRange.upperBound(now.toISOString()));
-    return items.sort((a, b) => a.nextReviewAt.localeCompare(b.nextReviewAt));
+    const items = await (await this.db()).getAllFromIndex("phrases", "by-due", IDBKeyRange.upperBound(shanghaiDayEndIso(now)));
+    return items
+      .filter((phrase) => isReviewDueOnShanghaiDay(phrase.nextReviewAt, now))
+      .sort((a, b) => a.nextReviewAt.localeCompare(b.nextReviewAt));
   }
   async submitReview(id: string, result: ReviewResult, now = new Date(), operationId?: string) {
     const db = await this.db();
