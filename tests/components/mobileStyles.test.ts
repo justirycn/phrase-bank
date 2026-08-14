@@ -150,12 +150,14 @@ describe("iPhone new phrase learning styles", () => {
     expect(css).toMatch(/\.new-learning-chinese,[^}]*overflow-wrap:\s*anywhere/s);
   });
 
-  it("stacks all three home entries cleanly on the iPhone width", async () => {
+  it("stacks both independent home entries cleanly on the iPhone width", async () => {
     const css = await readFile("app/globals.css", "utf8");
     expect(css).toMatch(/\.training-entry\s*\{[^}]*grid-template-columns:\s*1fr/);
     expect(css).toMatch(/\.training-entry button\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*overflow-wrap:\s*anywhere/s);
     expect(css).toMatch(/\.training-entry button > span\s*\{[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/\.continue-start\s*\{[^}]*background:\s*#267453/s);
     expect(css).toMatch(/\.learning-start\s*\{[^}]*min-height:\s*88px/s);
+    expect(ruleSelectors(css).some((selector) => selector.includes(".standard-start"))).toBe(false);
     expect(css).toMatch(/\.weekly-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,1fr\)/s);
     expect(css).toMatch(/\.weekly-grid p\s*\{[^}]*min-width:\s*0/s);
   });

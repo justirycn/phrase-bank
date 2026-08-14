@@ -48,7 +48,7 @@ export default function AddPhrase({ categories, onSave, onRetryState, onComplete
       <label>分类<select aria-label="分类" value={input.categoryId} onChange={(e) => field("categoryId", e.target.value)}>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select>{errors.categoryId && <small className="field-error">{errors.categoryId}</small>}</label>
       <button className="more-button" type="button" onClick={() => setMore(!more)}>{more ? "收起选填内容" : <><AppIcon name="add" size={14} /> 添加我的例句或来源</>}</button>
       {more && <div className="optional-fields"><label>我的例句<textarea value={input.personalExample} onChange={(e) => field("personalExample", e.target.value)} rows={2} /></label><label>来源或备注<input value={input.sourceNote} onChange={(e) => field("sourceNote", e.target.value)} /></label></div>}
-      <label><input type="checkbox" checked={learnFirst} onChange={(event) => setLearnFirst(event.target.checked)} />先在“学习新句”里认识这句话</label>
+      <label><input type="checkbox" checked={learnFirst} onChange={(event) => setLearnFirst(event.target.checked)} />先在“自主学习”里认识这句话</label>
       {saveError && <p className="field-error" role="alert">{saveError}</p>}
       {partialState && <button type="button" disabled={saving} onClick={() => { void retryState(); }}>只重试学习状态</button>}
       <div className="form-actions"><button type="button" className="secondary" onClick={onCancel}>取消</button><button className="primary" type="submit" aria-label="保存语言块" disabled={saving || Boolean(partialState)}>{saving ? "正在保存" : "保存语言块"}</button></div>

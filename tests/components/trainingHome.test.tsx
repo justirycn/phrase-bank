@@ -7,7 +7,7 @@ const base = {
   streak: { current: 0, longest: 0 },
   weeklySummary: { weekStart: "2026-08-03", activeSeconds: 0, completedGroups: 0, spokenCount: 0, masteredCount: 0, promotedCount: 0, retentionRate: undefined, forgettableCount: 0, weakPhraseIds: [] },
   learnedToday: 2, nextLearningCount: 0, dueCount: 0,
-  onContinue: vi.fn(), onStartLearning: vi.fn(), onStartStandard: vi.fn(), onRetryHeatmap: vi.fn(),
+  onContinue: vi.fn(), onStartLearning: vi.fn(), onRetryHeatmap: vi.fn(),
 };
 
 describe("TrainingHome heatmap", () => {
@@ -17,14 +17,16 @@ describe("TrainingHome heatmap", () => {
     expect(screen.queryByRole("heading", { name: "学习足迹" })).not.toBeInTheDocument();
   });
 
-  it("renders it after the weekly summary and preserves all entries", () => {
-    const { container } = render(<TrainingHome {...base} dueCount={1} heatmapDays={[{ date: "2026-08-10", count: 0, level: 0, future: false }]} />);
+  it("renders it after the weekly summary and preserves the two independent entries", () => {
+    const { container } = render(<TrainingHome {...base} dueCount={1} nextLearningCount={1} heatmapDays={[{ date: "2026-08-10", count: 0, level: 0, future: false }]} />);
     const weekly = container.querySelector(".weekly-summary");
     const heatmap = container.querySelector(".learning-heatmap");
     expect(weekly?.compareDocumentPosition(heatmap as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /继续今日任务/ }));
-    fireEvent.click(screen.getByRole("button", { name: /学习新句/ }));
-    fireEvent.click(screen.getByRole("button", { name: /到期复习/ }));
+    fireEvent.click(screen.getByRole("button", { name: /自主学习/ }));
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /到期复习/ })).not.toBeInTheDocument();
+    expect(screen.getByText("先完成今天到期的复习；想多学时，再开启自主学习。")).toBeVisible();
     expect(screen.getByText("今日答对")).toBeVisible();
     expect(screen.getByText("三日掌握")).toBeVisible();
     expect(screen.getByText("2 句")).toBeVisible();
@@ -33,7 +35,6 @@ describe("TrainingHome heatmap", () => {
     expect(screen.queryByText(/30 分钟|三分钟速练/)).not.toBeInTheDocument();
     expect(base.onContinue).toHaveBeenCalled();
     expect(base.onStartLearning).toHaveBeenCalled();
-    expect(base.onStartStandard).toHaveBeenCalled();
   });
 
   it.each([
@@ -55,21 +56,43 @@ describe("TrainingHome heatmap", () => {
     expect(progress.querySelector("i")).toHaveStyle({ width: `${Math.min(100, correct * 10)}%` });
   });
 
-  it("labels only scheduled phrases as due review and uses a distinct review icon", () => {
+  it("uses the daily entry only for scheduled review and prioritizes active review copy", () => {
     const { container, rerender } = render(<TrainingHome {...base} dueCount={0} />);
 
-    expect(screen.getByRole("button", { name: /^到期复习/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /^到期复习/ })).toHaveTextContent("今天暂无到期内容");
-    expect(container.querySelector('.standard-start [data-icon="due-review"]')).toBeInTheDocument();
+    const daily = screen.getByRole("button", { name: /^继续今日任务/ });
+    expect(daily).toBeDisabled();
+    expect(daily).toHaveTextContent("今日复习已完成");
+    expect(container.querySelector('.continue-start [data-icon="due-review"]')).toBeInTheDocument();
 
     rerender(<TrainingHome {...base} dueCount={4} />);
-    expect(screen.getByRole("button", { name: /^到期复习/ })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /^到期复习/ })).toHaveTextContent("4 句到期");
-    expect(screen.getByRole("button", { name: /继续今日任务/ })).toHaveTextContent("4 句到期");
+    expect(screen.getByRole("button", { name: /^继续今日任务/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^继续今日任务/ })).toHaveTextContent("今天到期 4 句");
 
     rerender(<TrainingHome {...base} dueCount={0} activeReview reviewRemaining={2} />);
-    expect(screen.getByRole("button", { name: /^到期复习/ })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /^到期复习/ })).toHaveTextContent("继续未完成 · 剩余 2 句");
+    expect(screen.getByRole("button", { name: /^继续今日任务/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^继续今日任务/ })).toHaveTextContent("继续未完成 · 剩余 2 句");
+
+    rerender(<TrainingHome {...base} dueCount={4} activeReview reviewRemaining={2} />);
+    expect(screen.getByRole("button", { name: /^继续今日任务/ })).not.toHaveTextContent("今天到期 4 句");
+  });
+
+  it("uses the autonomous entry only for new learning and prioritizes its active group", () => {
+    const { container, rerender } = render(<TrainingHome {...base} nextLearningCount={5} themeName="工作" />);
+
+    const autonomous = screen.getByRole("button", { name: /^自主学习/ });
+    expect(autonomous).toBeEnabled();
+    expect(autonomous).toHaveTextContent("开始学习 5 句 · 工作");
+    expect(container.querySelector(".learning-start [data-icon=\"due-review\"]")).not.toBeInTheDocument();
+    expect(container.querySelector(".learning-start svg")).toBeInTheDocument();
+
+    rerender(<TrainingHome {...base} nextLearningCount={5} activeLearning activeRemaining={3} themeName="工作" />);
+    expect(screen.getByRole("button", { name: /^自主学习/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^自主学习/ })).toHaveTextContent("继续上次 · 剩余 3 句");
+    expect(screen.getByRole("button", { name: /^自主学习/ })).not.toHaveTextContent("开始学习 5 句");
+
+    rerender(<TrainingHome {...base} nextLearningCount={0} activeLearning={false} />);
+    expect(screen.getByRole("button", { name: /^自主学习/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^自主学习/ })).toHaveTextContent("暂无新句，可去句库添加");
   });
 
   it("shows durable weekly outcomes and renders an absent retention rate as dashes", () => {
@@ -87,8 +110,8 @@ describe("TrainingHome heatmap", () => {
   });
 
   it("keeps entries usable when the heatmap fails", () => {
-    render(<TrainingHome {...base} heatmapDays={[]} heatmapError="failed" />);
-    fireEvent.click(screen.getByRole("button", { name: /学习新句/ }));
+    render(<TrainingHome {...base} nextLearningCount={1} heatmapDays={[]} heatmapError="failed" />);
+    fireEvent.click(screen.getByRole("button", { name: /自主学习/ }));
     expect(base.onStartLearning).toHaveBeenCalled();
     expect(screen.getByRole("status")).toHaveTextContent("学习足迹暂时无法加载");
   });
