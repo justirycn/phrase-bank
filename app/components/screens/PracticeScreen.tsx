@@ -7,6 +7,7 @@ import { TemporaryRecorder } from "../../services/recorder";
 import type { PhraseRepository } from "../../storage/repository";
 import { screenSpeech } from "./screenSpeech";
 const defaultRecorder = new TemporaryRecorder();
+type CompletionIntent = { key: "home" | "again"; run: () => void | Promise<void> };
 
 export default function PracticeSession({ repository, mode, newIntroducedToday, completionKey, onComplete, onHome, onAgain, setError }: {
   repository: PhraseRepository; mode: TrainingMode;
@@ -18,20 +19,29 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
   const generationRef = useRef(0);
   const completedKeysRef = useRef(new Set<string>());
   const pendingRef = useRef<{ key: string; promise: Promise<void> }>();
+  const intentRef = useRef<CompletionIntent>();
 
   useEffect(() => {
     generationRef.current += 1;
     return () => { generationRef.current += 1; };
   }, [completionKey, repository]);
 
-  const complete = useCallback(() => {
-    if (completedKeysRef.current.has(completionKey)) return Promise.resolve();
+  const complete = useCallback((intent?: CompletionIntent) => {
+    if (intent) intentRef.current = intent;
+    if (completedKeysRef.current.has(completionKey)) {
+      const selected = intentRef.current;
+      intentRef.current = undefined;
+      return Promise.resolve(selected?.run()).then(() => undefined);
+    }
     if (pendingRef.current?.key === completionKey) return pendingRef.current.promise;
     const generation = generationRef.current;
     const promise = (async () => {
       await finish();
       if (generation !== generationRef.current) return;
-      await onComplete();
+      const selected = intentRef.current;
+      intentRef.current = undefined;
+      if (selected) await selected.run();
+      else await onComplete();
       if (generation === generationRef.current) completedKeysRef.current.add(completionKey);
     })();
     pendingRef.current = { key: completionKey, promise };
@@ -42,10 +52,12 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
     });
     return promise;
   }, [completionKey, finish, onComplete, setError]);
+  const completeRef = useRef(complete);
+  useEffect(() => { completeRef.current = complete; }, [complete]);
 
   useEffect(() => {
-    if (phase === "complete") void complete();
-  }, [complete, phase]);
+    if (phase === "complete") void completeRef.current();
+  }, [completionKey, phase]);
 
   const finishAnd = (next: () => void | Promise<void>) => {
     void finish().then(next).catch(() => setError("训练进度暂时无法保存，请稍后重试。"));
@@ -53,7 +65,7 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
   return <SpeakingPractice
     controller={controller}
     onPause={() => void onHome()}
-    onHome={() => { if (phase === "complete") void complete(); else if (controller.initializationError) void onHome(); else finishAnd(onHome); }}
-    onAgain={() => { if (phase === "complete") void complete(); else if (controller.initializationError) void onAgain(); else finishAnd(onAgain); }}
+    onHome={() => { if (phase === "complete") void complete({ key: "home", run: onHome }); else if (controller.initializationError) void onHome(); else finishAnd(onHome); }}
+    onAgain={() => { if (phase === "complete") void complete({ key: "again", run: onAgain }); else if (controller.initializationError) void onAgain(); else finishAnd(onAgain); }}
   />;
 }

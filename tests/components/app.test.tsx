@@ -25,6 +25,7 @@ class MemoryRepository {
   async deletePhrase(id: string) { this.phrases = this.phrases.filter((p) => p.id !== id); }
   async submitReview(id: string, result: ReviewResult, now?: Date, operationId?: string) { void id; void result; void now; void operationId; }
   events: TrainingEvent[] = [];
+  eventReadPromise?: Promise<TrainingEvent[]>;
   sessions: TrainingSessionRecord[] = [];
   exportSnapshotAttempts = 0;
   failTrainingEventReads = false;
@@ -40,9 +41,14 @@ class MemoryRepository {
   appPreferenceSaves: AppPreferences[] = [];
   failAppPreferenceSave = false;
   async getPhrase(id: string) { return this.phrases.find((phrase) => phrase.id === id); }
-  async submitTrainingReview(event: TrainingEvent) { this.events.push(event); }
+  async submitTrainingReview(event: TrainingEvent) {
+    this.events.push(event);
+    this.phrases = this.phrases.map((phrase) => phrase.id === event.phraseId
+      ? { ...phrase, nextReviewAt: "2099-01-01T00:00:00.000Z" }
+      : phrase);
+  }
   async saveTrainingEvent(event: TrainingEvent) { this.events = [...this.events.filter((item) => item.id !== event.id), event]; }
-  async listTrainingEvents() { if (this.failTrainingEventReads) throw new Error("event read failed"); return [...this.events]; }
+  async listTrainingEvents() { if (this.eventReadPromise) return this.eventReadPromise; if (this.failTrainingEventReads) throw new Error("event read failed"); return [...this.events]; }
   async listTrainingSessions() { return [...this.sessions]; }
   async saveTrainingSession(session: TrainingSessionRecord) { this.sessions = [...this.sessions.filter((item) => item.id !== session.id), session]; }
   async getActiveTrainingSession() { return this.sessions.find((session) => !session.completedAt); }
@@ -401,6 +407,81 @@ describe("PhraseBankApp", () => {
 
     expect(screen.queryByText("今日任务 · 新句学习")).not.toBeInTheDocument();
     expect(repoB.learningSessions).toHaveLength(0);
+  });
+
+  it("re-derives the daily goal after a review crosses Shanghai midnight", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-16T15:59:00.000Z"));
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const repo = new MemoryRepository();
+      repo.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 1 };
+      repo.phrases = [
+        makePhrase({ id: "midnight-due", chinese: "跨午夜复习" }),
+        makePhrase({ id: "next-day-new", english: "Next Shanghai day", nextReviewAt: "2099-01-01T00:00:00.000Z" }),
+      ];
+      repo.learningStates = [learnedState("midnight-due")];
+      repo.events = [{ id: "old-day-new", sessionId: "old", phraseId: "old-new", source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 0, occurredAt: "2026-08-16T10:00:00.000Z" }];
+      render(<PhraseBankApp repository={repo as never} />);
+      await user.click(await screen.findByRole("button", { name: /继续今日任务/ }));
+      await screen.findByText("跨午夜复习");
+      let resolveEvents!: (events: TrainingEvent[]) => void;
+      let resolvePhrases!: (phrases: Phrase[]) => void;
+      repo.eventReadPromise = new Promise((resolve) => { resolveEvents = resolve; });
+      repo.phraseReadPromise = new Promise((resolve) => { resolvePhrases = resolve; });
+      await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
+      await user.click(screen.getByRole("button", { name: /掌握/ }));
+      await vi.waitFor(() => expect(repo.phraseReadAttempts).toBeGreaterThanOrEqual(3));
+
+      vi.setSystemTime(new Date("2026-08-16T16:01:00.000Z"));
+      resolveEvents([...repo.events]);
+      resolvePhrases([...repo.phrases]);
+
+      expect(await screen.findByText("今日任务 · 新句学习")).toBeVisible();
+      expect(screen.getByText("Next Shanghai day")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses refreshed progress instead of the pre-review daily-task snapshot", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 1 };
+    repo.phrases = [makePhrase({ id: "refresh-due", chinese: "刷新后再决定" })];
+    repo.learningStates = [learnedState("refresh-due")];
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: /继续今日任务/ }));
+    await screen.findByText("刷新后再决定");
+    let resolveEvents!: (events: TrainingEvent[]) => void;
+    let resolvePhrases!: (phrases: Phrase[]) => void;
+    repo.eventReadPromise = new Promise((resolve) => { resolveEvents = resolve; });
+    repo.phraseReadPromise = new Promise((resolve) => { resolvePhrases = resolve; });
+    await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
+    await user.click(screen.getByRole("button", { name: /掌握/ }));
+    await vi.waitFor(() => expect(repo.phraseReadAttempts).toBeGreaterThanOrEqual(3));
+
+    repo.events.push({ id: "concurrent-new", sessionId: "other", phraseId: "already-learned", source: "new", result: "good", usedPronunciationHint: false, recorded: false, activeSeconds: 0, occurredAt: new Date().toISOString() });
+    resolveEvents([...repo.events]);
+    resolvePhrases([...repo.phrases]);
+
+    expect(await screen.findByRole("button", { name: /继续今日任务/ })).toBeVisible();
+    expect(screen.queryByText("今日任务 · 新句学习")).not.toBeInTheDocument();
+  });
+
+  it("keeps the completed review visible when the handoff refresh fails", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 1 };
+    repo.phrases = [makePhrase({ id: "failed-refresh-due", chinese: "刷新失败复习" })];
+    repo.learningStates = [learnedState("failed-refresh-due")];
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: /继续今日任务/ }));
+    await screen.findByText("刷新失败复习");
+    repo.failPhraseReads = true;
+    await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
+    await user.click(screen.getByRole("button", { name: /掌握/ }));
+
+    expect(await screen.findByRole("heading", { name: "这一组完成了" })).toBeVisible();
+    expect(screen.queryByText("今日任务 · 新句学习")).not.toBeInTheDocument();
   });
 
   it("offers the next five autonomous phrases after sixteen prior first-tested records", async () => {

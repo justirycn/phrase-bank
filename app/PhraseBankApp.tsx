@@ -15,6 +15,15 @@ import type { PhraseRepository } from "./storage/repository";
 type Screen = "home" | "library" | "add" | "learn" | "daily-learn" | "review" | "practice" | "settings";
 type Repository = PhraseRepository;
 type InitializationStatus = "loading" | "ready" | "error";
+type PendingReviewHandoff = {
+  repository: Repository;
+  generation: number;
+  refreshSettled: boolean;
+  startingData: unknown;
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (reason: Error) => void;
+};
 const defaultRepository = typeof window === "undefined" ? undefined : new LocalPhraseRepository();
 const repositoryReviewKeys = new WeakMap<PhraseRepository, number>();
 let nextRepositoryReviewKey = 1;
@@ -88,8 +97,15 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const setScreen = useCallback((value: Screen) => setScreenState({ repository: repo, value }), [repo]);
   const repositoryRef = useRef(repo);
   const repositoryGenerationRef = useRef(0);
+  const pendingReviewHandoffRef = useRef<PendingReviewHandoff>();
+  const [handoffRevision, setHandoffRevision] = useState(0);
   useLayoutEffect(() => {
     if (repositoryRef.current === repo) return;
+    const pending = pendingReviewHandoffRef.current;
+    if (pending && pending.repository !== repo) {
+      pendingReviewHandoffRef.current = undefined;
+      pending.reject(new Error("复习仓库已更换"));
+    }
     repositoryRef.current = repo;
     repositoryGenerationRef.current += 1;
   }, [repo]);
@@ -131,7 +147,7 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
     return () => { current = false; };
   }, [contentInstaller, initializationAttempt, repo, repository]);
 
-  const go = (next: Screen) => { setNotice(""); setError(""); setScreen(next); window.scrollTo?.(0, 0); };
+  const go = useCallback((next: Screen) => { setNotice(""); setError(""); setScreen(next); window.scrollTo?.(0, 0); }, [setError, setNotice, setScreen]);
   const startTraining = (mode: TrainingMode) => { setTrainingMode(mode); setTrainingRun((run) => run + 1); go("practice"); };
   const saveAddedPhrase = useCallback(async (input: PhraseInput, learnFirst: boolean): Promise<AddSaveResult> => {
     if (!repo) throw new Error("repository unavailable");
@@ -152,10 +168,6 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
     setNotice("已收入你的句库");
     setScreen("library");
   }, [refresh, setError, setNotice, setScreen]);
-  if (screen === "home" && initializationStatus === "loading") return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
-  if (screen === "home" && initializationStatus === "error") return <main className="loading"><p role="alert">本地数据暂时无法打开，请刷新后重试。{initialization.message}</p><button onClick={() => { setInitialization({ repository: repo, status: "loading", attempt: initializationAttempt + 1 }); }}>重试</button></main>;
-  if (screen === "home" && !home.data && !home.error) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
-  if (screen === "home" && home.error && !home.data) return <main className="loading"><p role="alert">{home.error}</p><button onClick={() => { void home.retry(); }}>重试</button></main>;
   const today = shanghaiDate();
   const dailyProgress = home.data?.outcomes.dailyProgress ?? { correct: 0, mastered: 0, reviewed: 0 };
   const weeklySummary = home.data?.outcomes.weeklySummary ?? { weekStart: today, activeSeconds: 0, completedGroups: 0, spokenCount: 0, masteredCount: 0, promotedCount: 0, retentionRate: undefined, forgettableCount: 0, weakPhraseIds: [] };
@@ -192,11 +204,64 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   };
   const afterReviewComplete = async (completedRepository: Repository) => {
     const generation = repositoryGenerationRef.current;
-    if (repositoryRef.current !== completedRepository) return;
-    await refresh();
-    if (repositoryRef.current !== completedRepository || repositoryGenerationRef.current !== generation) return;
-    go(dailyTask.newRemaining > 0 ? "daily-learn" : "home");
+    if (repositoryRef.current !== completedRepository) throw new Error("复习仓库已更换");
+    const existing = pendingReviewHandoffRef.current;
+    if (existing?.repository === completedRepository && existing.generation === generation) return existing.promise;
+    let resolve!: () => void;
+    let reject!: (reason: Error) => void;
+    const promise = new Promise<void>((accept, decline) => { resolve = accept; reject = decline; });
+    const pending: PendingReviewHandoff = { repository: completedRepository, generation, refreshSettled: false, startingData: home.data, promise, resolve, reject };
+    pendingReviewHandoffRef.current = pending;
+    setHandoffRevision((value) => value + 1);
+    void refresh().then(() => {
+      if (pendingReviewHandoffRef.current !== pending) return;
+      if (repositoryRef.current !== completedRepository || repositoryGenerationRef.current !== generation) {
+        pendingReviewHandoffRef.current = undefined;
+        reject(new Error("复习仓库已更换"));
+        return;
+      }
+      pending.refreshSettled = true;
+      setHandoffRevision((value) => value + 1);
+    }, () => {
+      if (pendingReviewHandoffRef.current !== pending) return;
+      pendingReviewHandoffRef.current = undefined;
+      reject(new Error("复习数据刷新失败"));
+      setHandoffRevision((value) => value + 1);
+    });
+    return promise;
   };
+
+  useEffect(() => {
+    const pending = pendingReviewHandoffRef.current;
+    if (!pending?.refreshSettled) return;
+    if (pending.repository !== repo || pending.generation !== repositoryGenerationRef.current) {
+      pendingReviewHandoffRef.current = undefined;
+      pending.reject(new Error("复习仓库已更换"));
+      return;
+    }
+    if (home.loading) return;
+    if (home.error || home.readyRepository !== repo || !home.data) {
+      pendingReviewHandoffRef.current = undefined;
+      pending.reject(new Error("复习数据刷新失败"));
+      return;
+    }
+    if (home.data === pending.startingData) return;
+    pendingReviewHandoffRef.current = undefined;
+    const destination: Screen = dailyTask.newRemaining > 0 ? "daily-learn" : "home";
+    queueMicrotask(() => {
+      if (repositoryRef.current !== pending.repository || repositoryGenerationRef.current !== pending.generation) {
+        pending.reject(new Error("复习仓库已更换"));
+        return;
+      }
+      go(destination);
+      pending.resolve();
+    });
+  }, [dailyTask.newRemaining, go, handoffRevision, home.data, home.error, home.loading, home.readyRepository, repo]);
+
+  if (screen === "home" && initializationStatus === "loading") return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
+  if (screen === "home" && initializationStatus === "error") return <main className="loading"><p role="alert">本地数据暂时无法打开，请刷新后重试。{initialization.message}</p><button onClick={() => { setInitialization({ repository: repo, status: "loading", attempt: initializationAttempt + 1 }); }}>重试</button></main>;
+  if (screen === "home" && !home.data && !home.error) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
+  if (screen === "home" && home.error && !home.data) return <main className="loading"><p role="alert">{home.error}</p><button onClick={() => { void home.retry(); }}>重试</button></main>;
 
   return <div className="app-shell">
     <main className="app-main">
