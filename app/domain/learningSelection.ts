@@ -76,7 +76,7 @@ export function previewLearningGroup(
   phrases: Phrase[],
   states: PhraseLearningState[],
   categoryIds: readonly string[],
-  options: { date: string; target?: number },
+  options: { date: string; target?: number; reservedPhraseIds?: ReadonlySet<string> },
 ): LearningGroupPreview {
   const requestedTarget = options.target ?? AUTONOMOUS_LEARNING_GROUP_SIZE;
   const target = Number.isFinite(requestedTarget)
@@ -86,6 +86,7 @@ export function previewLearningGroup(
   const stateById = new Map(states.map((state) => [state.phraseId, state]));
   const unseen = (phrase: Phrase) => !phrase.retiredAt
     && (stateById.get(phrase.id)?.stage ?? "unseen") === "unseen"
+    && !options.reservedPhraseIds?.has(phrase.id)
     && validCategories.has(phrase.categoryId);
   const systemThemes = [...new Set(phrases.filter((phrase) => phrase.origin === "system" && phrase.kind === "core" && unseen(phrase)).map((phrase) => phrase.categoryId))].sort();
   const personal = phrases.filter((phrase) => (phrase.origin ?? "personal") === "personal" && (phrase.kind ?? "standalone") === "standalone" && unseen(phrase))
@@ -96,6 +97,11 @@ export function previewLearningGroup(
   if (!themeCategoryId) return { themeCategoryId, phrases: [] };
   return {
     themeCategoryId,
-    phrases: selectLearningGroup(phrases, states, { date: options.date, themeCategoryId, target }),
+    phrases: selectLearningGroup(phrases, states, {
+      date: options.date,
+      themeCategoryId,
+      target,
+      reservedPhraseIds: options.reservedPhraseIds,
+    }),
   };
 }

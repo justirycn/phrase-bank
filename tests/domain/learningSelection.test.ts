@@ -83,6 +83,21 @@ describe("selectLearningGroup", () => {
     expect(previewLearningGroup(phrases, [], ["travel"], { date: "2026-08-10", target: 0 }).phrases).toEqual([]);
   });
 
+  it("excludes reserved phrase IDs while deriving the preview theme and group", () => {
+    const reserved = phrase("reserved-work", { categoryId: "work" });
+    const available = phrase("available-travel", { categoryId: "travel" });
+
+    const preview = previewLearningGroup(
+      [reserved, available],
+      [],
+      ["travel", "work"],
+      { date: "2026-08-10", reservedPhraseIds: new Set([reserved.id]) },
+    );
+
+    expect(preview.themeCategoryId).toBe("travel");
+    expect(preview.phrases.map(({ id }) => id)).toEqual([available.id]);
+  });
+
   it("clamps preview targets to the safe zero-to-five range", () => {
     const phrases = Array.from({ length: 8 }, (_, index) => phrase(`phrase-${index}`));
 

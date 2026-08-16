@@ -177,8 +177,15 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const learnedToday = new Set(learningStates.filter((state) => state.firstTestedAt && shanghaiTimestampDate(state.firstTestedAt) === today).map((state) => state.phraseId)).size;
   const learningById = new Map(learningStates.map((state) => [state.phraseId, state]));
   const eligibleDue = due.filter((phrase) => ["learned", "mastered"].includes(learningById.get(phrase.id)?.stage ?? "unseen"));
-  const preview = previewLearningGroup(phrases, learningStates, categories.map((category) => category.id), { date: today });
-  const dailyPreview = previewLearningGroup(phrases, learningStates, categories.map((category) => category.id), { date: today, target: 5 });
+  const preview = previewLearningGroup(phrases, learningStates, categories.map((category) => category.id), {
+    date: today,
+    reservedPhraseIds: new Set(activeDailyLearningSession?.phraseIds ?? []),
+  });
+  const dailyPreview = previewLearningGroup(phrases, learningStates, categories.map((category) => category.id), {
+    date: today,
+    target: 5,
+    reservedPhraseIds: new Set(activeAutonomousLearningSession?.phraseIds ?? []),
+  });
   const nextThemeId = activeAutonomousLearningSession?.themeCategoryId ?? preview.themeCategoryId;
   const phraseIds = new Set(phrases.map((phrase) => phrase.id));
   const activePhraseIds = activeAutonomousLearningSession?.phraseIds.filter((id) => phraseIds.has(id));

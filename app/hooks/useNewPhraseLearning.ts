@@ -266,10 +266,12 @@ export function useNewPhraseLearning({
     replaceDailyRemaining(0);
 
     void (async () => {
-      const [phrases, states, initialActive, categories, preferences, dailyEvents] = await Promise.all([
+      const otherPurpose: LearningSessionPurpose = purpose === "daily" ? "autonomous" : "daily";
+      const [phrases, states, initialActive, otherActive, categories, preferences, dailyEvents] = await Promise.all([
         repository.listPhrases(),
         repository.listPhraseLearningStates(),
         repository.getActiveLearningSession(purpose),
+        repository.getActiveLearningSession(otherPurpose),
         repository.listCategories(),
         repository.getSpeechPreferences().catch(() => defaultPreferences),
         dailyRange ? repository.listTrainingEvents(dailyRange.from, dailyRange.to) : Promise.resolve([]),
@@ -357,7 +359,11 @@ export function useNewPhraseLearning({
         return;
       }
       const target = purpose === "daily" ? Math.min(5, remaining) : 5;
-      const preview = previewLearningGroup(phrases, states, categories.map((item) => item.id), { date, target });
+      const preview = previewLearningGroup(phrases, states, categories.map((item) => item.id), {
+        date,
+        target,
+        reservedPhraseIds: new Set(otherActive?.phraseIds ?? []),
+      });
       const { themeCategoryId } = preview;
       if (!themeCategoryId) {
         replacePhase("empty");

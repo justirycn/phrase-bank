@@ -116,6 +116,17 @@ function markDailyTaskComplete(repo: MemoryRepository) {
   })));
 }
 
+function activeLearningSession(
+  purpose: LearningSessionPurpose,
+  phraseIds: string[],
+): import("../../app/domain/types").LearningSessionRecord {
+  const now = new Date().toISOString();
+  return {
+    id: `${purpose}-active`, purpose, date: "2026-08-15", themeCategoryId: "daily", phraseIds,
+    studyIndex: 0, testIndex: 0, phase: "study", startedAt: now, updatedAt: now,
+  };
+}
+
 describe("PhraseBankApp", () => {
   it("keeps replacement review loading until repository B data is ready, then starts at B's first phrase", async () => {
     const user = userEvent.setup();
@@ -1003,6 +1014,37 @@ describe("PhraseBankApp", () => {
     expect(await screen.findByText("0 / 18 句")).toBeVisible();
     expect(screen.getByRole("button", { name: /继续今日任务/ })).toHaveTextContent("今日新句 0 / 15 · 还差 15 句");
     expect(screen.getByRole("button", { name: /自主学习/ })).toBeDisabled();
+  });
+
+  it("excludes an active daily queue from the autonomous home preview", async () => {
+    const repo = new MemoryRepository();
+    const reservedIds = Array.from({ length: 4 }, (_, index) => `daily-reserved-${index}`);
+    repo.phrases = [
+      ...reservedIds.map((id) => makePhrase({ id })),
+      makePhrase({ id: "autonomous-available-1" }),
+      makePhrase({ id: "autonomous-available-2" }),
+    ];
+    repo.learningSessions = [activeLearningSession("daily", reservedIds)];
+    markDailyTaskComplete(repo);
+
+    render(<PhraseBankApp repository={repo as never} />);
+
+    expect(await screen.findByRole("button", { name: /自主学习/ })).toHaveTextContent("开始学习 2 句");
+  });
+
+  it("excludes an active autonomous queue from the daily home preview", async () => {
+    const repo = new MemoryRepository();
+    const reservedIds = Array.from({ length: 4 }, (_, index) => `autonomous-reserved-${index}`);
+    repo.phrases = [
+      ...reservedIds.map((id) => makePhrase({ id })),
+      makePhrase({ id: "daily-available-1" }),
+      makePhrase({ id: "daily-available-2" }),
+    ];
+    repo.learningSessions = [activeLearningSession("autonomous", reservedIds)];
+
+    render(<PhraseBankApp repository={repo as never} />);
+
+    expect(await screen.findByRole("button", { name: /继续今日任务/ })).toHaveTextContent("还差 8 句");
   });
 
   it.each(["0", "51", "1.5"])('rejects invalid new-phrase goal %j without refreshing', async (value) => {

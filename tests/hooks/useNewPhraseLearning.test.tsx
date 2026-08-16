@@ -299,6 +299,31 @@ describe("useNewPhraseLearning", () => {
     expect(store.repository.getActiveLearningSession).toHaveBeenCalledWith("autonomous");
   });
 
+  it.each([
+    { purpose: "daily" as const, otherPurpose: "autonomous" as const },
+    { purpose: "autonomous" as const, otherPurpose: "daily" as const },
+  ])("keeps the other $otherPurpose checkpoint phrases reserved when starting $purpose", async ({ purpose, otherPurpose }) => {
+    const reserved = Array.from({ length: 4 }, (_, index) => phrase(`reserved-${index}`));
+    const available = Array.from({ length: 3 }, (_, index) => phrase(`available-${index}`));
+    const store = memoryRepository({
+      phrases: [...reserved, ...available],
+      states: [...reserved, ...available].map((item) => unseen(item.id)),
+      sessions: [{
+        id: `${otherPurpose}-active`, purpose: otherPurpose, date: "2026-08-09",
+        themeCategoryId: "daily", phraseIds: reserved.map((item) => item.id),
+        studyIndex: 0, testIndex: 0, phase: "study", startedAt: timestamp, updatedAt: timestamp,
+      }],
+    });
+    const hook = renderLearning(store, speech(), { purpose, dailyGoal: 10 });
+
+    await waitFor(() => expect(hook.result.current.phase).toBe("study"));
+    const created = store.sessions.find((session) => session.purpose === purpose);
+    expect(created?.phraseIds).toHaveLength(3);
+    expect(created?.phraseIds).toEqual(expect.arrayContaining(available.map((item) => item.id)));
+    expect(created?.phraseIds.some((id) => reserved.some((item) => item.id === id))).toBe(false);
+    expect(store.repository.getActiveLearningSession).toHaveBeenCalledWith(otherPurpose);
+  });
+
   it("treats a purpose-less migrated checkpoint as autonomous only", async () => {
     const legacy = phrase("legacy");
     const legacySession = {
@@ -718,7 +743,7 @@ describe("useNewPhraseLearning", () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
 
     act(() => hook.result.current.retry());
-    await waitFor(() => expect(store.repository.getActiveLearningSession).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(store.repository.getActiveLearningSession).toHaveBeenCalledTimes(4));
     releaseCreation();
     await waitFor(() => expect(hook.result.current.phase).toBe("study"));
     await act(async () => { await Promise.resolve(); });
@@ -884,7 +909,7 @@ describe("useNewPhraseLearning", () => {
     voice.speak.mockImplementationOnce(() => deferredReplay);
     const replaying = hook.result.current.replay();
     act(() => hook.result.current.retry());
-    await waitFor(() => expect(store.repository.getActiveLearningSession).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(store.repository.getActiveLearningSession).toHaveBeenCalledTimes(4));
     await waitFor(() => expect(hook.result.current.phase).toBe("study"));
 
     await act(async () => { rejectReplay(new Error("old speech failed")); await replaying; });
@@ -995,7 +1020,7 @@ describe("useNewPhraseLearning", () => {
     rerender({ clock: () => new Date("2026-08-10T09:00:00.000Z") });
     await act(() => result.current.nextStudyPhrase());
 
-    expect(store.repository.getActiveLearningSession).toHaveBeenCalledTimes(1);
+    expect(store.repository.getActiveLearningSession).toHaveBeenCalledTimes(2);
     expect(store.sessions).toHaveLength(1);
     expect(store.sessions[0].updatedAt).toBe("2026-08-10T09:00:00.000Z");
   });
