@@ -61,9 +61,35 @@ describe("backup parsing", () => {
 
   it("accepts version five preferences and rejects invalid or unsupported values", () => {
     const v5 = { ...valid, version: 5, trainingEvents: [], trainingSessions: [], phraseLearningStates: [], learningSessions: [], appPreferences: { dailyMasteryGoal: 18 } };
-    expect(parseBackup(JSON.stringify(v5))).toMatchObject({ version: 5, appPreferences: { dailyMasteryGoal: 18 } });
+    expect(parseBackup(JSON.stringify(v5))).toMatchObject({ version: 5, appPreferences: { dailyMasteryGoal: 18, dailyNewPhraseGoal: 10 } });
     expect(() => parseBackup(JSON.stringify({ ...v5, appPreferences: { dailyMasteryGoal: 0 } }))).toThrow("每日掌握目标无效");
     expect(() => parseBackup(JSON.stringify({ ...valid, version: 6 }))).toThrow();
+  });
+
+  it("defaults the new-phrase goal in old v4 and v5 backups and validates explicit values", () => {
+    const v5 = {
+      ...valid,
+      version: 5,
+      trainingEvents: [],
+      trainingSessions: [],
+      phraseLearningStates: [],
+      learningSessions: [],
+      appPreferences: { dailyMasteryGoal: 12 },
+    };
+    expect(parseBackup(JSON.stringify(v5))).toMatchObject({
+      version: 5,
+      appPreferences: { dailyMasteryGoal: 12, dailyNewPhraseGoal: 10 },
+    });
+    for (const dailyNewPhraseGoal of [0, 51, 1.5]) {
+      expect(() => parseBackup(JSON.stringify({
+        ...v5,
+        appPreferences: { dailyMasteryGoal: 12, dailyNewPhraseGoal },
+      }))).toThrow("每日新学目标无效");
+    }
+    expect(() => parseBackup(JSON.stringify({
+      ...v5,
+      appPreferences: { dailyNewPhraseGoal: 10 },
+    }))).toThrow("每日掌握目标无效");
   });
 
   it("preserves version-three learning and content state", () => {
@@ -150,7 +176,12 @@ describe("backup parsing", () => {
     const state = { phraseId: "p1", stage: "learned", firstSeenAt: valid.exportedAt, firstTestedAt: valid.exportedAt, firstResult: "good", consecutiveGood: 1, masteredDates: ["2026-08-07"], updatedAt: valid.exportedAt };
     const session = { id: "ls1", date: "2026-08-07", themeCategoryId: "daily", phraseIds: ["p1"], studyIndex: 1, testIndex: 1, phase: "test", startedAt: valid.exportedAt, updatedAt: valid.exportedAt, completedAt: valid.exportedAt };
     const v4 = { ...valid, version: 4, phrases: [phrase], trainingEvents: [], trainingSessions: [], phraseLearningStates: [state], learningSessions: [session] };
-    const migrated = { ...v4, version: 5, appPreferences: { dailyMasteryGoal: 10 } };
+    const migrated = {
+      ...v4,
+      version: 5,
+      learningSessions: [{ ...session, purpose: "autonomous" }],
+      appPreferences: { dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 },
+    };
     expect(parseBackup(JSON.stringify(v4))).toEqual(migrated);
     expect(parseBackup(JSON.stringify(migrated))).toEqual(migrated);
   });
@@ -203,6 +234,24 @@ describe("backup parsing", () => {
       expect(() => parseBackup(JSON.stringify({ ...v4, learningSessions: [{ ...session, ...patch }] }))).toThrow("学习会话");
     }
     expect(() => parseBackup(JSON.stringify({ ...v4, learningSessions: [session, { ...session, id: "ls2" }] }))).toThrow("多个进行中的学习会话");
+  });
+
+  it("normalizes purpose-less learning sessions and permits one active session per purpose", () => {
+    const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const session = { id: "ls1", date: "2026-08-07", themeCategoryId: "daily", phraseIds: ["p1"], studyIndex: 0, testIndex: 0, phase: "study", startedAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const base = { ...valid, version: 5, phrases: [phrase], trainingEvents: [], trainingSessions: [], phraseLearningStates: [], learningSessions: [session], appPreferences: { dailyMasteryGoal: 12 } };
+
+    expect(parseBackup(JSON.stringify(base))).toMatchObject({
+      version: 5,
+      learningSessions: [{ id: "ls1", purpose: "autonomous" }],
+      appPreferences: { dailyMasteryGoal: 12, dailyNewPhraseGoal: 10 },
+    });
+
+    const autonomous = { ...session, purpose: "autonomous" };
+    const daily = { ...session, id: "ls2", purpose: "daily" };
+    expect(() => parseBackup(JSON.stringify({ ...base, learningSessions: [autonomous, daily] }))).not.toThrow();
+    expect(() => parseBackup(JSON.stringify({ ...base, learningSessions: [autonomous, { ...daily, purpose: "autonomous" }] }))).toThrow("多个进行中的学习会话");
+    expect(() => parseBackup(JSON.stringify({ ...base, learningSessions: [{ ...session, purpose: "invalid" }] }))).toThrow("学习会话");
   });
 
   it("validates new phrase-learning state fields and stage invariants", () => {

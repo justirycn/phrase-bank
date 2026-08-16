@@ -1,4 +1,4 @@
-import { DEFAULT_DAILY_MASTERY_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV1, type BackupEnvelopeV5, type LearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
+import { DEFAULT_DAILY_MASTERY_GOAL, DEFAULT_DAILY_NEW_PHRASE_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV1, type BackupEnvelopeV5, type LearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
 import { effectiveMasteryDates, normalizeMasteryDates } from "../domain/learningProgress";
 
 type LegacyLearningState = Partial<PhraseLearningState> & Pick<PhraseLearningState, "phraseId">;
@@ -9,12 +9,28 @@ type BackupCandidate = Omit<Partial<BackupEnvelopeV1>, "version"> & {
   phraseLearningStates?: LegacyLearningState[];
   activeSystemContentVersion?: string;
   learningSessions?: LearningSessionRecord[];
-  appPreferences?: AppPreferences;
+  appPreferences?: Partial<AppPreferences>;
 };
 
-const defaultAppPreferences = (): AppPreferences => ({ dailyMasteryGoal: DEFAULT_DAILY_MASTERY_GOAL });
-const validAppPreferences = (value: unknown): value is AppPreferences => Boolean(value && typeof value === "object"
-  && Number.isInteger((value as AppPreferences).dailyMasteryGoal) && (value as AppPreferences).dailyMasteryGoal > 0);
+const defaultAppPreferences = (): AppPreferences => ({
+  dailyMasteryGoal: DEFAULT_DAILY_MASTERY_GOAL,
+  dailyNewPhraseGoal: DEFAULT_DAILY_NEW_PHRASE_GOAL,
+});
+
+function normalizeAppPreferences(value: unknown): AppPreferences {
+  if (!value || typeof value !== "object"
+    || !Number.isInteger((value as AppPreferences).dailyMasteryGoal)
+    || (value as AppPreferences).dailyMasteryGoal <= 0) throw new Error("每日掌握目标无效");
+  const dailyNewPhraseGoal = (value as Partial<AppPreferences>).dailyNewPhraseGoal;
+  if (dailyNewPhraseGoal !== undefined
+    && (!Number.isInteger(dailyNewPhraseGoal) || dailyNewPhraseGoal < 1 || dailyNewPhraseGoal > 50)) {
+    throw new Error("每日新学目标无效");
+  }
+  return {
+    dailyMasteryGoal: (value as AppPreferences).dailyMasteryGoal,
+    dailyNewPhraseGoal: dailyNewPhraseGoal ?? DEFAULT_DAILY_NEW_PHRASE_GOAL,
+  };
+}
 
 const validDuration = (value: unknown) => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const validIndex = (value: unknown) => typeof value === "number" && Number.isInteger(value) && value >= 0;
@@ -131,6 +147,7 @@ export function validateLearningSession(
   references?: { categoryIds: ReadonlySet<string>; phraseIds: ReadonlySet<string> },
 ) {
   return Boolean(session.id?.trim())
+    && (session.purpose === "daily" || session.purpose === "autonomous")
     && validDay(session.date)
     && Boolean(session.themeCategoryId?.trim())
     && (!references || references.categoryIds.has(session.themeCategoryId))
@@ -208,11 +225,15 @@ export function parseBackup(raw: string): BackupEnvelopeV5 {
     || !validDuration(session.activeSeconds);
   if (trainingSessions.some(invalidSession)) throw new Error("备份包含无效的训练会话");
 
-  const learningSessions = backup.version >= 4 ? backup.learningSessions : [];
-  if (!Array.isArray(learningSessions)) throw new Error("备份缺少学习会话");
+  const rawLearningSessions = backup.version >= 4 ? backup.learningSessions : [];
+  if (!Array.isArray(rawLearningSessions)) throw new Error("备份缺少学习会话");
+  const learningSessions = rawLearningSessions.map((session) => ({ purpose: "autonomous" as const, ...session })) as LearningSessionRecord[];
   const references = { categoryIds, phraseIds };
   if (learningSessions.some((session) => !validateLearningSession(session, references)) || new Set(learningSessions.map(({ id }) => id)).size !== learningSessions.length) throw new Error("备份包含无效的学习会话");
-  if (learningSessions.filter(({ completedAt }) => completedAt === undefined).length > 1) throw new Error("备份包含多个进行中的学习会话");
+  const activeLearningPurposes = learningSessions
+    .filter(({ completedAt }) => completedAt === undefined)
+    .map(({ purpose }) => purpose);
+  if (new Set(activeLearningPurposes).size !== activeLearningPurposes.length) throw new Error("备份包含多个进行中的学习会话");
 
   const sessionIds = new Set([...trainingSessions.map(({ id }) => id), ...learningSessions.map(({ id }) => id)]);
   const invalidEvent = (event: TrainingEvent) => !event.id?.trim() || !event.sessionId?.trim() || !sessionIds.has(event.sessionId)
@@ -239,15 +260,15 @@ export function parseBackup(raw: string): BackupEnvelopeV5 {
   }
 
   if (backup.version !== 5) {
-    return normalizeLegacyBackup({ ...backup, phrases, trainingEvents, trainingSessions } as BackupEnvelope);
+    return normalizeLegacyBackup({ ...backup, phrases, trainingEvents, trainingSessions, learningSessions } as BackupEnvelope);
   }
 
-  if (!validAppPreferences(backup.appPreferences)) throw new Error("每日掌握目标无效");
+  const appPreferences = normalizeAppPreferences(backup.appPreferences);
 
   return {
     format: "personal-phrase-bank", version: 5, exportedAt: backup.exportedAt,
     categories: backup.categories, phrases, reviewLogs: backup.reviewLogs,
-    trainingEvents, trainingSessions, phraseLearningStates: phraseLearningStates.map(normalizeCurrentLearningState), learningSessions, appPreferences: backup.appPreferences,
+    trainingEvents, trainingSessions, phraseLearningStates: phraseLearningStates.map(normalizeCurrentLearningState), learningSessions, appPreferences,
     ...(backup.version >= 3 && backup.activeSystemContentVersion ? { activeSystemContentVersion: backup.activeSystemContentVersion } : {}),
   };
 }

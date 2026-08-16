@@ -6,6 +6,7 @@ export type PhraseKind = "standalone" | "core" | "example";
 export type CefrLevel = "A2" | "B1" | "B2";
 export type LearningStage = "unseen" | "learning" | "learned" | "mastered";
 export type LearningPhase = "study" | "test";
+export type LearningSessionPurpose = "daily" | "autonomous";
 
 export interface TrainingEvent {
   id: string;
@@ -38,9 +39,11 @@ export interface SpeechPreferences {
 
 export interface AppPreferences {
   dailyMasteryGoal: number;
+  dailyNewPhraseGoal: number;
 }
 
 export const DEFAULT_DAILY_MASTERY_GOAL = 10;
+export const DEFAULT_DAILY_NEW_PHRASE_GOAL = 10;
 
 export interface DailyTrainingSummary {
   date: string;
@@ -95,6 +98,7 @@ export interface PhraseLearningState {
 
 export interface LearningSessionRecord {
   id: string;
+  purpose: LearningSessionPurpose;
   date: string;
   themeCategoryId: string;
   phraseIds: string[];

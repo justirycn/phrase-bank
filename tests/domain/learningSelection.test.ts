@@ -76,6 +76,20 @@ describe("selectLearningGroup", () => {
     expect(preview.phrases).toHaveLength(2);
   });
 
+  it("supports a smaller preview target and treats zero as selecting no phrases", () => {
+    const phrases = Array.from({ length: 8 }, (_, index) => phrase(`phrase-${index}`));
+
+    expect(previewLearningGroup(phrases, [], ["travel"], { date: "2026-08-10", target: 2 }).phrases).toHaveLength(2);
+    expect(previewLearningGroup(phrases, [], ["travel"], { date: "2026-08-10", target: 0 }).phrases).toEqual([]);
+  });
+
+  it("clamps preview targets to the safe zero-to-five range", () => {
+    const phrases = Array.from({ length: 8 }, (_, index) => phrase(`phrase-${index}`));
+
+    expect(previewLearningGroup(phrases, [], ["travel"], { date: "2026-08-10", target: 99 }).phrases).toHaveLength(5);
+    expect(previewLearningGroup(phrases, [], ["travel"], { date: "2026-08-10", target: -1 }).phrases).toEqual([]);
+  });
+
   it("selects unlearned personal standalone phrases first, newest first", () => {
     const result = selectLearningGroup([
       phrase("system"),

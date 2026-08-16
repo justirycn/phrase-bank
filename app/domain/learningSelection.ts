@@ -76,8 +76,12 @@ export function previewLearningGroup(
   phrases: Phrase[],
   states: PhraseLearningState[],
   categoryIds: readonly string[],
-  options: { date: string },
+  options: { date: string; target?: number },
 ): LearningGroupPreview {
+  const requestedTarget = options.target ?? AUTONOMOUS_LEARNING_GROUP_SIZE;
+  const target = Number.isFinite(requestedTarget)
+    ? Math.min(AUTONOMOUS_LEARNING_GROUP_SIZE, Math.max(0, Math.floor(requestedTarget)))
+    : 0;
   const validCategories = new Set(categoryIds);
   const stateById = new Map(states.map((state) => [state.phraseId, state]));
   const unseen = (phrase: Phrase) => !phrase.retiredAt
@@ -92,6 +96,6 @@ export function previewLearningGroup(
   if (!themeCategoryId) return { themeCategoryId, phrases: [] };
   return {
     themeCategoryId,
-    phrases: selectLearningGroup(phrases, states, { date: options.date, themeCategoryId, target: AUTONOMOUS_LEARNING_GROUP_SIZE }),
+    phrases: selectLearningGroup(phrases, states, { date: options.date, themeCategoryId, target }),
   };
 }
