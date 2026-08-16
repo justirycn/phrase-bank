@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { PhraseBankApp, submitReviewForCurrentRepository } from "../../app/PhraseBankApp";
 import type { AppPreferences, BackupEnvelopeV5, Category, LearningSessionPurpose, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import { isReviewDueOnShanghaiDay } from "../../app/domain/review";
 
 class MemoryRepository {
   phrases: Phrase[] = [];
@@ -20,7 +21,7 @@ class MemoryRepository {
   async initialize() { this.initializeAttempts += 1; if (this.initializePromise) await this.initializePromise; if (this.failInitialize) throw new Error("initialize failed"); }
   async listPhrases() { this.phraseReadAttempts += 1; if (this.phraseReadPromise) return this.phraseReadPromise; if (this.failPhraseReads) throw new Error("db failed"); return [...this.phrases]; }
   async listCategories() { return [...this.categories]; }
-  async listDuePhrases() { return [...this.phrases]; }
+  async listDuePhrases(now = new Date()) { return this.phrases.filter((phrase) => isReviewDueOnShanghaiDay(phrase.nextReviewAt, now)); }
   async savePhrase(phrase: Phrase) { this.phraseSaveAttempts += 1; if (this.savePhraseImpl) return this.savePhraseImpl(phrase); if (this.failPhraseSave) throw new Error("save failed"); this.phrases = [...this.phrases.filter((p) => p.id !== phrase.id), phrase]; }
   async deletePhrase(id: string) { this.phrases = this.phrases.filter((p) => p.id !== id); }
   async submitReview(id: string, result: ReviewResult, now?: Date, operationId?: string) { void id; void result; void now; void operationId; }
@@ -499,6 +500,46 @@ describe("PhraseBankApp", () => {
 
       expect(await screen.findByText("今日任务 · 新句学习")).toBeVisible();
       expect(screen.getByText("Next Shanghai day")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("continues review when the refreshed Shanghai day has newly due content", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-16T15:59:00.000Z"));
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const repo = new MemoryRepository();
+      repo.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 1 };
+      repo.phrases = [
+        makePhrase({ id: "old-day-due", chinese: "旧日最后一条" }),
+        makePhrase({ id: "new-day-due", chinese: "新一天到期复习", nextReviewAt: "2026-08-16T16:00:00.000Z" }),
+        makePhrase({ id: "new-day-learning", english: "Must wait until review", nextReviewAt: "2099-01-01T00:00:00.000Z" }),
+      ];
+      repo.learningStates = [learnedState("old-day-due"), learnedState("new-day-due")];
+      repo.listDuePhrases = async (now = new Date()) => repo.phrases.filter((phrase) => new Date(phrase.nextReviewAt).getTime() <= now.getTime());
+      const originalComplete = repo.completeTrainingSession.bind(repo);
+      let resolveCompletion!: () => void;
+      const completeReview = vi.fn((id: string, completedAt: Date) => new Promise<void>((resolve) => {
+        resolveCompletion = () => { void originalComplete(id, completedAt).then(resolve); };
+      }));
+      repo.completeTrainingSession = completeReview;
+
+      render(<PhraseBankApp repository={repo as never} />);
+      await user.click(await screen.findByRole("button", { name: /继续今日任务/ }));
+      expect(await screen.findByText("旧日最后一条")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
+      await user.click(screen.getByRole("button", { name: /掌握/ }));
+      await vi.waitFor(() => expect(completeReview).toHaveBeenCalledOnce());
+
+      vi.setSystemTime(new Date("2026-08-16T16:01:00.000Z"));
+      resolveCompletion();
+
+      expect(await screen.findByText("新一天到期复习")).toBeVisible();
+      expect(screen.getByText("今日复习 · 中文回忆")).toBeVisible();
+      expect(screen.queryByText("今日任务 · 新句学习")).not.toBeInTheDocument();
+      await vi.waitFor(() => expect(repo.sessions.filter((session) => !session.completedAt)).toHaveLength(1));
     } finally {
       vi.useRealTimers();
     }

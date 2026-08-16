@@ -249,16 +249,22 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
     }
     if (home.data === pending.startingData) return;
     pendingReviewHandoffRef.current = undefined;
-    const destination: Screen = dailyTask.newRemaining > 0 ? "daily-learn" : "home";
+    const stage = dailyTask.stage;
     queueMicrotask(() => {
       if (repositoryRef.current !== pending.repository || repositoryGenerationRef.current !== pending.generation) {
         pending.reject(new Error("复习仓库已更换"));
         return;
       }
-      go(destination);
+      if (stage === "review") {
+        setTrainingMode("standard");
+        setTrainingRun((run) => run + 1);
+        go("practice");
+      } else {
+        go(stage === "learning" ? "daily-learn" : "home");
+      }
       pending.resolve();
     });
-  }, [dailyTask.newRemaining, go, handoffRevision, home.data, home.error, home.loading, home.readyRepository, repo]);
+  }, [dailyTask.stage, go, handoffRevision, home.data, home.error, home.loading, home.readyRepository, repo]);
 
   if (screen === "home" && initializationStatus === "loading") return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
   if (screen === "home" && initializationStatus === "error") return <main className="loading"><p role="alert">本地数据暂时无法打开，请刷新后重试。{initialization.message}</p><button onClick={() => { setInitialization({ repository: repo, status: "loading", attempt: initializationAttempt + 1 }); }}>重试</button></main>;
