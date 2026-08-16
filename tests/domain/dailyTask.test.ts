@@ -40,6 +40,7 @@ describe("deriveDailyTask", () => {
       nextBatchSize: 0,
       inventoryShortage: 0,
       complete: false,
+      autonomousUnlocked: false,
     });
   });
 
@@ -67,6 +68,7 @@ describe("deriveDailyTask", () => {
       nextBatchSize: 4,
       inventoryShortage: 0,
       complete: false,
+      autonomousUnlocked: false,
     });
   });
 
@@ -84,6 +86,7 @@ describe("deriveDailyTask", () => {
       nextBatchSize: 0,
       inventoryShortage: 0,
       complete: true,
+      autonomousUnlocked: true,
     });
   });
 
@@ -102,6 +105,7 @@ describe("deriveDailyTask", () => {
       nextBatchSize: 0,
       inventoryShortage: 7,
       complete: false,
+      autonomousUnlocked: false,
     });
   });
 
@@ -120,6 +124,7 @@ describe("deriveDailyTask", () => {
       nextBatchSize: 0,
       inventoryShortage: 0,
       complete: true,
+      autonomousUnlocked: true,
     });
   });
 
@@ -137,6 +142,7 @@ describe("deriveDailyTask", () => {
       nextBatchSize: 0,
       inventoryShortage: 0,
       complete: false,
+      autonomousUnlocked: false,
     });
   });
 });

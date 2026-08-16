@@ -16,6 +16,7 @@ export interface DailyTask {
   nextBatchSize: number;
   inventoryShortage: number;
   complete: boolean;
+  autonomousUnlocked: boolean;
 }
 
 export function deriveDailyTask(input: DailyTaskInput): DailyTask {
@@ -31,6 +32,7 @@ export function deriveDailyTask(input: DailyTaskInput): DailyTask {
     nextBatchSize: reviewPending ? 0 : Math.min(5, newRemaining, availableNew),
     inventoryShortage: reviewPending ? 0 : Math.max(0, newRemaining - availableNew),
     complete,
+    autonomousUnlocked: complete,
   };
 }
 
