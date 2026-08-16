@@ -77,6 +77,10 @@ export function normalizeCurrentLearningState(state: PhraseLearningState): Phras
   };
 }
 
+function normalizeLearningSessionPurpose(session: LearningSessionRecord): LearningSessionRecord {
+  return { purpose: "autonomous", ...session };
+}
+
 export function normalizeLegacyLearningState(phrase: Phrase, legacy: LegacyLearningState | undefined, logs: ReviewLog[], events: TrainingEvent[]): PhraseLearningState {
   const evidence = resultEvidence(phrase.id, logs, events);
   const earliest = evidence[0];
@@ -119,8 +123,22 @@ export function normalizeLegacyLearningState(phrase: Phrase, legacy: LegacyLearn
 }
 
 export function normalizeLegacyBackup(backup: BackupEnvelope): BackupEnvelopeV5 {
-  if (backup.version === 5) return { ...backup, phraseLearningStates: backup.phraseLearningStates.map(normalizeCurrentLearningState) };
-  if (backup.version === 4) return { ...backup, version: 5, phraseLearningStates: backup.phraseLearningStates.map(normalizeCurrentLearningState), appPreferences: defaultAppPreferences() };
+  const learningSessions = backup.version >= 4
+    ? backup.learningSessions.map(normalizeLearningSessionPurpose)
+    : [];
+  if (backup.version === 5) return {
+    ...backup,
+    phraseLearningStates: backup.phraseLearningStates.map(normalizeCurrentLearningState),
+    learningSessions,
+    appPreferences: normalizeAppPreferences(backup.appPreferences),
+  };
+  if (backup.version === 4) return {
+    ...backup,
+    version: 5,
+    phraseLearningStates: backup.phraseLearningStates.map(normalizeCurrentLearningState),
+    learningSessions,
+    appPreferences: defaultAppPreferences(),
+  };
   const phrases = backup.phrases.map((phrase) => ({ origin: "personal", kind: "standalone", ...phrase })) as Phrase[];
   const trainingEvents = backup.version === 1 ? [] : backup.trainingEvents;
   const trainingSessions = backup.version === 1 ? [] : backup.trainingSessions;
@@ -136,7 +154,7 @@ export function normalizeLegacyBackup(backup: BackupEnvelope): BackupEnvelopeV5 
     trainingEvents,
     trainingSessions,
     phraseLearningStates: phrases.map((phrase) => normalizeLegacyLearningState(phrase, statesByPhrase.get(phrase.id), backup.reviewLogs, trainingEvents)),
-    learningSessions: [],
+    learningSessions,
     appPreferences: defaultAppPreferences(),
     ...(backup.version === 3 && backup.activeSystemContentVersion ? { activeSystemContentVersion: backup.activeSystemContentVersion } : {}),
   };
@@ -227,7 +245,7 @@ export function parseBackup(raw: string): BackupEnvelopeV5 {
 
   const rawLearningSessions = backup.version >= 4 ? backup.learningSessions : [];
   if (!Array.isArray(rawLearningSessions)) throw new Error("备份缺少学习会话");
-  const learningSessions = rawLearningSessions.map((session) => ({ purpose: "autonomous" as const, ...session })) as LearningSessionRecord[];
+  const learningSessions = rawLearningSessions.map(normalizeLearningSessionPurpose);
   const references = { categoryIds, phraseIds };
   if (learningSessions.some((session) => !validateLearningSession(session, references)) || new Set(learningSessions.map(({ id }) => id)).size !== learningSessions.length) throw new Error("备份包含无效的学习会话");
   const activeLearningPurposes = learningSessions

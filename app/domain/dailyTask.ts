@@ -11,26 +11,26 @@ export interface DailyTaskInput {
 
 export interface DailyTask {
   stage: "review" | "learning" | "complete";
-  remaining: number;
-  batchSize: number;
-  shortage: number;
-  autonomousUnlocked: boolean;
+  reviewPending: boolean;
+  newRemaining: number;
+  nextBatchSize: number;
+  inventoryShortage: number;
+  complete: boolean;
 }
 
 export function deriveDailyTask(input: DailyTaskInput): DailyTask {
-  const remaining = Math.max(0, input.newGoal - input.newCompletedToday);
+  const newRemaining = Math.max(0, input.newGoal - input.newCompletedToday);
   const availableNew = Math.max(0, input.availableNew);
-  const batchSize = Math.min(5, remaining, availableNew);
-  const shortage = Math.max(0, remaining - availableNew);
   const reviewPending = input.activeReview || input.dueCount > 0;
-  const learningPending = input.activeDailyLearning === true || remaining > 0;
+  const complete = !reviewPending && newRemaining === 0;
 
   return {
-    stage: reviewPending ? "review" : learningPending ? "learning" : "complete",
-    remaining,
-    batchSize,
-    shortage,
-    autonomousUnlocked: !reviewPending && !learningPending,
+    stage: reviewPending ? "review" : complete ? "complete" : "learning",
+    reviewPending,
+    newRemaining,
+    nextBatchSize: reviewPending ? 0 : Math.min(5, newRemaining, availableNew),
+    inventoryShortage: reviewPending ? 0 : Math.max(0, newRemaining - availableNew),
+    complete,
   };
 }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseBackup } from "../../app/storage/backup";
+import { normalizeLegacyBackup, parseBackup } from "../../app/storage/backup";
+import type { BackupEnvelope } from "../../app/domain/types";
 
 const valid = {
   format: "personal-phrase-bank",
@@ -252,6 +253,23 @@ describe("backup parsing", () => {
     expect(() => parseBackup(JSON.stringify({ ...base, learningSessions: [autonomous, daily] }))).not.toThrow();
     expect(() => parseBackup(JSON.stringify({ ...base, learningSessions: [autonomous, { ...daily, purpose: "autonomous" }] }))).toThrow("多个进行中的学习会话");
     expect(() => parseBackup(JSON.stringify({ ...base, learningSessions: [{ ...session, purpose: "invalid" }] }))).toThrow("学习会话");
+  });
+
+  it("normalizes old v4 and v5 data through the public legacy-normalization API", () => {
+    const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const state = { phraseId: "p1", stage: "learning", firstSeenAt: valid.exportedAt, consecutiveGood: 0, masteredDates: [], updatedAt: valid.exportedAt };
+    const session = { id: "ls1", date: "2026-08-07", themeCategoryId: "daily", phraseIds: ["p1"], studyIndex: 0, testIndex: 0, phase: "study", startedAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const common = { ...valid, phrases: [phrase], trainingEvents: [], trainingSessions: [], phraseLearningStates: [state], learningSessions: [session] };
+    const v4 = { ...common, version: 4 } as unknown as BackupEnvelope;
+    const v5 = { ...common, version: 5, appPreferences: { dailyMasteryGoal: 12 } } as unknown as BackupEnvelope;
+
+    for (const normalized of [normalizeLegacyBackup(v4), normalizeLegacyBackup(v5)]) {
+      expect(normalized).toMatchObject({
+        version: 5,
+        learningSessions: [{ id: "ls1", purpose: "autonomous" }],
+        appPreferences: { dailyNewPhraseGoal: 10 },
+      });
+    }
   });
 
   it("validates new phrase-learning state fields and stage invariants", () => {

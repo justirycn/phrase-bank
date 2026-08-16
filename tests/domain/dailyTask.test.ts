@@ -33,7 +33,14 @@ describe("deriveDailyTask", () => {
       newCompletedToday: 10,
       newGoal: 10,
       availableNew: 20,
-    })).toMatchObject({ stage: "review", autonomousUnlocked: false });
+    })).toEqual({
+      stage: "review",
+      reviewPending: true,
+      newRemaining: 0,
+      nextBatchSize: 0,
+      inventoryShortage: 0,
+      complete: false,
+    });
   });
 
   it("resumes an active review even when its original due count is exhausted", () => {
@@ -43,7 +50,7 @@ describe("deriveDailyTask", () => {
       newCompletedToday: 0,
       newGoal: 10,
       availableNew: 20,
-    }).stage).toBe("review");
+    })).toMatchObject({ stage: "review", reviewPending: true, complete: false });
   });
 
   it("caps the next learning batch at five and at the remaining goal", () => {
@@ -53,12 +60,13 @@ describe("deriveDailyTask", () => {
       newCompletedToday: 6,
       newGoal: 10,
       availableNew: 20,
-    })).toMatchObject({
+    })).toEqual({
       stage: "learning",
-      remaining: 4,
-      batchSize: 4,
-      shortage: 0,
-      autonomousUnlocked: false,
+      reviewPending: false,
+      newRemaining: 4,
+      nextBatchSize: 4,
+      inventoryShortage: 0,
+      complete: false,
     });
   });
 
@@ -69,12 +77,13 @@ describe("deriveDailyTask", () => {
       newCompletedToday: 10,
       newGoal: 10,
       availableNew: 20,
-    })).toMatchObject({
+    })).toEqual({
       stage: "complete",
-      remaining: 0,
-      batchSize: 0,
-      shortage: 0,
-      autonomousUnlocked: true,
+      reviewPending: false,
+      newRemaining: 0,
+      nextBatchSize: 0,
+      inventoryShortage: 0,
+      complete: true,
     });
   });
 
@@ -86,12 +95,48 @@ describe("deriveDailyTask", () => {
       newGoal: 10,
       availableNew: 0,
       activeDailyLearning: false,
-    })).toMatchObject({
+    })).toEqual({
       stage: "learning",
-      remaining: 7,
-      batchSize: 0,
-      shortage: 7,
-      autonomousUnlocked: false,
+      reviewPending: false,
+      newRemaining: 7,
+      nextBatchSize: 0,
+      inventoryShortage: 7,
+      complete: false,
+    });
+  });
+
+  it("completes immediately after the goal drops below today's progress despite an active daily session", () => {
+    expect(deriveDailyTask({
+      dueCount: 0,
+      activeReview: false,
+      newCompletedToday: 8,
+      newGoal: 5,
+      availableNew: 20,
+      activeDailyLearning: true,
+    })).toEqual({
+      stage: "complete",
+      reviewPending: false,
+      newRemaining: 0,
+      nextBatchSize: 0,
+      inventoryShortage: 0,
+      complete: true,
+    });
+  });
+
+  it("does not report an inventory shortage until pending review work is complete", () => {
+    expect(deriveDailyTask({
+      dueCount: 2,
+      activeReview: false,
+      newCompletedToday: 3,
+      newGoal: 10,
+      availableNew: 0,
+    })).toEqual({
+      stage: "review",
+      reviewPending: true,
+      newRemaining: 7,
+      nextBatchSize: 0,
+      inventoryShortage: 0,
+      complete: false,
     });
   });
 });
