@@ -1273,8 +1273,13 @@ label.settings-action:focus-within {
   font-size: 12px;
   line-height: 1.45;
 }
+.daily-task-breakdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .continue-start { background:#267453; color:#fff; border-color:transparent; }
 .training-entry button:disabled { opacity:.5; cursor:not-allowed; }
+.learning-start:disabled { background:#ebe7dc; color:#59635d; }
 
 /* Guided new-phrase learning. The 196px reserve covers the tallest grade tray. */
 .new-phrase-learning {
@@ -1334,6 +1339,10 @@ label.settings-action:focus-within {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.new-phrase-learning .task-mode-daily-learning {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .new-learning-close {
   display: grid;
@@ -1550,6 +1559,10 @@ select {
 }
 
 @container (max-width: 240px) {
+  .daily-task-breakdown {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
   .new-phrase-learning.phase-test {
     padding-bottom: calc(420px + env(safe-area-inset-bottom));
   }
