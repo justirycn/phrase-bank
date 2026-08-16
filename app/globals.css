@@ -1279,7 +1279,7 @@ label.settings-action:focus-within {
 }
 .continue-start { background:#267453; color:#fff; border-color:transparent; }
 .training-entry button:disabled { opacity:.5; cursor:not-allowed; }
-.learning-start:disabled { background:#ebe7dc; color:#59635d; opacity:1; }
+.training-entry .learning-start:disabled { background:#ebe7dc; color:#59635d; opacity:1; }
 
 /* Guided new-phrase learning. The 196px reserve covers the tallest grade tray. */
 .new-phrase-learning {

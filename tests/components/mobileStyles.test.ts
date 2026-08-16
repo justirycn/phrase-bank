@@ -12,6 +12,22 @@ function contrastRatio(foreground: string, background: string) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+function selectorSpecificity(selector: string): [number, number, number] {
+  const ids = selector.match(/#[\w-]+/g)?.length ?? 0;
+  const classesAndPseudos = selector.match(/\.[\w-]+|:(?!:)[\w-]+/g)?.length ?? 0;
+  const elements = selector
+    .replace(/#[\w-]+|\.[\w-]+|::?[\w-]+/g, " ")
+    .match(/[a-z][\w-]*/gi)?.length ?? 0;
+  return [ids, classesAndPseudos, elements];
+}
+
+function compareSpecificity(left: [number, number, number], right: [number, number, number]) {
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
 function ruleSelectors(css: string) {
   const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
   const selectors: string[] = [];
@@ -164,10 +180,13 @@ describe("iPhone new phrase learning styles", () => {
 
   it("keeps daily progress and disabled autonomous copy readable in narrow layouts", async () => {
     const css = await readFile("app/globals.css", "utf8");
-    const disabledRule = css.match(/\.learning-start:disabled\s*\{([^}]*)\}/i)?.[1] ?? "";
+    const genericSelector = ".training-entry button:disabled";
+    const overrideSelector = ".training-entry .learning-start:disabled";
+    const disabledRule = css.match(/\.training-entry \.learning-start:disabled\s*\{([^}]*)\}/i)?.[1] ?? "";
     const disabledBackground = disabledRule.match(/background:\s*(#[0-9a-f]{6})/i)?.[1];
     const disabledForeground = disabledRule.match(/color:\s*(#[0-9a-f]{6})/i)?.[1];
     expect(css).toMatch(/\.daily-task-breakdown\s*\{[^}]*min-width:\s*0[^}]*overflow-wrap:\s*anywhere/s);
+    expect(compareSpecificity(selectorSpecificity(overrideSelector), selectorSpecificity(genericSelector))).toBeGreaterThan(0);
     expect(disabledRule).toMatch(/opacity:\s*1/);
     expect(disabledBackground).toBeDefined();
     expect(disabledForeground).toBeDefined();
