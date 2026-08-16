@@ -42,6 +42,10 @@ export interface AppPreferences {
   dailyNewPhraseGoal: number;
 }
 
+export type PersistedAppPreferences = Omit<AppPreferences, "dailyNewPhraseGoal"> & {
+  dailyNewPhraseGoal?: number;
+};
+
 export const DEFAULT_DAILY_MASTERY_GOAL = 10;
 export const DEFAULT_DAILY_NEW_PHRASE_GOAL = 10;
 
@@ -109,6 +113,10 @@ export interface LearningSessionRecord {
   updatedAt: string;
   completedAt?: string;
 }
+
+export type PersistedLearningSessionRecord = Omit<LearningSessionRecord, "purpose"> & {
+  purpose?: LearningSessionPurpose;
+};
 
 export interface SystemContentPhrase extends PhraseInput {
   id: string;
@@ -192,7 +200,7 @@ export interface BackupEnvelopeV4 {
   trainingSessions: TrainingSessionRecord[];
   phraseLearningStates: PhraseLearningState[];
   activeSystemContentVersion?: string;
-  learningSessions: LearningSessionRecord[];
+  learningSessions: PersistedLearningSessionRecord[];
 }
 
 export interface BackupEnvelopeV5 {
@@ -206,8 +214,13 @@ export interface BackupEnvelopeV5 {
   trainingSessions: TrainingSessionRecord[];
   phraseLearningStates: PhraseLearningState[];
   activeSystemContentVersion?: string;
+  learningSessions: PersistedLearningSessionRecord[];
+  appPreferences: PersistedAppPreferences;
+}
+
+export type NormalizedBackupEnvelopeV5 = Omit<BackupEnvelopeV5, "learningSessions" | "appPreferences"> & {
   learningSessions: LearningSessionRecord[];
   appPreferences: AppPreferences;
-}
+};
 
 export type BackupEnvelope = BackupEnvelopeV1 | BackupEnvelopeV2 | BackupEnvelopeV3 | BackupEnvelopeV4 | BackupEnvelopeV5;

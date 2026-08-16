@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { normalizeLegacyBackup, parseBackup } from "../../app/storage/backup";
-import type { BackupEnvelope } from "../../app/domain/types";
 
 const valid = {
   format: "personal-phrase-bank",
@@ -256,12 +255,12 @@ describe("backup parsing", () => {
   });
 
   it("normalizes old v4 and v5 data through the public legacy-normalization API", () => {
-    const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal", kind: "standalone", reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
-    const state = { phraseId: "p1", stage: "learning", firstSeenAt: valid.exportedAt, consecutiveGood: 0, masteredDates: [], updatedAt: valid.exportedAt };
-    const session = { id: "ls1", date: "2026-08-07", themeCategoryId: "daily", phraseIds: ["p1"], studyIndex: 0, testIndex: 0, phase: "study", startedAt: valid.exportedAt, updatedAt: valid.exportedAt };
-    const common = { ...valid, phrases: [phrase], trainingEvents: [], trainingSessions: [], phraseLearningStates: [state], learningSessions: [session] };
-    const v4 = { ...common, version: 4 } as unknown as BackupEnvelope;
-    const v5 = { ...common, version: 5, appPreferences: { dailyMasteryGoal: 12 } } as unknown as BackupEnvelope;
+    const phrase = { id: "p1", english: "A", chinese: "A", categoryId: "daily", origin: "personal" as const, kind: "standalone" as const, reviewStep: 0, masteryLevel: 0, nextReviewAt: valid.exportedAt, createdAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const state = { phraseId: "p1", stage: "learning" as const, firstSeenAt: valid.exportedAt, consecutiveGood: 0, masteredDates: [], updatedAt: valid.exportedAt };
+    const session = { id: "ls1", date: "2026-08-07", themeCategoryId: "daily", phraseIds: ["p1"], studyIndex: 0, testIndex: 0, phase: "study" as const, startedAt: valid.exportedAt, updatedAt: valid.exportedAt };
+    const common = { ...valid, format: "personal-phrase-bank" as const, phrases: [phrase], trainingEvents: [], trainingSessions: [], phraseLearningStates: [state], learningSessions: [session] };
+    const v4 = { ...common, version: 4 as const };
+    const v5 = { ...common, version: 5 as const, appPreferences: { dailyMasteryGoal: 12 } };
 
     for (const normalized of [normalizeLegacyBackup(v4), normalizeLegacyBackup(v5)]) {
       expect(normalized).toMatchObject({

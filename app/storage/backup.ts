@@ -1,4 +1,4 @@
-import { DEFAULT_DAILY_MASTERY_GOAL, DEFAULT_DAILY_NEW_PHRASE_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV1, type BackupEnvelopeV5, type LearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
+import { DEFAULT_DAILY_MASTERY_GOAL, DEFAULT_DAILY_NEW_PHRASE_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV1, type LearningSessionRecord, type NormalizedBackupEnvelopeV5, type PersistedLearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
 import { effectiveMasteryDates, normalizeMasteryDates } from "../domain/learningProgress";
 
 type LegacyLearningState = Partial<PhraseLearningState> & Pick<PhraseLearningState, "phraseId">;
@@ -8,7 +8,7 @@ type BackupCandidate = Omit<Partial<BackupEnvelopeV1>, "version"> & {
   trainingSessions?: TrainingSessionRecord[];
   phraseLearningStates?: LegacyLearningState[];
   activeSystemContentVersion?: string;
-  learningSessions?: LearningSessionRecord[];
+  learningSessions?: PersistedLearningSessionRecord[];
   appPreferences?: Partial<AppPreferences>;
 };
 
@@ -77,7 +77,7 @@ export function normalizeCurrentLearningState(state: PhraseLearningState): Phras
   };
 }
 
-function normalizeLearningSessionPurpose(session: LearningSessionRecord): LearningSessionRecord {
+function normalizeLearningSessionPurpose(session: PersistedLearningSessionRecord): LearningSessionRecord {
   return { purpose: "autonomous", ...session };
 }
 
@@ -122,8 +122,8 @@ export function normalizeLegacyLearningState(phrase: Phrase, legacy: LegacyLearn
   return migrated;
 }
 
-export function normalizeLegacyBackup(backup: BackupEnvelope): BackupEnvelopeV5 {
-  const learningSessions = backup.version >= 4
+export function normalizeLegacyBackup(backup: BackupEnvelope): NormalizedBackupEnvelopeV5 {
+  const learningSessions = backup.version === 4 || backup.version === 5
     ? backup.learningSessions.map(normalizeLearningSessionPurpose)
     : [];
   if (backup.version === 5) return {
@@ -206,7 +206,7 @@ function invalidLearningState(state: LegacyLearningState, phraseIds: Set<string>
   return !hasSeen || !hasTested || !hasResult;
 }
 
-export function parseBackup(raw: string): BackupEnvelopeV5 {
+export function parseBackup(raw: string): NormalizedBackupEnvelopeV5 {
   let value: unknown;
   try { value = JSON.parse(raw); } catch { throw new Error("备份文件不是有效的 JSON"); }
   if (!value || typeof value !== "object") throw new Error("备份文件格式不正确");
