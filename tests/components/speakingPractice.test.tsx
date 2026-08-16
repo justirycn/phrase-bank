@@ -4,6 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import { SpeakingPractice } from "../../app/components/SpeakingPractice";
 import type { TrainingSessionController } from "../../app/hooks/useTrainingSession";
 
+const trainingHook = vi.hoisted(() => vi.fn());
+vi.mock("../../app/hooks/useTrainingSession", () => ({
+  useTrainingSession: (...args: unknown[]) => trainingHook(...args),
+}));
+
 function controller(overrides: Partial<TrainingSessionController> = {}): TrainingSessionController {
   return {
     phase: "prompt",
@@ -108,5 +113,66 @@ describe("SpeakingPractice", () => {
     await user.click(screen.getByRole("button", { name: "回到首页" }));
     await user.click(screen.getByRole("button", { name: "再练一组" }));
     expect(onHome).toHaveBeenCalledOnce(); expect(onAgain).toHaveBeenCalledOnce();
+  });
+});
+
+describe("PracticeSession completion", () => {
+  it("finishes once before handing a completed review to the daily task", async () => {
+    const finish = vi.fn(async () => undefined);
+    const onComplete = vi.fn(async () => undefined);
+    const repository = {} as never;
+    trainingHook.mockReturnValue(controller({ phase: "complete", current: undefined, finish }));
+    const { default: PracticeSession } = await import("../../app/components/screens/PracticeScreen");
+
+    const view = render(<PracticeSession
+      repository={repository}
+      mode="standard"
+      newIntroducedToday={0}
+      completionKey="repo-a-review-1"
+      onComplete={onComplete}
+      onHome={vi.fn()}
+      onAgain={vi.fn()}
+      setError={vi.fn()}
+    />);
+    view.rerender(<PracticeSession
+      repository={repository}
+      mode="standard"
+      newIntroducedToday={0}
+      completionKey="repo-a-review-1"
+      onComplete={onComplete}
+      onHome={vi.fn()}
+      onAgain={vi.fn()}
+      setError={vi.fn()}
+    />);
+
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(finish).toHaveBeenCalledOnce();
+    expect(finish.mock.invocationCallOrder[0]).toBeLessThan(onComplete.mock.invocationCallOrder[0]);
+  });
+
+  it("does not hand off when finishing fails and allows a completion retry", async () => {
+    const finish = vi.fn()
+      .mockRejectedValueOnce(new Error("save failed"))
+      .mockResolvedValueOnce(undefined);
+    const onComplete = vi.fn(async () => undefined);
+    const setError = vi.fn();
+    trainingHook.mockReturnValue(controller({ phase: "complete", current: undefined, finish }));
+    const { default: PracticeSession } = await import("../../app/components/screens/PracticeScreen");
+    render(<PracticeSession
+      repository={{} as never}
+      mode="standard"
+      newIntroducedToday={0}
+      completionKey="repo-a-review-2"
+      onComplete={onComplete}
+      onHome={vi.fn()}
+      onAgain={vi.fn()}
+      setError={setError}
+    />);
+
+    await vi.waitFor(() => expect(setError).toHaveBeenCalledWith("训练进度暂时无法保存，请稍后重试。"));
+    expect(onComplete).not.toHaveBeenCalled();
+    await userEvent.setup().click(screen.getByRole("button", { name: "再练一组" }));
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(finish).toHaveBeenCalledTimes(2);
   });
 });

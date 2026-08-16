@@ -9,13 +9,14 @@ function homeRepository() {
     listTrainingEvents: vi.fn(async () => []), listTrainingSessions: vi.fn(async () => []),
     listPhraseLearningStates: vi.fn(async () => []), getActiveLearningSession: vi.fn(async () => undefined),
     getActiveTrainingSession: vi.fn(async () => undefined),
-    getAppPreferences: vi.fn(async () => ({ dailyMasteryGoal: 10 })),
+    getAppPreferences: vi.fn(async () => ({ dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 })),
   } as unknown as PhraseRepository;
 }
 
 afterEach(() => {
   vi.doUnmock("../../app/components/screens/LibraryScreen");
   vi.doUnmock("../../app/components/screens/AddPhraseScreen");
+  vi.doUnmock("../../app/components/screens/LearningScreen");
   vi.resetModules();
 });
 
@@ -73,5 +74,33 @@ describe("non-home screen loading", () => {
     await act(async () => { resolveLibrary({ default: () => <h1>过期句库</h1> }); await Promise.resolve(); });
     expect(screen.getByRole("heading", { name: "当前添加页" })).toBeVisible();
     expect(screen.queryByRole("heading", { name: "过期句库" })).not.toBeInTheDocument();
+  }, 20_000);
+
+  it("loads daily learning from the shared learning chunk", async () => {
+    const loadLearning = vi.fn(() => Promise.resolve({ default: () => <h1>今日任务学习块</h1> }));
+    vi.doMock("../../app/components/screens/LearningScreen", loadLearning);
+    const { PhraseBankApp } = await import("../../app/PhraseBankApp");
+
+    await act(async () => { render(<PhraseBankApp repository={homeRepository()} initialScreen="daily-learn" />); await Promise.resolve(); });
+
+    expect(await screen.findByRole("heading", { name: "今日任务学习块" })).toBeVisible();
+    expect(loadLearning).toHaveBeenCalledTimes(1);
+  }, 20_000);
+
+  it("recovers daily learning when its shared chunk succeeds on retry", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const loadLearning = vi.fn()
+      .mockRejectedValueOnce(new Error("learning chunk unavailable"))
+      .mockResolvedValueOnce({ default: () => <h1>恢复的今日任务学习</h1> });
+    vi.doMock("../../app/components/screens/LearningScreen", loadLearning);
+    const { PhraseBankApp } = await import("../../app/PhraseBankApp");
+
+    await act(async () => { render(<PhraseBankApp repository={homeRepository()} initialScreen="daily-learn" />); await Promise.resolve(); });
+    expect(await screen.findByRole("alert")).toHaveTextContent("界面暂时无法加载，请重试。");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "重新加载" })); await Promise.resolve(); });
+
+    expect(await screen.findByRole("heading", { name: "恢复的今日任务学习" })).toBeVisible();
+    expect(loadLearning).toHaveBeenCalledTimes(2);
+    consoleError.mockRestore();
   }, 20_000);
 });

@@ -4,6 +4,7 @@ import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, use
 import { AppIcon } from "./components/AppIcon";
 import { TrainingHome } from "./components/TrainingHome";
 import type { PhraseInput, PhraseLearningState, ReviewResult, TrainingMode } from "./domain/types";
+import { countNewPhrasesOnShanghaiDay, deriveDailyTask } from "./domain/dailyTask";
 import { createNewPhrase } from "./domain/review";
 import { previewLearningGroup } from "./domain/learningSelection";
 import { useHomeData } from "./hooks/useHomeData";
@@ -11,7 +12,7 @@ import { installBundledSystemContent } from "./services/systemContentInstaller";
 import { LocalPhraseRepository } from "./storage/indexedDbRepository";
 import type { PhraseRepository } from "./storage/repository";
 
-type Screen = "home" | "library" | "add" | "learn" | "review" | "practice" | "settings";
+type Screen = "home" | "library" | "add" | "learn" | "daily-learn" | "review" | "practice" | "settings";
 type Repository = PhraseRepository;
 type InitializationStatus = "loading" | "ready" | "error";
 const defaultRepository = typeof window === "undefined" ? undefined : new LocalPhraseRepository();
@@ -66,7 +67,7 @@ function createLazyScreens() {
 }
 
 function ScreenLoading({ screen }: { screen: Screen }) {
-  const label = screen === "library" ? "句库" : screen === "add" ? "添加句子" : screen === "settings" ? "设置" : screen === "learn" ? "自主学习" : "训练";
+  const label = screen === "library" ? "句库" : screen === "add" ? "添加句子" : screen === "settings" ? "设置" : screen === "learn" ? "自主学习" : screen === "daily-learn" ? "今日任务学习" : "训练";
   return <div className="screen-loading" role="status" aria-label={`正在打开${label}`}><div className="pulse" /><p>正在打开{label}…</p></div>;
 }
 
@@ -81,6 +82,10 @@ class ScreenLoadBoundary extends Component<{ children: ReactNode; onRetry: () =>
 
 export function PhraseBankApp({ repository, contentInstaller, initialScreen = "home" }: { repository?: Repository; contentInstaller?: (repository: Repository) => Promise<unknown>; initialScreen?: Screen }) {
   const repo = repository ?? defaultRepository;
+  const [screenState, setScreenState] = useState<{ repository?: Repository; value: Screen }>(() => ({ repository: repo, value: initialScreen }));
+  const isRepositoryTaskScreen = (value: Screen) => value === "practice" || value === "daily-learn" || value === "learn";
+  const screen = screenState.repository === repo || !isRepositoryTaskScreen(screenState.value) ? screenState.value : "home";
+  const setScreen = useCallback((value: Screen) => setScreenState({ repository: repo, value }), [repo]);
   const repositoryRef = useRef(repo);
   const repositoryGenerationRef = useRef(0);
   useLayoutEffect(() => {
@@ -88,7 +93,6 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
     repositoryRef.current = repo;
     repositoryGenerationRef.current += 1;
   }, [repo]);
-  const [screen, setScreen] = useState<Screen>(initialScreen);
   const [initialization, setInitialization] = useState<{ repository?: Repository; status: InitializationStatus; attempt: number; message?: string }>(() => ({ repository: repo, status: repo ? "loading" : "ready", attempt: 0 }));
   const initializationStatus: InitializationStatus = initialization.repository === repo ? initialization.status : repo ? "loading" : "ready";
   const initializationAttempt = initialization.repository === repo ? initialization.attempt : 0;
@@ -98,7 +102,8 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const due = home.data?.duePhrases ?? [];
   const trainingEvents = home.data?.events ?? [];
   const learningStates = home.data?.learningStates ?? [];
-  const activeLearningSession = home.data?.activeLearningSession;
+  const activeDailyLearningSession = home.data?.activeDailyLearningSession;
+  const activeAutonomousLearningSession = home.data?.activeAutonomousLearningSession;
   const activeTrainingSession = home.data?.activeTrainingSession;
   const [trainingMode, setTrainingMode] = useState<TrainingMode>("standard");
   const [trainingRun, setTrainingRun] = useState(0);
@@ -161,27 +166,52 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const learningById = new Map(learningStates.map((state) => [state.phraseId, state]));
   const eligibleDue = due.filter((phrase) => ["learned", "mastered"].includes(learningById.get(phrase.id)?.stage ?? "unseen"));
   const preview = previewLearningGroup(phrases, learningStates, categories.map((category) => category.id), { date: today });
-  const nextThemeId = activeLearningSession?.themeCategoryId ?? preview.themeCategoryId;
+  const dailyPreview = previewLearningGroup(phrases, learningStates, categories.map((category) => category.id), { date: today, target: 5 });
+  const nextThemeId = activeAutonomousLearningSession?.themeCategoryId ?? preview.themeCategoryId;
   const phraseIds = new Set(phrases.map((phrase) => phrase.id));
-  const activePhraseIds = activeLearningSession?.phraseIds.filter((id) => phraseIds.has(id));
-  const activeCursor = activeLearningSession?.phase === "test" ? activeLearningSession.testIndex : activeLearningSession?.studyIndex ?? 0;
-  const activeRemaining = activeLearningSession?.phraseIds.slice(activeCursor).filter((id) => phraseIds.has(id)).length;
+  const activePhraseIds = activeAutonomousLearningSession?.phraseIds.filter((id) => phraseIds.has(id));
+  const activeCursor = activeAutonomousLearningSession?.phase === "test" ? activeAutonomousLearningSession.testIndex : activeAutonomousLearningSession?.studyIndex ?? 0;
+  const activeRemaining = activeAutonomousLearningSession?.phraseIds.slice(activeCursor).filter((id) => phraseIds.has(id)).length;
   const nextLearningCount = activePhraseIds?.length ?? preview.phrases.length;
   const activeReviewRemaining = activeTrainingSession
     ? activeTrainingSession.phraseIds.slice(activeTrainingSession.currentIndex).filter((id) => phraseIds.has(id)).length
     : 0;
+  const newCompletedToday = countNewPhrasesOnShanghaiDay(trainingEvents, today);
+  const dailyGoal = home.data?.appPreferences.dailyNewPhraseGoal ?? 10;
+  const dailyTask = deriveDailyTask({
+    dueCount: eligibleDue.length,
+    activeReview: Boolean(activeTrainingSession),
+    newCompletedToday,
+    newGoal: dailyGoal,
+    availableNew: activeDailyLearningSession?.phraseIds.filter((id) => phraseIds.has(id)).length ?? dailyPreview.phrases.length,
+    activeDailyLearning: Boolean(activeDailyLearningSession),
+  });
   const continueToday = () => {
-    if (activeTrainingSession || eligibleDue.length > 0) return startTraining("standard");
+    if (dailyTask.stage === "review") return startTraining("standard");
+    if (dailyTask.stage === "learning") return go("daily-learn");
+  };
+  const afterReviewComplete = async (completedRepository: Repository) => {
+    const generation = repositoryGenerationRef.current;
+    if (repositoryRef.current !== completedRepository) return;
+    await refresh();
+    if (repositoryRef.current !== completedRepository || repositoryGenerationRef.current !== generation) return;
+    go(dailyTask.newRemaining > 0 ? "daily-learn" : "home");
   };
 
   return <div className="app-shell">
     <main className="app-main">
       {(error || home.error) && <div className="toast error" role="alert">{error || home.error}</div>}
       {notice && <div className="toast" role="status">{notice}</div>}
-      {screen === "home" && <TrainingHome dailyProgress={dailyProgress} dailyMasteryGoal={home.data?.appPreferences.dailyMasteryGoal ?? 10} streak={home.data?.outcomes.streak ?? { current: 0, lightDaysUsedThisWeek: 0 }} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} activeLearning={Boolean(activeLearningSession)} activeRemaining={activeRemaining} activeReview={Boolean(activeTrainingSession)} reviewRemaining={activeReviewRemaining} dueCount={eligibleDue.length} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onContinue={continueToday} onStartLearning={() => go("learn")} />}
+      {screen === "home" && <TrainingHome dailyProgress={dailyProgress} dailyMasteryGoal={home.data?.appPreferences.dailyMasteryGoal ?? 10} streak={home.data?.outcomes.streak ?? { current: 0, lightDaysUsedThisWeek: 0 }} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} themeName={categoryNames.get(nextThemeId ?? "")} activeLearning={Boolean(activeAutonomousLearningSession)} activeRemaining={activeRemaining} activeReview={Boolean(activeTrainingSession) || dailyTask.stage === "learning"} reviewRemaining={activeTrainingSession ? activeReviewRemaining : dailyTask.newRemaining} dueCount={eligibleDue.length} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onContinue={continueToday} onStartLearning={() => go("learn")} />}
       <ScreenLoadBoundary key={screen} onRetry={() => setLazyScreens(createLazyScreens())}><Suspense fallback={<ScreenLoading screen={screen} />}>{screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={saveAddedPhrase} onRetryState={retryAddedPhraseState} onComplete={completeAddedPhrase} />}
-      {screen === "learn" && repo && <LearningSession repository={repo} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}
+      {screen === "learn" && repo && <LearningSession key={`${repositoryReviewKey(repo)}-autonomous`} repository={repo} purpose="autonomous" onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}
+      {screen === "daily-learn" && repo && <LearningSession key={`${repositoryReviewKey(repo)}-daily`} repository={repo} purpose="daily" dailyGoal={dailyGoal} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onStartAutonomous={() => go("learn")} onDailyGoalComplete={async () => {
+        const generation = repositoryGenerationRef.current;
+        const learningRepository = repo;
+        await refresh();
+        if (repositoryRef.current !== learningRepository || repositoryGenerationRef.current !== generation) return;
+      }} />}
       {screen === "review" && (repo && home.readyRepository === repo
         ? <Review key={repositoryReviewKey(repo)} phrases={eligibleDue} onBack={() => go("home")} onGrade={async (id, result, operationId) => {
           const generation = repositoryGenerationRef.current;
@@ -197,10 +227,10 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
           );
         }} />
         : <ScreenLoading screen="review" />)}
-      {screen === "practice" && repo && <PracticeSession key={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => { setTrainingRun((run) => run + 1); void refresh().catch(() => setError("本地数据暂时无法刷新，请稍后再试。")); }} setError={setError} />}
-      {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} appPreferences={home.data?.appPreferences ?? { dailyMasteryGoal: 10 }} refresh={refresh} setNotice={setNotice} setError={setError} />}</Suspense></ScreenLoadBoundary>
+      {screen === "practice" && repo && <PracticeSession key={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} completionKey={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} onComplete={() => afterReviewComplete(repo)} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => { setTrainingRun((run) => run + 1); void refresh().catch(() => setError("本地数据暂时无法刷新，请稍后再试。")); }} setError={setError} />}
+      {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} appPreferences={home.data?.appPreferences ?? { dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 }} refresh={refresh} setNotice={setNotice} setError={setError} />}</Suspense></ScreenLoadBoundary>
     </main>
-    {screen !== "learn" && screen !== "review" && screen !== "practice" && <nav className="bottom-nav" aria-label="主导航">
+    {screen !== "learn" && screen !== "daily-learn" && screen !== "review" && screen !== "practice" && <nav className="bottom-nav" aria-label="主导航">
       <button className={screen === "home" ? "active" : ""} aria-current={screen === "home" ? "page" : undefined} onClick={() => go("home")}><span><AppIcon name="home" size={21} /></span>复习</button>
       <button className={screen === "library" ? "active" : ""} aria-current={screen === "library" ? "page" : undefined} onClick={() => go("library")}><span><AppIcon name="library" size={21} /></span>句库</button>
       <button className={screen === "add" ? "add-nav active" : "add-nav"} aria-label="添加" aria-current={screen === "add" ? "page" : undefined} onClick={() => go("add")}><span><AppIcon name="add" size={25} /></span>添加</button>

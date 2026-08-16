@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { PhraseBankApp, submitReviewForCurrentRepository } from "../../app/PhraseBankApp";
-import type { AppPreferences, BackupEnvelopeV5, Category, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import type { AppPreferences, BackupEnvelopeV5, Category, LearningSessionPurpose, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 
 class MemoryRepository {
   phrases: Phrase[] = [];
@@ -36,7 +36,7 @@ class MemoryRepository {
   learningSessions: import("../../app/domain/types").LearningSessionRecord[] = [];
   preferenceLoad?: Promise<SpeechPreferences>;
   savePreferenceImpl?: (value: SpeechPreferences) => Promise<void>;
-  appPreferences: AppPreferences = { dailyMasteryGoal: 10 };
+  appPreferences: AppPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 };
   appPreferenceSaves: AppPreferences[] = [];
   failAppPreferenceSave = false;
   async getPhrase(id: string) { return this.phrases.find((phrase) => phrase.id === id); }
@@ -55,7 +55,7 @@ class MemoryRepository {
   async getPhraseLearningState(id: string) { return this.learningStates.find((state) => state.phraseId === id); }
   async savePhraseLearningState(state: PhraseLearningState) { if (this.failLearningStateSave) throw new Error("state failed"); this.learningStates = [...this.learningStates.filter((item) => item.phraseId !== state.phraseId), state]; }
   async saveLearningSession(session: import("../../app/domain/types").LearningSessionRecord) { this.learningSessions = [...this.learningSessions.filter((item) => item.id !== session.id), session]; }
-  async getActiveLearningSession() { return this.learningSessions.find((session) => !session.completedAt); }
+  async getActiveLearningSession(purpose: LearningSessionPurpose) { return this.learningSessions.find((session) => session.purpose === purpose && !session.completedAt); }
   async completeLearningSession(id: string, completedAt: Date) { this.learningSessions = this.learningSessions.map((session) => session.id === id ? { ...session, completedAt: completedAt.toISOString() } : session); }
   async submitFirstLearningReview(event: TrainingEvent, nextSession: import("../../app/domain/types").LearningSessionRecord) {
     this.events.push(event); await this.saveLearningSession(nextSession);
@@ -262,9 +262,7 @@ describe("PhraseBankApp", () => {
     expect(screen.getByText(/第\s*2\s*\/\s*2\s*个/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
     await user.click(screen.getByRole("button", { name: /掌握/ }));
-    expect(await screen.findByRole("heading", { name: "这一组完成了" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "回到首页" }));
-    expect(await screen.findByRole("button", { name: /继续今日任务/ })).toHaveTextContent("今天到期 2 句");
+    expect(await screen.findByText("今日任务 · 新句学习")).toBeVisible();
   });
 
   it("opens a learned phrase scheduled later on the same Shanghai day", async () => {
@@ -331,13 +329,78 @@ describe("PhraseBankApp", () => {
     const user = userEvent.setup(); const repo = new MemoryRepository(); const now = new Date().toISOString();
     repo.phrases = [makePhrase({ id: "active-a" }), makePhrase({ id: "active-b" })];
     repo.learningStates = Array.from({ length: 15 }, (_, index) => ({ ...learnedState(`done-${index}`), firstTestedAt: now }));
-    repo.learningSessions = [{ id: "active", date: "2026-08-10", themeCategoryId: "daily", phraseIds: ["active-a", "active-b"], studyIndex: 0, testIndex: 0, phase: "study", startedAt: now, updatedAt: now }];
+    repo.learningSessions = [{ id: "active", purpose: "autonomous", date: "2026-08-10", themeCategoryId: "daily", phraseIds: ["active-a", "active-b"], studyIndex: 0, testIndex: 0, phase: "study", startedAt: now, updatedAt: now }];
     render(<PhraseBankApp repository={repo as never} />);
     const entry = await screen.findByRole("button", { name: /自主学习/ });
     expect(entry).toHaveTextContent("继续上次 · 剩余 2 句");
-    expect(screen.getByRole("button", { name: /继续今日任务/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /继续今日任务/ })).toBeEnabled();
     await user.click(entry);
     expect(await screen.findByText("I'll get back to you.")).toBeVisible();
+  });
+
+  it("opens daily new-phrase learning directly when no review is due", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 1 };
+    repo.phrases = [makePhrase({ id: "daily-new", english: "Daily new phrase", origin: "system", kind: "core", nextReviewAt: "2099-01-01T00:00:00.000Z" })];
+
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: /继续今日任务/ }));
+
+    expect(await screen.findByText("今日任务 · 新句学习")).toBeVisible();
+    expect(screen.getByText("Daily new phrase")).toBeVisible();
+    expect(repo.learningSessions[0]).toMatchObject({ purpose: "daily" });
+  });
+
+  it("resumes the daily checkpoint without consuming the autonomous checkpoint", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository(); const now = new Date().toISOString();
+    repo.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 2 };
+    repo.phrases = [
+      makePhrase({ id: "daily-a", english: "Daily first", nextReviewAt: "2099-01-01T00:00:00.000Z" }),
+      makePhrase({ id: "daily-b", english: "Daily cursor", nextReviewAt: "2099-01-01T00:00:00.000Z" }),
+      makePhrase({ id: "auto-a", english: "Autonomous untouched", nextReviewAt: "2099-01-01T00:00:00.000Z" }),
+    ];
+    repo.learningSessions = [
+      { id: "daily-active", purpose: "daily", date: "2026-08-16", themeCategoryId: "daily", phraseIds: ["daily-a", "daily-b"], studyIndex: 1, testIndex: 0, phase: "study", startedAt: now, updatedAt: now },
+      { id: "auto-active", purpose: "autonomous", date: "2026-08-16", themeCategoryId: "daily", phraseIds: ["auto-a"], studyIndex: 0, testIndex: 0, phase: "study", startedAt: now, updatedAt: now },
+    ];
+
+    render(<PhraseBankApp repository={repo as never} />);
+    await user.click(await screen.findByRole("button", { name: /继续今日任务/ }));
+
+    expect(await screen.findByText("Daily cursor")).toBeVisible();
+    expect(screen.getByText("今日任务 · 新句学习")).toBeVisible();
+    expect(screen.queryByText("Autonomous untouched")).not.toBeInTheDocument();
+    expect(repo.learningSessions.find(({ id }) => id === "auto-active")).toMatchObject({ studyIndex: 0, phase: "study" });
+    expect(repo.learningSessions.find(({ id }) => id === "auto-active")).not.toHaveProperty("completedAt");
+  });
+
+  it("does not let an old repository review completion enter the replacement repository's daily queue", async () => {
+    const user = userEvent.setup(); const repoA = new MemoryRepository(); const repoB = new MemoryRepository();
+    repoA.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 1 };
+    repoA.phrases = [
+      makePhrase({ id: "due-a", chinese: "仓库 A 到期", origin: "personal" }),
+      makePhrase({ id: "new-a", english: "A new", nextReviewAt: "2099-01-01T00:00:00.000Z" }),
+    ];
+    repoA.learningStates = [learnedState("due-a")];
+    repoB.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 1 };
+    repoB.phrases = [makePhrase({ id: "new-b", english: "B new must stay queued", nextReviewAt: "2099-01-01T00:00:00.000Z" })];
+    let resolveCompletion!: () => void;
+    const completeA = vi.fn(() => new Promise<void>((resolve) => { resolveCompletion = resolve; }));
+    repoA.completeTrainingSession = completeA;
+
+    const view = render(<PhraseBankApp repository={repoA as never} />);
+    await user.click(await screen.findByRole("button", { name: /继续今日任务/ }));
+    await user.click(await screen.findByRole("button", { name: "查看英文答案并自评" }));
+    await user.click(screen.getByRole("button", { name: /掌握/ }));
+    await vi.waitFor(() => expect(completeA).toHaveBeenCalledOnce());
+
+    view.rerender(<PhraseBankApp repository={repoB as never} />);
+    expect(await screen.findByRole("button", { name: /继续今日任务/ })).toBeVisible();
+    resolveCompletion();
+    await Promise.resolve();
+
+    expect(screen.queryByText("今日任务 · 新句学习")).not.toBeInTheDocument();
+    expect(repoB.learningSessions).toHaveLength(0);
   });
 
   it("offers the next five autonomous phrases after sixteen prior first-tested records", async () => {
@@ -349,7 +412,7 @@ describe("PhraseBankApp", () => {
 
     expect(await screen.findByRole("button", { name: /自主学习/ })).toHaveTextContent("开始学习 5 句");
     expect(screen.getByRole("button", { name: /自主学习/ })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /继续今日任务/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /继续今日任务/ })).toBeEnabled();
   });
 
   it("enters new phrase learning without bottom navigation and can return home", async () => {
@@ -360,7 +423,7 @@ describe("PhraseBankApp", () => {
     expect(await screen.findByText("I'll get back to you.")).toBeVisible();
     expect(screen.queryByRole("navigation", { name: "主导航" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /关闭学习并返回首页/ }));
-    expect(await screen.findByRole("button", { name: /继续今日任务/ })).toBeDisabled();
+    expect(await screen.findByRole("button", { name: /继续今日任务/ })).toBeEnabled();
   });
 
   it("refreshes today's learned count after completing a short learning group", async () => {
