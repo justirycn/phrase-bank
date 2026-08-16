@@ -198,17 +198,16 @@ describe("PracticeSession completion", () => {
     />);
 
     await vi.waitFor(() => expect(finish).toHaveBeenCalledOnce());
-    await userEvent.setup().click(screen.getByRole("button", { name: "再练一组" }));
+    await userEvent.setup().click(await screen.findByRole("button", { name: "再练一组" }));
     await vi.waitFor(() => expect(onAgain).toHaveBeenCalledOnce());
     expect(onComplete).not.toHaveBeenCalled();
     expect(finish).toHaveBeenCalledTimes(2);
   });
 
-  it("deduplicates a pending finish while honoring the clicked completion action", async () => {
-    let resolveFinish!: () => void;
-    const finish = vi.fn(() => new Promise<void>((resolve) => { resolveFinish = resolve; }));
-    const onComplete = vi.fn(async () => undefined);
-    const onHome = vi.fn(async () => undefined);
+  it("hides completion actions while the automatic handoff is still pending", async () => {
+    let resolveHandoff!: () => void;
+    const finish = vi.fn(async () => undefined);
+    const onComplete = vi.fn(() => new Promise<void>((resolve) => { resolveHandoff = resolve; }));
     trainingHook.mockReturnValue(controller({ phase: "complete", current: undefined, finish }));
     const { default: PracticeSession } = await import("../../app/components/screens/PracticeScreen");
     render(<PracticeSession
@@ -217,16 +216,16 @@ describe("PracticeSession completion", () => {
       newIntroducedToday={0}
       completionKey="repo-a-review-4"
       onComplete={onComplete}
-      onHome={onHome}
+      onHome={vi.fn()}
       onAgain={vi.fn()}
       setError={vi.fn()}
     />);
 
-    await vi.waitFor(() => expect(finish).toHaveBeenCalledOnce());
-    await userEvent.setup().click(screen.getByRole("button", { name: "回到首页" }));
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
     expect(finish).toHaveBeenCalledOnce();
-    resolveFinish();
-    await vi.waitFor(() => expect(onHome).toHaveBeenCalledOnce());
-    expect(onComplete).not.toHaveBeenCalled();
+    expect(screen.getByRole("status", { name: "正在保存并继续今日任务" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "回到首页" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "再练一组" })).not.toBeInTheDocument();
+    resolveHandoff();
   });
 });
