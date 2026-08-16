@@ -1,4 +1,4 @@
-import type { AppPreferences, BackupEnvelope, BackupEnvelopeV5, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+import type { AppPreferences, BackupEnvelope, BackupEnvelopeV5, Category, LearningSessionPurpose, LearningSessionRecord, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
 
 export interface PhraseRepository {
   initialize(): Promise<void>;
@@ -26,7 +26,7 @@ export interface PhraseRepository {
   getPhraseLearningState(id: string): Promise<PhraseLearningState | undefined>;
   savePhraseLearningState(state: PhraseLearningState): Promise<void>;
   saveLearningSession(session: LearningSessionRecord): Promise<void>;
-  getActiveLearningSession(): Promise<LearningSessionRecord | undefined>;
+  getActiveLearningSession(purpose: LearningSessionPurpose): Promise<LearningSessionRecord | undefined>;
   completeLearningSession(id: string, completedAt: Date): Promise<void>;
   submitFirstLearningReview(event: TrainingEvent, nextSession: LearningSessionRecord): Promise<void>;
   getActiveSystemContentVersion(): Promise<string | undefined>;

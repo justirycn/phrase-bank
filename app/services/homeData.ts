@@ -83,7 +83,8 @@ export async function loadHomeData(repository: PhraseRepository, now = new Date(
     trainingSessions,
     learningStates,
     activeTrainingSession,
-    activeLearningSession,
+    activeDailyLearningSession,
+    activeAutonomousLearningSession,
     appPreferences,
   ] = await Promise.all([
     repository.listPhrases(),
@@ -92,7 +93,8 @@ export async function loadHomeData(repository: PhraseRepository, now = new Date(
     repository.listTrainingSessions(heatmapRange.from, heatmapRange.to),
     repository.listPhraseLearningStates(),
     repository.getActiveTrainingSession(),
-    repository.getActiveLearningSession(),
+    repository.getActiveLearningSession("daily"),
+    repository.getActiveLearningSession("autonomous"),
     repository.getAppPreferences(),
   ]);
   const eventRead = await eventsResult;
@@ -105,7 +107,8 @@ export async function loadHomeData(repository: PhraseRepository, now = new Date(
     trainingSessions,
     learningStates,
     activeTrainingSession,
-    activeLearningSession,
+    activeDailyLearningSession,
+    activeAutonomousLearningSession,
     appPreferences,
     outcomes,
     events,

@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { describe, expect, it, vi } from "vitest";
 import { CloudPhraseRepository } from "../../app/storage/cloudRepository";
 import { createNewPhrase } from "../../app/domain/review";
+import type { LearningSessionRecord } from "../../app/domain/types";
 
 describe("CloudPhraseRepository", () => {
   it("invokes the browser fetch function with the global context", async () => {
@@ -36,8 +37,8 @@ describe("CloudPhraseRepository", () => {
     });
     const repo = new CloudPhraseRepository(fetcher);
     await repo.initialize();
-    await repo.saveAppPreferences({ dailyMasteryGoal: 12 });
-    expect(uploads.at(-1)).toMatchObject({ snapshot: { version: 5, appPreferences: { dailyMasteryGoal: 12 } } });
+    await repo.saveAppPreferences({ dailyMasteryGoal: 12, dailyNewPhraseGoal: 15 });
+    expect(uploads.at(-1)).toMatchObject({ snapshot: { version: 5, appPreferences: { dailyMasteryGoal: 12, dailyNewPhraseGoal: 15 } } });
   });
 
   it("normalizes already-v5 mastery while loading a cloud snapshot", async () => {
@@ -91,7 +92,7 @@ describe("CloudPhraseRepository", () => {
     });
 
     await repo.initialize();
-    await repo.saveAppPreferences({ dailyMasteryGoal: 12 });
+    await repo.saveAppPreferences({ dailyMasteryGoal: 12, dailyNewPhraseGoal: 10 });
 
     expect(await repo.getPhraseLearningState(phrase.id)).toMatchObject({
       stage: "learned", consecutiveGood: 1, masteryResetAt: resetAt,
@@ -129,6 +130,35 @@ describe("CloudPhraseRepository", () => {
     expect(snapshot.reviewLogs.filter(({ phraseId }) => phraseId === phrase.id)).toHaveLength(1);
     expect(snapshot.reviewLogs.find(({ phraseId }) => phraseId === phrase.id)?.id).toBe("cloud-review-operation");
     expect(snapshot.phrases.find(({ id }) => id === phrase.id)).toMatchObject({ reviewStep: 1, masteryLevel: 1 });
+  });
+
+  it("preserves both learning purposes and preferences when retrying a failed upload", async () => {
+    let failNextUpload = false;
+    const uploads: Array<{ snapshot: { learningSessions: LearningSessionRecord[]; appPreferences: unknown } }> = [];
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== "PUT") return Response.json({ snapshot: null });
+      if (failNextUpload) { failNextUpload = false; return Response.json({}, { status: 503 }); }
+      uploads.push(JSON.parse(String(init.body)));
+      return Response.json({ ok: true });
+    });
+    const repo = new CloudPhraseRepository(fetcher);
+    await repo.initialize();
+    const session = (id: string, purpose: LearningSessionRecord["purpose"]): LearningSessionRecord => ({
+      id, purpose, date: "2026-08-10", themeCategoryId: "daily", phraseIds: ["starter-daily-not-sure"],
+      studyIndex: 0, testIndex: 0, phase: "study", startedAt: "2026-08-10T08:00:00.000Z", updatedAt: "2026-08-10T08:00:00.000Z",
+    });
+    const autonomous = session("cloud-autonomous", "autonomous");
+    const daily = session("cloud-daily", "daily");
+    await repo.saveLearningSession(autonomous);
+    failNextUpload = true;
+    await expect(repo.saveLearningSession(daily)).rejects.toThrow("云端数据保存失败");
+    expect(await repo.getActiveLearningSession("autonomous")).toEqual(autonomous);
+    expect(await repo.getActiveLearningSession("daily")).toEqual(daily);
+
+    await repo.saveAppPreferences({ dailyMasteryGoal: 12, dailyNewPhraseGoal: 15 });
+
+    expect(uploads.at(-1)?.snapshot.learningSessions).toEqual(expect.arrayContaining([autonomous, daily]));
+    expect(uploads.at(-1)?.snapshot.appPreferences).toEqual({ dailyMasteryGoal: 12, dailyNewPhraseGoal: 15 });
   });
 
   it("raises an authentication error on 401", async () => {

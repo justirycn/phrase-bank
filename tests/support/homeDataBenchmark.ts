@@ -69,8 +69,8 @@ export async function runHomeDataBenchmark() {
   await base.importSnapshot(fixture, "overwrite");
   const names = ["listPhrases", "listCategories", "listDuePhrases", "listTrainingEvents", "listTrainingSessions", "listPhraseLearningStates", "getActiveTrainingSession", "getActiveLearningSession", "getAppPreferences", "exportSnapshot"] as const;
   const calls = Object.fromEntries(names.map((name) => [name, 0])) as Record<(typeof names)[number], number>;
-  const rows = { trainingEvents: 0, trainingSessions: 0, activeTrainingSessions: 0, activeLearningSessions: 0, heatmapDays: 0 };
-  const requests = { activeTrainingSession: 0, activeLearningSession: 0 };
+  const rows = { trainingEvents: 0, trainingSessions: 0, activeTrainingSessions: 0, activeDailyLearningSessions: 0, activeAutonomousLearningSessions: 0, heatmapDays: 0 };
+  const requests = { activeTrainingSession: 0, dailyLearningSession: 0, autonomousLearningSession: 0 };
   const repository = new Proxy(base, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
@@ -85,8 +85,14 @@ export async function runHomeDataBenchmark() {
           rows.activeTrainingSessions = result ? 1 : 0;
         }
         if (property === "getActiveLearningSession") {
-          requests.activeLearningSession += 1;
-          rows.activeLearningSessions = result ? 1 : 0;
+          const purpose = args[0];
+          if (purpose === "daily") {
+            requests.dailyLearningSession += 1;
+            rows.activeDailyLearningSessions = result ? 1 : 0;
+          } else {
+            requests.autonomousLearningSession += 1;
+            rows.activeAutonomousLearningSessions = result ? 1 : 0;
+          }
         }
         return result;
       };

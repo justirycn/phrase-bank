@@ -21,15 +21,16 @@ describe("2,000 phrase home-data benchmark", () => {
       listTrainingSessions: 1,
       listPhraseLearningStates: 1,
       getActiveTrainingSession: 1,
-      getActiveLearningSession: 1,
+      getActiveLearningSession: 2,
       getAppPreferences: 1,
       exportSnapshot: 0,
     });
     expect(report.rows.trainingEvents).toBe(7_056);
     expect(report.rows.trainingSessions).toBe(948);
-    expect(report.requests).toEqual({ activeTrainingSession: 1, activeLearningSession: 1 });
+    expect(report.requests).toEqual({ activeTrainingSession: 1, dailyLearningSession: 1, autonomousLearningSession: 1 });
     expect(report.rows.activeTrainingSessions).toBe(0);
-    expect(report.rows.activeLearningSessions).toBe(0);
+    expect(report.rows.activeDailyLearningSessions).toBe(0);
+    expect(report.rows.activeAutonomousLearningSessions).toBe(0);
     expect(report.rows.heatmapDays).toBe(84);
     expect(report.serviceReadyMilliseconds).toBeLessThan(5_000);
   }, 30_000);

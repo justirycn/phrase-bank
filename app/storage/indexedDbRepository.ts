@@ -1,5 +1,5 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
-import { DEFAULT_DAILY_MASTERY_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV5, type Category, type LearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type SpeechPreferences, type SystemContentPackage, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
+import { DEFAULT_DAILY_MASTERY_GOAL, DEFAULT_DAILY_NEW_PHRASE_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV5, type Category, type LearningSessionPurpose, type LearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type SpeechPreferences, type SystemContentPackage, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
 import { isReviewDueOnShanghaiDay, scheduleReview, shanghaiDayEndIso } from "../domain/review";
 import { personalPhraseDefaults, validateSystemContentPackage } from "../domain/systemContent";
 import { applyLearningResult, nextExampleToUnlock } from "../domain/learningProgress";
@@ -21,7 +21,11 @@ interface PhraseBankDb extends DBSchema {
 }
 
 const ACTIVE_TRAINING_SESSION_KEY = "activeTrainingSessionId";
-const ACTIVE_LEARNING_SESSION_KEY = "activeLearningSessionId";
+const LEGACY_ACTIVE_LEARNING_SESSION_KEY = "activeLearningSessionId";
+const ACTIVE_LEARNING_SESSION_KEYS: Record<LearningSessionPurpose, string> = {
+  daily: "activeDailyLearningSessionId",
+  autonomous: "activeAutonomousLearningSessionId",
+};
 
 interface ActiveSessionCursor {
   value: { id: string; completedAt?: string };
@@ -35,6 +39,41 @@ async function newestActiveSessionId(openCursor: () => Promise<ActiveSessionCurs
     cursor = await cursor.continue();
   }
   return undefined;
+}
+
+interface LearningSessionPointerStore {
+  index(name: "by-updated"): {
+    openCursor(query?: IDBKeyRange | null, direction?: IDBCursorDirection): Promise<ActiveSessionCursor | null>;
+  };
+}
+
+interface MetadataPointerStore {
+  put(value: { key: string; value: string }): Promise<unknown>;
+  delete(key: string): Promise<unknown>;
+}
+
+async function newestActiveLearningSessionId(
+  openCursor: () => Promise<ActiveSessionCursor | null>,
+  purpose: LearningSessionPurpose,
+) {
+  let cursor = await openCursor();
+  while (cursor) {
+    const session = cursor.value as LearningSessionRecord;
+    if (!session.completedAt && session.purpose === purpose) return session.id;
+    cursor = await cursor.continue();
+  }
+  return undefined;
+}
+
+async function refreshLearningSessionPointer(
+  store: LearningSessionPointerStore,
+  metadata: MetadataPointerStore,
+  purpose: LearningSessionPurpose,
+) {
+  const activeId = await newestActiveLearningSessionId(() => store.index("by-updated").openCursor(null, "prev"), purpose);
+  const key = ACTIVE_LEARNING_SESSION_KEYS[purpose];
+  if (activeId) await metadata.put({ key, value: activeId });
+  else await metadata.delete(key);
 }
 
 function cursorAfterDeletion(phraseIds: string[], cursor: number, deletedIds: Set<string>) {
@@ -58,7 +97,7 @@ function samePhraseIds(left: string[], right: string[]) {
 }
 
 function assertSameLearningSessionIdentity(current: LearningSessionRecord, next: LearningSessionRecord) {
-  if (current.id !== next.id || current.date !== next.date || current.themeCategoryId !== next.themeCategoryId
+  if (current.id !== next.id || current.purpose !== next.purpose || current.date !== next.date || current.themeCategoryId !== next.themeCategoryId
     || current.startedAt !== next.startedAt || !samePhraseIds(current.phraseIds, next.phraseIds)) {
     throw new Error("学习会话进度不能回退");
   }
@@ -174,9 +213,18 @@ export class LocalPhraseRepository implements PhraseRepository {
           if (oldVersion < 5) {
             const metadata = transaction.objectStore("metadata");
             const activeTrainingId = await newestActiveSessionId(() => transaction.objectStore("trainingSessions").index("by-updated").openCursor(null, "prev"));
-            const activeLearningId = await newestActiveSessionId(() => transaction.objectStore("learningSessions").index("by-updated").openCursor(null, "prev"));
+            const learningStore = transaction.objectStore("learningSessions");
+            let learningCursor = await learningStore.openCursor();
+            while (learningCursor) {
+              if (!(learningCursor.value as Partial<LearningSessionRecord>).purpose) {
+                await learningCursor.update({ ...learningCursor.value, purpose: "autonomous" });
+              }
+              learningCursor = await learningCursor.continue();
+            }
             if (activeTrainingId) await metadata.put({ key: ACTIVE_TRAINING_SESSION_KEY, value: activeTrainingId });
-            if (activeLearningId) await metadata.put({ key: ACTIVE_LEARNING_SESSION_KEY, value: activeLearningId });
+            await refreshLearningSessionPointer(learningStore, metadata, "daily");
+            await refreshLearningSessionPointer(learningStore, metadata, "autonomous");
+            await metadata.delete(LEGACY_ACTIVE_LEARNING_SESSION_KEY);
           }
         },
       });
@@ -186,9 +234,20 @@ export class LocalPhraseRepository implements PhraseRepository {
 
   async initialize() {
     const db = await this.db();
-    const tx = db.transaction(["categories", "phrases", "metadata", "phraseLearningState"], "readwrite");
+    const tx = db.transaction(["categories", "phrases", "metadata", "phraseLearningState", "learningSessions"], "readwrite");
     const metadata = tx.objectStore("metadata");
     const stateStore = tx.objectStore("phraseLearningState");
+    const learningStore = tx.objectStore("learningSessions");
+    let learningCursor = await learningStore.openCursor();
+    while (learningCursor) {
+      if (!(learningCursor.value as Partial<LearningSessionRecord>).purpose) {
+        await learningCursor.update({ ...learningCursor.value, purpose: "autonomous" });
+      }
+      learningCursor = await learningCursor.continue();
+    }
+    await refreshLearningSessionPointer(learningStore, metadata, "daily");
+    await refreshLearningSessionPointer(learningStore, metadata, "autonomous");
+    await metadata.delete(LEGACY_ACTIVE_LEARNING_SESSION_KEY);
     let stateCursor = await stateStore.openCursor();
     while (stateCursor) {
       const normalized = normalizeCurrentLearningState(stateCursor.value);
@@ -300,11 +359,10 @@ export class LocalPhraseRepository implements PhraseRepository {
       }
       const metadata = tx.objectStore("metadata");
       const activeTrainingId = await newestActiveSessionId(() => trainingStore.index("by-updated").openCursor(null, "prev"));
-      const activeLearningId = await newestActiveSessionId(() => learningStore.index("by-updated").openCursor(null, "prev"));
       if (activeTrainingId) await metadata.put({ key: ACTIVE_TRAINING_SESSION_KEY, value: activeTrainingId });
       else await metadata.delete(ACTIVE_TRAINING_SESSION_KEY);
-      if (activeLearningId) await metadata.put({ key: ACTIVE_LEARNING_SESSION_KEY, value: activeLearningId });
-      else await metadata.delete(ACTIVE_LEARNING_SESSION_KEY);
+      await refreshLearningSessionPointer(learningStore, metadata, "daily");
+      await refreshLearningSessionPointer(learningStore, metadata, "autonomous");
       await tx.done;
     } catch (error) {
       try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }
@@ -493,16 +551,20 @@ export class LocalPhraseRepository implements PhraseRepository {
     await (await this.db()).put("metadata", { key: "speechPreferences", value: JSON.stringify(preferences) });
   }
   async getAppPreferences(): Promise<AppPreferences> {
-    const fallback = { dailyMasteryGoal: DEFAULT_DAILY_MASTERY_GOAL };
+    const fallback = { dailyMasteryGoal: DEFAULT_DAILY_MASTERY_GOAL, dailyNewPhraseGoal: DEFAULT_DAILY_NEW_PHRASE_GOAL };
     const item = await (await this.db()).get("metadata", "appPreferences");
     if (!item) return fallback;
     try {
       const value = JSON.parse(item.value) as Partial<AppPreferences>;
-      return Number.isInteger(value.dailyMasteryGoal) && (value.dailyMasteryGoal ?? 0) > 0 ? value as AppPreferences : fallback;
+      if (!Number.isInteger(value.dailyMasteryGoal) || (value.dailyMasteryGoal ?? 0) <= 0) return fallback;
+      const dailyNewPhraseGoal = value.dailyNewPhraseGoal ?? DEFAULT_DAILY_NEW_PHRASE_GOAL;
+      if (!Number.isInteger(dailyNewPhraseGoal) || dailyNewPhraseGoal < 1 || dailyNewPhraseGoal > 50) return fallback;
+      return { dailyMasteryGoal: value.dailyMasteryGoal as number, dailyNewPhraseGoal };
     } catch { return fallback; }
   }
   async saveAppPreferences(preferences: AppPreferences) {
     if (!Number.isInteger(preferences.dailyMasteryGoal) || preferences.dailyMasteryGoal <= 0) throw new Error("每日掌握目标必须是正整数");
+    if (!Number.isInteger(preferences.dailyNewPhraseGoal) || preferences.dailyNewPhraseGoal < 1 || preferences.dailyNewPhraseGoal > 50) throw new Error("每日新学目标必须是 1 到 50 的整数");
     await (await this.db()).put("metadata", { key: "appPreferences", value: JSON.stringify(preferences) });
   }
   async listPhraseLearningStates() { return (await (await this.db()).getAll("phraseLearningState")).map(normalizeCurrentLearningState); }
@@ -524,13 +586,11 @@ export class LocalPhraseRepository implements PhraseRepository {
       });
       const current = sessions.find(({ id }) => id === session.id);
       assertLearningSessionSave(current, session);
-      const otherActive = sessions.filter((existing) => existing.id !== session.id && !existing.completedAt);
+      const otherActive = sessions.filter((existing) => existing.id !== session.id && existing.purpose === session.purpose && !existing.completedAt);
       const resultingActiveCount = otherActive.length + (session.completedAt ? 0 : 1);
       if (resultingActiveCount > 1) throw new Error("已有进行中的学习会话");
       await store.put(session);
-      const activeId = await newestActiveSessionId(() => store.index("by-updated").openCursor(null, "prev"));
-      if (activeId) await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEY, value: activeId });
-      else await tx.objectStore("metadata").delete(ACTIVE_LEARNING_SESSION_KEY);
+      await refreshLearningSessionPointer(store, tx.objectStore("metadata"), session.purpose);
       await tx.done;
     } catch (error) {
       try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }
@@ -538,12 +598,12 @@ export class LocalPhraseRepository implements PhraseRepository {
       throw error;
     }
   }
-  async getActiveLearningSession() {
+  async getActiveLearningSession(purpose: LearningSessionPurpose) {
     const db = await this.db();
-    const pointer = await db.get("metadata", ACTIVE_LEARNING_SESSION_KEY);
+    const pointer = await db.get("metadata", ACTIVE_LEARNING_SESSION_KEYS[purpose]);
     if (!pointer) return undefined;
     const session = await db.get("learningSessions", pointer.value);
-    return session && !session.completedAt ? session : undefined;
+    return session && session.purpose === purpose && !session.completedAt ? session : undefined;
   }
   async completeLearningSession(id: string, completedAt: Date) {
     const db = await this.db();
@@ -559,9 +619,7 @@ export class LocalPhraseRepository implements PhraseRepository {
     assertValidLearningSession(completed);
     assertMonotonicLearningSession(session, completed);
     await store.put(completed);
-    const activeId = await newestActiveSessionId(() => store.index("by-updated").openCursor(null, "prev"));
-    if (activeId) await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEY, value: activeId });
-    else await tx.objectStore("metadata").delete(ACTIVE_LEARNING_SESSION_KEY);
+    await refreshLearningSessionPointer(store, tx.objectStore("metadata"), session.purpose);
     await tx.done;
   }
   async submitFirstLearningReview(event: TrainingEvent, nextSession: LearningSessionRecord) {
@@ -599,7 +657,7 @@ export class LocalPhraseRepository implements PhraseRepository {
         if (!canCatchUp) throw new Error("首次测试记录状态不一致");
         assertMonotonicLearningSession(session, nextSession);
         await sessionStore.put(nextSession);
-        await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEY, value: nextSession.id });
+        await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEYS[nextSession.purpose], value: nextSession.id });
         await tx.done;
         return;
       }
@@ -638,7 +696,7 @@ export class LocalPhraseRepository implements PhraseRepository {
       }
       await eventStore.put(event);
       await sessionStore.put(nextSession);
-      await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEY, value: nextSession.id });
+      await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEYS[nextSession.purpose], value: nextSession.id });
       await tx.done;
     } catch (error) {
       try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }
@@ -732,7 +790,10 @@ export class LocalPhraseRepository implements PhraseRepository {
         finalLearningSessions.set(incoming.id, incoming);
       }
       for (const session of finalLearningSessions.values()) assertValidLearningSession(session, references);
-      if ([...finalLearningSessions.values()].filter(({ completedAt }) => completedAt === undefined).length > 1) {
+      const activeLearningPurposes = [...finalLearningSessions.values()]
+        .filter(({ completedAt }) => completedAt === undefined)
+        .map(({ purpose }) => purpose);
+      if (new Set(activeLearningPurposes).size !== activeLearningPurposes.length) {
         throw new Error("已有进行中的学习会话，无法导入");
       }
 
@@ -751,11 +812,12 @@ export class LocalPhraseRepository implements PhraseRepository {
       await put("phraseLearningState", normalized.phraseLearningStates);
       await put("learningSessions", normalized.learningSessions);
       const activeTrainingId = await newestActiveSessionId(() => tx.objectStore("trainingSessions").index("by-updated").openCursor(null, "prev"));
-      const activeLearningId = await newestActiveSessionId(() => tx.objectStore("learningSessions").index("by-updated").openCursor(null, "prev"));
+      const learningStore = tx.objectStore("learningSessions");
       if (activeTrainingId) await tx.objectStore("metadata").put({ key: ACTIVE_TRAINING_SESSION_KEY, value: activeTrainingId });
       else await tx.objectStore("metadata").delete(ACTIVE_TRAINING_SESSION_KEY);
-      if (activeLearningId) await tx.objectStore("metadata").put({ key: ACTIVE_LEARNING_SESSION_KEY, value: activeLearningId });
-      else await tx.objectStore("metadata").delete(ACTIVE_LEARNING_SESSION_KEY);
+      await refreshLearningSessionPointer(learningStore, tx.objectStore("metadata"), "daily");
+      await refreshLearningSessionPointer(learningStore, tx.objectStore("metadata"), "autonomous");
+      await tx.objectStore("metadata").delete(LEGACY_ACTIVE_LEARNING_SESSION_KEY);
       if (normalized.activeSystemContentVersion) await tx.objectStore("metadata").put({ key: "activeSystemContentVersion", value: normalized.activeSystemContentVersion });
       await tx.objectStore("metadata").put({ key: "appPreferences", value: JSON.stringify(normalized.appPreferences) });
       await tx.done;

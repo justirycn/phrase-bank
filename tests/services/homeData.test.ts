@@ -10,8 +10,8 @@ function repository(overrides: Partial<PhraseRepository> = {}): PhraseRepository
     listTrainingSessions: vi.fn(async () => [{ id: "session" }]),
     listPhraseLearningStates: vi.fn(async () => [{ phraseId: "phrase", stage: "learned", consecutiveGood: 0, masteredDates: [], updatedAt: "2026-08-11T08:00:00.000Z" }]),
     getActiveTrainingSession: vi.fn(async () => ({ id: "active-training" })),
-    getActiveLearningSession: vi.fn(async () => ({ id: "active-learning" })),
-    getAppPreferences: vi.fn(async () => ({ dailyMasteryGoal: 12 })),
+    getActiveLearningSession: vi.fn(async (purpose) => ({ id: `active-${purpose}`, purpose })),
+    getAppPreferences: vi.fn(async () => ({ dailyMasteryGoal: 12, dailyNewPhraseGoal: 10 })),
     listTrainingEvents: vi.fn(async () => []),
     exportSnapshot: vi.fn(),
     ...overrides,
@@ -43,7 +43,9 @@ describe("loadHomeData", () => {
     expect(repo.listTrainingSessions).toHaveBeenCalledWith(heatmapFrom, to);
     expect(repo.listPhraseLearningStates).toHaveBeenCalledTimes(1);
     expect(repo.getActiveTrainingSession).toHaveBeenCalledTimes(1);
-    expect(repo.getActiveLearningSession).toHaveBeenCalledTimes(1);
+    expect(repo.getActiveLearningSession).toHaveBeenCalledTimes(2);
+    expect(repo.getActiveLearningSession).toHaveBeenNthCalledWith(1, "daily");
+    expect(repo.getActiveLearningSession).toHaveBeenNthCalledWith(2, "autonomous");
     expect(repo.getAppPreferences).toHaveBeenCalledTimes(1);
     expect(repo.listTrainingEvents).toHaveBeenCalledTimes(1);
     expect(repo.listTrainingEvents).toHaveBeenCalledWith(eventFrom, to);
@@ -51,8 +53,10 @@ describe("loadHomeData", () => {
     expect(result).toMatchObject({
       phrases: [{ id: "phrase" }], categories: [{ id: "category" }], duePhrases: [{ id: "due" }],
       trainingSessions: [{ id: "session" }], learningStates: [{ phraseId: "phrase" }],
-      activeTrainingSession: { id: "active-training" }, activeLearningSession: { id: "active-learning" },
-      appPreferences: { dailyMasteryGoal: 12 },
+      activeTrainingSession: { id: "active-training" },
+      activeDailyLearningSession: { id: "active-daily", purpose: "daily" },
+      activeAutonomousLearningSession: { id: "active-autonomous", purpose: "autonomous" },
+      appPreferences: { dailyMasteryGoal: 12, dailyNewPhraseGoal: 10 },
       outcomes: {
         dailyProgress: { correct: 0, mastered: 0, reviewed: 0 },
         streak: { current: 0, lightDaysUsedThisWeek: 0 },
