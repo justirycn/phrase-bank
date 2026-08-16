@@ -12,4 +12,10 @@ describe("fresh build performance gate isolation", () => {
     const pkg = JSON.parse(readFileSync(`${process.cwd()}/package.json`, "utf8"));
     expect(pkg.scripts["test:home-performance"]).toBe("npm run build && tsx scripts/run-home-performance-tests.ts");
   });
+
+  it("resolves the installed Vitest runtime outside an isolated worktree", () => {
+    const source = readFileSync(`${process.cwd()}/scripts/run-home-performance-tests.ts`, "utf8");
+    expect(source).toContain('import.meta.resolve("vitest")');
+    expect(source).not.toContain('join(process.cwd(), "node_modules/vitest/vitest.mjs")');
+  });
 });

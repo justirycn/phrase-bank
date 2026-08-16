@@ -1,7 +1,8 @@
 import "fake-indexeddb/auto";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { runHomeDataBenchmark } from "../tests/support/homeDataBenchmark";
 import { stopChildProcess } from "./processLifecycle";
 import { assertCleanAppTree } from "./performanceEvidenceGuard";
@@ -13,7 +14,10 @@ const shortTempRoot = "C:\\Temp";
 const appStatus = execFileSync("git", ["status", "--porcelain", "--untracked-files=all", "--", "app"], { cwd: projectRoot, encoding: "utf8" });
 assertCleanAppTree(appStatus);
 
-const vinextCli = join(projectRoot, "node_modules/vinext/dist/cli.js");
+const vinextEntry = fileURLToPath(import.meta.resolve("vinext"));
+const vinextPackageRoot = dirname(dirname(vinextEntry));
+const dependencyRoot = dirname(vinextPackageRoot);
+const vinextCli = join(vinextPackageRoot, "dist/cli.js");
 function parseDefaultExport(path: string) {
   return JSON.parse(readFileSync(path, "utf8").trim().replace(/^export default\s+/, "").replace(/;$/, ""));
 }
@@ -100,7 +104,7 @@ try {
   execFileSync("git", ["archive", "--format=tar", `--output=${archive}`, baselineSha], { cwd: projectRoot });
   execFileSync("tar", ["-xf", archive, "-C", baselineRoot]);
   unlinkSync(archive);
-  symlinkSync(join(projectRoot, "node_modules"), join(baselineRoot, "node_modules"), "junction");
+  symlinkSync(dependencyRoot, join(baselineRoot, "node_modules"), "junction");
   dependencyLinkCreated = true;
   const baselineBuild = await measureBuild(baselineRoot, 4281);
   const currentBuild = await measureBuild(projectRoot, 4282);

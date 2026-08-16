@@ -13,6 +13,7 @@ export function NewPhraseLearning({ controller, onHome, onStartAutonomous }: {
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState("");
   const pendingRef = useRef(false);
+  const synchronousActionRef = useRef<(() => Promise<unknown> | void)>();
   const mountedRef = useRef(false);
 
   useEffect(() => {
@@ -20,17 +21,19 @@ export function NewPhraseLearning({ controller, onHome, onStartAutonomous }: {
     return () => { mountedRef.current = false; };
   }, []);
 
+  useEffect(() => {
+    synchronousActionRef.current = undefined;
+  }, [controller.busy, controller.phase, controller.sessionId]);
+
   const run = async (action: () => Promise<unknown> | void) => {
-    if (pendingRef.current || controller.busy) return;
+    if (pendingRef.current || controller.busy || synchronousActionRef.current === action) return;
     pendingRef.current = true;
     setPending(true);
     setStatus("");
     try {
       const result = action();
-      await result;
-      if (result === undefined) {
-        await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
-      }
+      if (result === undefined) synchronousActionRef.current = action;
+      else await result;
     } catch {
       if (mountedRef.current) setStatus("操作没有完成，你仍然可以继续学习。请再试一次。");
     } finally {
@@ -41,6 +44,7 @@ export function NewPhraseLearning({ controller, onHome, onStartAutonomous }: {
 
   const disabled = controller.busy || pending;
   const exit = () => { void run(onHome); };
+  const startAutonomous = () => { if (onStartAutonomous) void run(onStartAutonomous); };
   const actionStatus = status && <p className="new-learning-status" role="status">{status}</p>;
   const preparationCopy = controller.purpose === "daily" ? "正在准备今日任务内容" : "正在准备自主学习内容";
 
@@ -79,7 +83,7 @@ export function NewPhraseLearning({ controller, onHome, onStartAutonomous }: {
       {actionStatus}
       <div className="new-learning-state-actions">
         <button type="button" disabled={disabled} onClick={exit}>回到首页</button>
-        <button type="button" className="primary" disabled={disabled} onClick={() => { void run(() => onStartAutonomous?.()); }}>
+        <button type="button" className="primary" disabled={disabled} onClick={startAutonomous}>
           开始自主学习
         </button>
       </div>

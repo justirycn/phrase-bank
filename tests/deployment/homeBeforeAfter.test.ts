@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { readCurrentAppTree } from "../../scripts/gitEvidence";
 
 describe("reproducible home before/after evidence", () => {
+  it("resolves build dependencies from the installed runtime instead of the worktree", () => {
+    const runner = readFileSync(`${process.cwd()}/scripts/compare-home-performance.ts`, "utf8");
+    expect(runner).toContain('import.meta.resolve("vinext")');
+    expect(runner).toContain("symlinkSync(dependencyRoot");
+    expect(runner).not.toContain('join(projectRoot, "node_modules/vinext/dist/cli.js")');
+    expect(runner).not.toContain('symlinkSync(join(projectRoot, "node_modules")');
+  });
+
   it("records a verified baseline and current build with cleanup", () => {
     const metrics = JSON.parse(readFileSync(`${process.cwd()}/docs/audits/home-heatmap-performance/metrics.json`, "utf8"));
     const comparison = metrics.beforeAfter;

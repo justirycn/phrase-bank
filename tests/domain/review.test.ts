@@ -16,6 +16,15 @@ describe("review scheduling", () => {
     expect(createNewPhrase({ english: "I haven't decided yet.", chinese: "我还没决定。", categoryId: "daily" }, now).nextReviewAt).toBe(now.toISOString());
   });
 
+  it("keeps a first test before Shanghai midnight out of same-day review and makes it due on Aug 17", () => {
+    const firstTestedAt = new Date("2026-08-16T15:59:59.999Z");
+    const phrase = createNewPhrase({ english: "Boundary", chinese: "边界", categoryId: "daily" }, firstTestedAt);
+    const scheduled = scheduleReview(phrase, "good", firstTestedAt).phrase;
+
+    expect(isReviewDueOnShanghaiDay(scheduled.nextReviewAt, firstTestedAt)).toBe(false);
+    expect(isReviewDueOnShanghaiDay(scheduled.nextReviewAt, new Date("2026-08-16T16:00:00.000Z"))).toBe(true);
+  });
+
   it("schedules again the next day, resets progress, and decrements mastery", () => {
     const phrase = { ...createNewPhrase({ english: "A", chinese: "甲", categoryId: "daily" }, now), reviewStep: 3, masteryLevel: 2 };
     const result = scheduleReview(phrase, "again", now);

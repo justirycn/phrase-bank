@@ -9,6 +9,7 @@ import type {
   SpeechPreferences,
   TrainingEvent,
 } from "../../app/domain/types";
+import { countNewPhrasesOnShanghaiDay } from "../../app/domain/dailyTask";
 import { applyLearningResult } from "../../app/domain/learningProgress";
 import { useNewPhraseLearning } from "../../app/hooks/useNewPhraseLearning";
 import type { PhraseRepository } from "../../app/storage/repository";
@@ -162,6 +163,68 @@ async function completeCurrentGroup(hook: ReturnType<typeof renderLearning>) {
 }
 
 describe("useNewPhraseLearning", () => {
+  it("counts the exact Shanghai midnight first-test boundary only toward Aug 17", () => {
+    const boundaryEvent: TrainingEvent = {
+      id: "midnight-first-test", sessionId: "daily", phraseId: "boundary", source: "new", result: "good",
+      usedPronunciationHint: false, recorded: false, activeSeconds: 0, occurredAt: "2026-08-16T16:00:00.000Z",
+    };
+
+    expect(countNewPhrasesOnShanghaiDay([boundaryEvent], "2026-08-16")).toBe(0);
+    expect(countNewPhrasesOnShanghaiDay([boundaryEvent], "2026-08-17")).toBe(1);
+  });
+
+  it("restores an Aug 16 daily session on Aug 17 and counts only Aug 17 first tests", async () => {
+    const unfinished = phrase("unfinished-aug16");
+    const fresh = phrase("fresh-aug17");
+    const active: LearningSessionRecord = {
+      id: "aug16-daily", purpose: "daily", date: "2026-08-16", themeCategoryId: "daily",
+      phraseIds: [unfinished.id], studyIndex: 0, testIndex: 0, phase: "study",
+      startedAt: "2026-08-16T15:00:00.000Z", updatedAt: "2026-08-16T15:00:00.000Z",
+    };
+    const events: TrainingEvent[] = [
+      {
+        id: "aug16-first", sessionId: "old", phraseId: "old-day", source: "new", result: "good",
+        usedPronunciationHint: false, recorded: false, activeSeconds: 0, occurredAt: "2026-08-16T15:59:59.999Z",
+      },
+      {
+        id: "aug17-first", sessionId: "new", phraseId: "new-day", source: "new", result: "good",
+        usedPronunciationHint: false, recorded: false, activeSeconds: 0, occurredAt: "2026-08-16T16:00:00.000Z",
+      },
+      {
+        id: "aug17-review", sessionId: "review", phraseId: "review-only", source: "due", result: "good",
+        usedPronunciationHint: false, recorded: false, activeSeconds: 0, occurredAt: "2026-08-16T16:00:01.000Z",
+      },
+    ];
+    const store = memoryRepository({
+      phrases: [unfinished, fresh],
+      states: [unseen(unfinished.id), unseen(fresh.id)],
+      sessions: [active],
+      events,
+    });
+    const hook = renderLearning(store, speech(), {
+      purpose: "daily",
+      dailyGoal: 3,
+      now: () => new Date("2026-08-16T16:00:30.000Z"),
+      idFactory: () => "aug17-daily",
+    });
+
+    await waitFor(() => expect(hook.result.current).toMatchObject({
+      sessionId: active.id, phase: "study", dailyRemaining: 2,
+    }));
+    expect(store.repository.listTrainingEvents).toHaveBeenCalledWith(
+      new Date("2026-08-16T16:00:00.000Z"),
+      new Date("2026-08-17T15:59:59.999Z"),
+    );
+
+    await completeCurrentGroup(hook);
+    act(() => hook.result.current.retry());
+
+    await waitFor(() => expect(hook.result.current).toMatchObject({
+      sessionId: "aug17-daily", phase: "study", dailyRemaining: 1,
+    }));
+    expect(hook.result.current.current?.id).toBe(fresh.id);
+  });
+
   it("chains two daily groups of five and reaches the daily goal from distinct current-day events", async () => {
     const items = Array.from({ length: 10 }, (_, index) => phrase(`daily-${index}`));
     const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });

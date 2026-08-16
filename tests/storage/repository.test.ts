@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LocalPhraseRepository } from "../../app/storage/indexedDbRepository";
 import { createNewPhrase, isReviewDueOnShanghaiDay } from "../../app/domain/review";
-import type { BackupEnvelopeV1, BackupEnvelopeV2, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewLog, ReviewResult, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
+import type { BackupEnvelopeV1, BackupEnvelopeV2, BackupEnvelopeV5, Category, LearningSessionRecord, Phrase, PhraseLearningState, ReviewLog, ReviewResult, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../../app/domain/types";
 import { parseBackup } from "../../app/storage/backup";
 
 describe("LocalPhraseRepository", () => {
@@ -1181,6 +1181,35 @@ describe("LocalPhraseRepository", () => {
     expect(await read("activeLearningSessionId")).toBeUndefined();
     expect(await read("activeAutonomousLearningSessionId")).toEqual({ key: "activeAutonomousLearningSessionId", value: rawSession.id });
     persisted.close();
+  });
+
+  it("imports an old v5 snapshot with legacy preferences and preserves all data while normalizing learning purpose", async () => {
+    const source = await repo.exportSnapshot();
+    const rawSession = learningSession({ id: "legacy-import-active", phase: "study", studyIndex: 0 });
+    const purposeLess = { ...rawSession } as Partial<LearningSessionRecord>;
+    delete purposeLess.purpose;
+    const legacy = {
+      ...source,
+      exportedAt: "2026-08-16T15:59:59.999Z",
+      appPreferences: { dailyMasteryGoal: 17 },
+      learningSessions: [purposeLess],
+    } as unknown as BackupEnvelopeV5;
+    const restored = new LocalPhraseRepository(`legacy-v5-import-${crypto.randomUUID()}`);
+    await restored.initialize();
+
+    await restored.importSnapshot(legacy, "overwrite");
+
+    const normalized = await restored.exportSnapshot();
+    expect(normalized.appPreferences).toEqual({ dailyMasteryGoal: 17, dailyNewPhraseGoal: 10 });
+    expect(normalized.learningSessions).toEqual([{ ...rawSession, purpose: "autonomous" }]);
+    expect(await restored.getActiveLearningSession("autonomous")).toEqual({ ...rawSession, purpose: "autonomous" });
+    expect(await restored.getActiveLearningSession("daily")).toBeUndefined();
+    expect(normalized.categories).toEqual(source.categories);
+    expect(normalized.phrases).toEqual(source.phrases);
+    expect(normalized.reviewLogs).toEqual(source.reviewLogs);
+    expect(normalized.trainingEvents).toEqual(source.trainingEvents);
+    expect(normalized.trainingSessions).toEqual(source.trainingSessions);
+    expect(normalized.phraseLearningStates).toEqual(source.phraseLearningStates);
   });
 
   it("does not trust personal parent links, but cascades direct system examples", async () => {

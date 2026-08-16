@@ -2,6 +2,7 @@ import "fake-indexeddb/auto";
 import { describe, expect, it, vi } from "vitest";
 import { CloudPhraseRepository } from "../../app/storage/cloudRepository";
 import { createNewPhrase } from "../../app/domain/review";
+import { countNewPhrasesOnShanghaiDay } from "../../app/domain/dailyTask";
 import type { LearningSessionRecord } from "../../app/domain/types";
 
 describe("CloudPhraseRepository", () => {
@@ -159,6 +160,50 @@ describe("CloudPhraseRepository", () => {
 
     expect(uploads.at(-1)?.snapshot.learningSessions).toEqual(expect.arrayContaining([autonomous, daily]));
     expect(uploads.at(-1)?.snapshot.appPreferences).toEqual({ dailyMasteryGoal: 12, dailyNewPhraseGoal: 15 });
+  });
+
+  it("retries an identical cloud first test without duplicating its event, pointer, state, or daily count", async () => {
+    let failNextUpload = false;
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== "PUT") return Response.json({ snapshot: null });
+      if (failNextUpload) {
+        failNextUpload = false;
+        return Response.json({}, { status: 503 });
+      }
+      return Response.json({ ok: true });
+    });
+    const repo = new CloudPhraseRepository(fetcher);
+    await repo.initialize();
+    const phraseId = "starter-daily-not-sure";
+    const session: LearningSessionRecord = {
+      id: "cloud-daily-first", purpose: "daily", date: "2026-08-17", themeCategoryId: "daily",
+      phraseIds: [phraseId], studyIndex: 0, testIndex: 0, phase: "study",
+      startedAt: "2026-08-16T16:00:00.000Z", updatedAt: "2026-08-16T16:00:00.000Z",
+    };
+    await repo.saveLearningSession(session);
+    const testing = { ...session, studyIndex: 1, phase: "test" as const };
+    await repo.saveLearningSession(testing);
+    const event = {
+      id: "cloud-first-operation", sessionId: session.id, phraseId, source: "new" as const, result: "good" as const,
+      usedPronunciationHint: false, recorded: false, activeSeconds: 0, occurredAt: "2026-08-16T16:00:00.000Z",
+    };
+    const next = { ...testing, testIndex: 1, updatedAt: event.occurredAt };
+
+    failNextUpload = true;
+    await expect(repo.submitFirstLearningReview(event, next)).rejects.toThrow("云端数据保存失败");
+    await repo.submitFirstLearningReview(event, next);
+
+    const snapshot = await repo.exportSnapshot();
+    expect(snapshot.trainingEvents.filter(({ id }) => id === event.id)).toEqual([event]);
+    expect(snapshot.reviewLogs.filter(({ phraseId: id }) => id === phraseId)).toHaveLength(1);
+    expect(snapshot.phraseLearningStates.find(({ phraseId: id }) => id === phraseId)).toMatchObject({
+      firstTestedAt: event.occurredAt,
+      firstResult: event.result,
+    });
+    expect(await repo.getActiveLearningSession("daily")).toEqual(next);
+    expect(snapshot.learningSessions.filter(({ id }) => id === session.id)).toEqual([next]);
+    expect(countNewPhrasesOnShanghaiDay(snapshot.trainingEvents, "2026-08-17")).toBe(1);
+    expect(countNewPhrasesOnShanghaiDay(snapshot.trainingEvents, "2026-08-16")).toBe(0);
   });
 
   it("raises an authentication error on 401", async () => {

@@ -72,8 +72,24 @@ describe("home performance audit evidence", () => {
       seed: 20260811, phrases: 2000, categories: 10, learningStates: 2000,
       events: 10080, trainingSessions: 1440,
     });
-    expect(metrics.homeDataBenchmark.calls.exportSnapshot).toBe(0);
-    expect(metrics.homeDataBenchmark.rows).toEqual({ trainingEvents: 7056, trainingSessions: 948, activeTrainingSessions: 0, activeLearningSessions: 0, heatmapDays: 84 });
+    expect(metrics.homeDataBenchmark.calls).toMatchObject({
+      getActiveTrainingSession: 1,
+      getActiveLearningSession: 2,
+      exportSnapshot: 0,
+    });
+    expect(metrics.homeDataBenchmark.requests).toEqual({
+      activeTrainingSession: 1,
+      dailyLearningSession: 1,
+      autonomousLearningSession: 1,
+    });
+    expect(metrics.homeDataBenchmark.rows).toEqual({
+      trainingEvents: 7056,
+      trainingSessions: 948,
+      activeTrainingSessions: 0,
+      activeDailyLearningSessions: 0,
+      activeAutonomousLearningSessions: 0,
+      heatmapDays: 84,
+    });
     expect(metrics.homeDataBenchmark.regressionBudgetMilliseconds).toBe(5000);
   });
 });

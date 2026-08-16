@@ -21,10 +21,10 @@
       "htmlBytes": 446625
     },
     "current": {
-      "homeChunkBytes": 59186,
-      "initialJavaScriptBytes": 497580,
+      "homeChunkBytes": 63281,
+      "initialJavaScriptBytes": 503305,
       "nonHomeScreenChunks": 6,
-      "htmlBytes": 447097
+      "htmlBytes": 447185
     },
     "budgets": {
       "homeChunkBytes": 63500,
@@ -85,12 +85,12 @@
       }
     },
     "current": {
-      "sha": "996886efc74aa72275232e51b26ed127e804118e",
-      "sourceTree": "5442edb7e362e323de833a576dc86e8841445d00",
+      "sha": "df51f3ff5c399a4a35cc040a2bf87416c137a827",
+      "sourceTree": "2b9cd48b81cf19875b3dc2a341345239ae8ac983",
       "build": {
-        "homeChunkBytes": 59186,
-        "initialJavaScriptBytes": 497580,
-        "htmlBytes": 447097
+        "homeChunkBytes": 63281,
+        "initialJavaScriptBytes": 503305,
+        "htmlBytes": 447185
       },
       "startupSource": {
         "files": [
@@ -100,6 +100,7 @@
           "app/components/TrainingHome.tsx",
           "app/components/WeeklySummary.tsx",
           "app/domain/bundledSystemContent.ts",
+          "app/domain/dailyTask.ts",
           "app/domain/learningHeatmap.ts",
           "app/domain/learningProgress.ts",
           "app/domain/learningSelection.ts",
@@ -136,22 +137,24 @@
           "listTrainingSessions": 1,
           "listPhraseLearningStates": 1,
           "getActiveTrainingSession": 1,
-          "getActiveLearningSession": 1,
+          "getActiveLearningSession": 2,
           "getAppPreferences": 1,
           "exportSnapshot": 0
         },
         "requests": {
           "activeTrainingSession": 1,
-          "activeLearningSession": 1
+          "dailyLearningSession": 1,
+          "autonomousLearningSession": 1
         },
         "rows": {
           "trainingEvents": 7056,
           "trainingSessions": 948,
           "activeTrainingSessions": 0,
-          "activeLearningSessions": 0,
+          "activeDailyLearningSessions": 0,
+          "activeAutonomousLearningSessions": 0,
           "heatmapDays": 84
         },
-        "serviceReadyMilliseconds": 203.32200000000012
+        "serviceReadyMilliseconds": 233.1489999999976
       }
     },
     "cleanup": {
@@ -180,7 +183,7 @@
       "listTrainingSessions": 1,
       "listPhraseLearningStates": 1,
       "getActiveTrainingSession": 1,
-      "getActiveLearningSession": 1,
+      "getActiveLearningSession": 2,
       "getAppPreferences": 1,
       "exportSnapshot": 0
     },
@@ -188,15 +191,17 @@
       "trainingEvents": 7056,
       "trainingSessions": 948,
       "activeTrainingSessions": 0,
-      "activeLearningSessions": 0,
+      "activeDailyLearningSessions": 0,
+      "activeAutonomousLearningSessions": 0,
       "heatmapDays": 84
     },
-    "serviceReadyMilliseconds": 203.32200000000012,
+    "serviceReadyMilliseconds": 233.1489999999976,
     "regressionBudgetMilliseconds": 5000,
     "budgetNote": "The ceiling is deliberately generous; this is a regression smoke budget, not a microbenchmark or Web Vital.",
     "requests": {
       "activeTrainingSession": 1,
-      "activeLearningSession": 1
+      "dailyLearningSession": 1,
+      "autonomousLearningSession": 1
     }
   },
   "layout": {

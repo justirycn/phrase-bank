@@ -389,6 +389,57 @@ describe("PhraseBankApp", () => {
     expect(repo.learningSessions.find(({ id }) => id === "auto-active")).not.toHaveProperty("completedAt");
   });
 
+  it("preserves an unfinished autonomous checkpoint while Aug 17 review and daily learning complete", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date("2026-08-16T16:05:00.000Z"));
+    try {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      const repo = new MemoryRepository();
+      repo.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 1 };
+      repo.phrases = [
+        makePhrase({ id: "aug17-due", chinese: "八月十七日复习", nextReviewAt: "2026-08-16T16:00:00.000Z" }),
+        makePhrase({ id: "aug17-new", english: "Aug 17 daily phrase", nextReviewAt: "2099-01-01T00:00:00.000Z" }),
+        makePhrase({ id: "aug16-auto", english: "Autonomous checkpoint", nextReviewAt: "2099-01-01T00:00:00.000Z" }),
+      ];
+      repo.learningStates = [
+        learnedState("aug17-due"),
+        {
+          phraseId: "aug16-auto", stage: "learning", firstSeenAt: "2026-08-16T15:00:00.000Z",
+          consecutiveGood: 0, masteredDates: [], updatedAt: "2026-08-16T15:00:00.000Z",
+        },
+      ];
+      repo.learningSessions = [{
+        id: "aug16-autonomous", purpose: "autonomous", date: "2026-08-16", themeCategoryId: "daily",
+        phraseIds: ["aug16-auto"], studyIndex: 0, testIndex: 0, phase: "study",
+        startedAt: "2026-08-16T15:00:00.000Z", updatedAt: "2026-08-16T15:00:00.000Z",
+      }];
+
+      render(<PhraseBankApp repository={repo as never} />);
+      await user.click(await screen.findByRole("button", { name: /继续今日任务/ }));
+      expect(await screen.findByText("八月十七日复习")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
+      await user.click(screen.getByRole("button", { name: /掌握/ }));
+
+      expect(await screen.findByText("今日任务 · 新句学习")).toBeVisible();
+      expect(screen.getByText("Aug 17 daily phrase")).toBeVisible();
+      await user.click(screen.getByRole("button", { name: "我看懂了，下一句" }));
+      await user.click(await screen.findByRole("button", { name: "查看答案并自评" }));
+      await user.click(screen.getByRole("button", { name: /掌握/ }));
+
+      expect(await screen.findByRole("heading", { name: "今日任务已完成" })).toBeVisible();
+      expect(repo.learningSessions.find(({ id }) => id === "aug16-autonomous")).toEqual({
+        id: "aug16-autonomous", purpose: "autonomous", date: "2026-08-16", themeCategoryId: "daily",
+        phraseIds: ["aug16-auto"], studyIndex: 0, testIndex: 0, phase: "study",
+        startedAt: "2026-08-16T15:00:00.000Z", updatedAt: "2026-08-16T15:00:00.000Z",
+      });
+      expect(repo.learningSessions.find(({ purpose }) => purpose === "daily")).toMatchObject({
+        date: "2026-08-17", testIndex: 1, completedAt: expect.any(String),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not let an old repository review completion enter the replacement repository's daily queue", async () => {
     const user = userEvent.setup(); const repoA = new MemoryRepository(); const repoB = new MemoryRepository();
     repoA.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 1 };

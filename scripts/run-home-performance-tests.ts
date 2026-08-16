@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const files = [
   "tests/deployment/homePerformance.test.ts",
@@ -13,7 +14,9 @@ const files = [
   "tests/support/performanceGateIsolation.test.ts",
   "tests/support/gitEvidence.test.ts",
 ];
-const result = spawnSync(process.execPath, [join(process.cwd(), "node_modules/vitest/vitest.mjs"), "run", ...files], {
+const vitestEntry = fileURLToPath(import.meta.resolve("vitest"));
+const vitestCli = join(dirname(dirname(vitestEntry)), "vitest.mjs");
+const result = spawnSync(process.execPath, [vitestCli, "run", ...files], {
   cwd: process.cwd(), stdio: "inherit", env: { ...process.env, HOME_PERFORMANCE_BUILD: "1" },
 });
 if (result.error) throw result.error;
