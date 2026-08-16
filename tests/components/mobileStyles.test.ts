@@ -164,8 +164,14 @@ describe("iPhone new phrase learning styles", () => {
 
   it("keeps daily progress and disabled autonomous copy readable in narrow layouts", async () => {
     const css = await readFile("app/globals.css", "utf8");
+    const disabledRule = css.match(/\.learning-start:disabled\s*\{([^}]*)\}/i)?.[1] ?? "";
+    const disabledBackground = disabledRule.match(/background:\s*(#[0-9a-f]{6})/i)?.[1];
+    const disabledForeground = disabledRule.match(/color:\s*(#[0-9a-f]{6})/i)?.[1];
     expect(css).toMatch(/\.daily-task-breakdown\s*\{[^}]*min-width:\s*0[^}]*overflow-wrap:\s*anywhere/s);
-    expect(css).toMatch(/\.learning-start:disabled\s*\{[^}]*background:\s*#[0-9a-f]{6}[^}]*color:\s*#[0-9a-f]{6}/i);
+    expect(disabledRule).toMatch(/opacity:\s*1/);
+    expect(disabledBackground).toBeDefined();
+    expect(disabledForeground).toBeDefined();
+    expect(contrastRatio(disabledForeground!, disabledBackground!)).toBeGreaterThanOrEqual(4.5);
     expect(css).toMatch(/\.new-phrase-learning \.task-mode-daily-learning\s*\{[^}]*overflow:\s*hidden[^}]*text-overflow:\s*ellipsis/s);
     expect(css).toMatch(/@container\s*\(max-width:\s*240px\)[\s\S]*?\.daily-task-breakdown\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*anywhere/s);
     expect(ruleSelectors(css).filter((selector) => selector.includes(".training-entry") && selector.includes("nth-child(3)"))).toHaveLength(0);
