@@ -2,7 +2,8 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type {
   Category,
-  LearningSessionRecord,
+  LearningSessionRecord as DomainLearningSessionRecord,
+  LearningSessionPurpose,
   Phrase,
   PhraseLearningState,
   SpeechPreferences,
@@ -13,6 +14,10 @@ import { useNewPhraseLearning } from "../../app/hooks/useNewPhraseLearning";
 import type { PhraseRepository } from "../../app/storage/repository";
 
 const timestamp = "2026-08-10T08:00:00.000Z";
+
+type LearningSessionRecord = Omit<DomainLearningSessionRecord, "purpose"> & {
+  purpose?: LearningSessionPurpose;
+};
 
 const phrase = (id: string, overrides: Partial<Phrase> = {}): Phrase => ({
   id,
@@ -59,6 +64,8 @@ interface MemoryOptions {
   states?: PhraseLearningState[];
   categories?: Category[];
   active?: LearningSessionRecord;
+  sessions?: LearningSessionRecord[];
+  events?: TrainingEvent[];
   preferences?: SpeechPreferences;
 }
 
@@ -66,14 +73,20 @@ function memoryRepository(options: MemoryOptions = {}) {
   const phrases = options.phrases ?? [];
   const states = structuredClone(options.states ?? []);
   const categories = options.categories ?? [category("daily")];
-  const sessions = options.active ? [structuredClone(options.active)] : [];
-  const events: TrainingEvent[] = [];
+  const sessions = structuredClone(options.sessions ?? (options.active ? [options.active] : []));
+  const events: TrainingEvent[] = structuredClone(options.events ?? []);
   const preferences = options.preferences ?? { accent: "en-US", autoSpeak: true };
 
   const repository = {
     listPhrases: vi.fn(async () => structuredClone(phrases)),
     listPhraseLearningStates: vi.fn(async () => structuredClone(states)),
-    getActiveLearningSession: vi.fn(async () => structuredClone(sessions.find((item) => !item.completedAt))),
+    getActiveLearningSession: vi.fn(async (purpose: LearningSessionPurpose) => structuredClone(sessions.find((item) =>
+      !item.completedAt && ((item as Partial<LearningSessionRecord>).purpose ?? "autonomous") === purpose
+    ))),
+    listTrainingEvents: vi.fn(async (from?: Date, to?: Date) => structuredClone(events.filter((event) => {
+      const occurredAt = Date.parse(event.occurredAt);
+      return (!from || occurredAt >= from.getTime()) && (!to || occurredAt <= to.getTime());
+    }))),
     listCategories: vi.fn(async () => structuredClone(categories)),
     getSpeechPreferences: vi.fn(async () => preferences),
     savePhraseLearningState: vi.fn(async (next: PhraseLearningState) => {
@@ -133,10 +146,115 @@ const renderLearning = (
   speech: voice,
   now: () => new Date(timestamp),
   idFactory: () => "learning-session",
+  purpose: "autonomous",
   ...extra,
 }));
 
+async function completeCurrentGroup(hook: ReturnType<typeof renderLearning>) {
+  const total = hook.result.current.total;
+  for (let index = 0; index < total; index += 1) {
+    await act(() => hook.result.current.nextStudyPhrase());
+  }
+  for (let index = 0; index < total; index += 1) {
+    await act(() => hook.result.current.reveal());
+    await act(() => hook.result.current.grade("good"));
+  }
+}
+
 describe("useNewPhraseLearning", () => {
+  it("chains two daily groups of five and reaches the daily goal from distinct current-day events", async () => {
+    const items = Array.from({ length: 10 }, (_, index) => phrase(`daily-${index}`));
+    const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
+    let id = 0;
+    const hook = renderLearning(store, speech(), {
+      purpose: "daily",
+      dailyGoal: 10,
+      idFactory: () => `daily-operation-${++id}`,
+    });
+
+    await waitFor(() => expect(hook.result.current).toMatchObject({
+      phase: "study", purpose: "daily", dailyRemaining: 10, total: 5,
+    }));
+    expect(store.repository.listTrainingEvents).toHaveBeenCalledWith(
+      new Date("2026-08-09T16:00:00.000Z"),
+      new Date("2026-08-10T15:59:59.999Z"),
+    );
+    expect(store.sessions[0]).toMatchObject({ purpose: "daily" });
+
+    await completeCurrentGroup(hook);
+    expect(hook.result.current.phase).toBe("complete");
+    act(() => hook.result.current.retry());
+    await waitFor(() => expect(hook.result.current).toMatchObject({ phase: "study", dailyRemaining: 5, total: 5 }));
+    expect(store.sessions).toHaveLength(2);
+    expect(store.sessions[1]).toMatchObject({ purpose: "daily" });
+    expect(store.sessions[1].id).not.toBe(store.sessions[0].id);
+
+    await completeCurrentGroup(hook);
+    act(() => hook.result.current.retry());
+    await waitFor(() => expect(hook.result.current).toMatchObject({ phase: "goal-complete", dailyRemaining: 0 }));
+    expect(new Set(store.events.map((event) => event.phraseId)).size).toBe(10);
+  });
+
+  it("reports the remaining daily shortage after exhausting a three-phrase inventory", async () => {
+    const items = Array.from({ length: 3 }, (_, index) => phrase(`short-${index}`));
+    const store = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
+    let id = 0;
+    const hook = renderLearning(store, speech(), {
+      purpose: "daily", dailyGoal: 10, idFactory: () => `short-operation-${++id}`,
+    });
+
+    await waitFor(() => expect(hook.result.current).toMatchObject({ phase: "study", total: 3, dailyRemaining: 10 }));
+    await completeCurrentGroup(hook);
+    act(() => hook.result.current.retry());
+
+    await waitFor(() => expect(hook.result.current).toMatchObject({ phase: "empty", dailyRemaining: 7, total: 0 }));
+    expect(store.sessions).toHaveLength(1);
+  });
+
+  it("restores daily and autonomous checkpoints independently", async () => {
+    const daily = phrase("daily-active");
+    const autonomous = phrase("autonomous-active");
+    const baseSession = {
+      date: "2026-08-10", themeCategoryId: "daily", studyIndex: 0, testIndex: 0,
+      phase: "study" as const, startedAt: timestamp, updatedAt: timestamp,
+    };
+    const store = memoryRepository({
+      phrases: [daily, autonomous], states: [unseen(daily.id), unseen(autonomous.id)],
+      sessions: [
+        { ...baseSession, id: "daily-session", purpose: "daily", phraseIds: [daily.id] },
+        { ...baseSession, id: "autonomous-session", purpose: "autonomous", phraseIds: [autonomous.id] },
+      ],
+    });
+
+    const dailyHook = renderLearning(store, speech(), { purpose: "daily", dailyGoal: 10 });
+    const autonomousHook = renderLearning(store, speech(), { purpose: "autonomous" });
+    await waitFor(() => expect(dailyHook.result.current.sessionId).toBe("daily-session"));
+    await waitFor(() => expect(autonomousHook.result.current.sessionId).toBe("autonomous-session"));
+    expect(dailyHook.result.current.current?.id).toBe(daily.id);
+    expect(autonomousHook.result.current.current?.id).toBe(autonomous.id);
+    expect(store.repository.getActiveLearningSession).toHaveBeenCalledWith("daily");
+    expect(store.repository.getActiveLearningSession).toHaveBeenCalledWith("autonomous");
+  });
+
+  it("treats a purpose-less migrated checkpoint as autonomous only", async () => {
+    const legacy = phrase("legacy");
+    const legacySession = {
+      id: "legacy-session", date: "2026-08-10", themeCategoryId: "daily", phraseIds: [legacy.id],
+      studyIndex: 0, testIndex: 0, phase: "study" as const, startedAt: timestamp, updatedAt: timestamp,
+    };
+    const store = memoryRepository({
+      phrases: [legacy], states: [{ ...unseen(legacy.id), stage: "learned" }],
+      sessions: [legacySession],
+    });
+
+    const dailyHook = renderLearning(store, speech(), { purpose: "daily", dailyGoal: 10 });
+    const autonomousHook = renderLearning(store, speech(), { purpose: "autonomous" });
+    await waitFor(() => expect(dailyHook.result.current.phase).toBe("empty"));
+    await waitFor(() => expect(autonomousHook.result.current.sessionId).toBe("legacy-session"));
+    expect(dailyHook.result.current.sessionId).toBeUndefined();
+    expect(autonomousHook.result.current.current?.id).toBe(legacy.id);
+  });
+
   it("creates a dated five-phrase group with personal phrases first and a stable system theme", async () => {
     const items = [
       phrase("daily-core", { origin: "system", kind: "core" }),
@@ -530,6 +648,7 @@ describe("useNewPhraseLearning", () => {
     const hook = renderHook(() => useNewPhraseLearning({
       repository: store.repository,
       speech: voice,
+      purpose: "autonomous",
       now: () => new Date(timestamp),
       idFactory: ids,
     }));
@@ -609,6 +728,7 @@ describe("useNewPhraseLearning", () => {
     const hook = renderHook(() => useNewPhraseLearning({
       repository: store.repository,
       speech: voice,
+      purpose: "autonomous",
       now: () => new Date(timestamp),
       idFactory: ids,
     }));
@@ -641,14 +761,14 @@ describe("useNewPhraseLearning", () => {
     expect(hook.result.current.studyIndex).toBe(1);
   });
 
-  it("cancels speech on unmount and ignores late initialization", async () => {
+  it.each(["daily", "autonomous"] as const)("cancels speech on unmount and ignores late %s initialization", async (purpose) => {
     const item = phrase("late");
     const store = memoryRepository({ phrases: [item], states: [unseen(item.id)] });
     let release!: (value: Phrase[]) => void;
     const deferred = new Promise<Phrase[]>((resolve) => { release = resolve; });
     (store.repository.listPhrases as ReturnType<typeof vi.fn>).mockImplementationOnce(() => deferred);
     const voice = speech();
-    const hook = renderLearning(store, voice);
+    const hook = renderLearning(store, voice, { purpose });
     hook.unmount();
     await act(async () => { release([item]); await deferred; });
 
@@ -709,7 +829,7 @@ describe("useNewPhraseLearning", () => {
     expect(hook.result.current.busy).toBe(false);
   });
 
-  it("keeps stale learning-state writes from contaminating a replacement repository", async () => {
+  it.each(["daily", "autonomous"] as const)("keeps stale %s learning-state writes from contaminating a replacement repository", async (purpose) => {
     const items = [phrase("first"), phrase("second")];
     const oldStore = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
     const newStore = memoryRepository({ phrases: items, states: items.map((item) => unseen(item.id)) });
@@ -730,6 +850,7 @@ describe("useNewPhraseLearning", () => {
       ({ repository }) => useNewPhraseLearning({
         repository,
         speech: voice,
+        purpose,
         now: () => new Date(timestamp),
         idFactory: () => "session",
       }),
@@ -771,6 +892,7 @@ describe("useNewPhraseLearning", () => {
     const hook = renderHook(() => useNewPhraseLearning({
       repository: store.repository,
       speech: voice,
+      purpose: "autonomous",
       now: () => new Date(actionTime),
       idFactory: () => "unused",
     }));
@@ -799,6 +921,7 @@ describe("useNewPhraseLearning", () => {
       ({ clock }) => useNewPhraseLearning({
         repository: store.repository,
         speech: voice,
+        purpose: "autonomous",
         now: clock,
         idFactory: () => "stable",
       }),

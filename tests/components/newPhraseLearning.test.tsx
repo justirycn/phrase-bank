@@ -1,9 +1,16 @@
-import { useState } from "react";
-import { act, render, screen, within } from "@testing-library/react";
+import { StrictMode, useState } from "react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { NewPhraseLearning } from "../../app/components/NewPhraseLearning";
+import LearningSession from "../../app/components/screens/LearningScreen";
 import type { NewPhraseLearningController } from "../../app/hooks/useNewPhraseLearning";
+import type { PhraseRepository } from "../../app/storage/repository";
+
+const learningHook = vi.hoisted(() => ({ current: undefined as NewPhraseLearningController | undefined }));
+vi.mock("../../app/hooks/useNewPhraseLearning", () => ({
+  useNewPhraseLearning: () => learningHook.current,
+}));
 
 const phrase = {
   id: "core-1", english: "Could you give me a moment?", chinese: "可以稍等我一下吗？",
@@ -15,6 +22,7 @@ const phrase = {
 
 function controller(overrides: Partial<NewPhraseLearningController> = {}): NewPhraseLearningController {
   return {
+    purpose: "autonomous", sessionId: "session-1", dailyRemaining: 0,
     phase: "study", current: phrase, examples: [], studyIndex: 0, testIndex: 0, total: 5,
     revealed: false, busy: false, replay: vi.fn(async () => undefined),
     nextStudyPhrase: vi.fn(async () => undefined), reveal: vi.fn(async () => undefined),
@@ -27,6 +35,77 @@ const example = (id: string, english: string, chinese: string) => ({
 });
 
 describe("NewPhraseLearning", () => {
+  it("labels daily learning distinctly and reports its exact inventory shortage", () => {
+    const view = render(<NewPhraseLearning
+      controller={controller({ purpose: "daily" })}
+      onHome={vi.fn()}
+      onStartAutonomous={vi.fn()}
+    />);
+    expect(screen.getByText("今日任务 · 新句学习")).toBeVisible();
+
+    view.rerender(<NewPhraseLearning
+      controller={controller({ purpose: "daily", phase: "empty", current: undefined, dailyRemaining: 7 })}
+      onHome={vi.fn()}
+      onStartAutonomous={vi.fn()}
+    />);
+    expect(screen.getByText("还差 7 句，可去句库添加")).toBeVisible();
+  });
+
+  it("shows the daily goal completion actions and starts autonomous learning once", async () => {
+    const user = userEvent.setup();
+    const onHome = vi.fn();
+    const onStartAutonomous = vi.fn();
+    render(<NewPhraseLearning
+      controller={controller({ purpose: "daily", phase: "goal-complete", current: undefined })}
+      onHome={onHome}
+      onStartAutonomous={onStartAutonomous}
+    />);
+
+    expect(screen.getByRole("heading", { name: "今日任务已完成" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "开始自主学习" }));
+    await user.click(screen.getByRole("button", { name: "回到首页" }));
+    expect(onStartAutonomous).toHaveBeenCalledOnce();
+    expect(onHome).toHaveBeenCalledOnce();
+  });
+
+  it("continues each completed daily session once in StrictMode and notifies goal completion once", async () => {
+    const retryFirst = vi.fn();
+    const onDailyGoalComplete = vi.fn(async () => undefined);
+    learningHook.current = controller({ purpose: "daily", phase: "complete", current: undefined, sessionId: "daily-1", retry: retryFirst });
+    const view = render(<StrictMode><LearningSession
+      repository={{} as PhraseRepository}
+      purpose="daily"
+      dailyGoal={10}
+      onHome={vi.fn()}
+      onStartAutonomous={vi.fn()}
+      onDailyGoalComplete={onDailyGoalComplete}
+    /></StrictMode>);
+    await waitFor(() => expect(retryFirst).toHaveBeenCalledOnce());
+
+    const retrySecond = vi.fn();
+    learningHook.current = controller({ purpose: "daily", phase: "complete", current: undefined, sessionId: "daily-2", retry: retrySecond });
+    view.rerender(<StrictMode><LearningSession
+      repository={{} as PhraseRepository}
+      purpose="daily"
+      dailyGoal={10}
+      onHome={vi.fn()}
+      onStartAutonomous={vi.fn()}
+      onDailyGoalComplete={onDailyGoalComplete}
+    /></StrictMode>);
+    await waitFor(() => expect(retrySecond).toHaveBeenCalledOnce());
+
+    learningHook.current = controller({ purpose: "daily", phase: "goal-complete", current: undefined, sessionId: undefined });
+    view.rerender(<StrictMode><LearningSession
+      repository={{} as PhraseRepository}
+      purpose="daily"
+      dailyGoal={10}
+      onHome={vi.fn()}
+      onStartAutonomous={vi.fn()}
+      onDailyGoalComplete={onDailyGoalComplete}
+    /></StrictMode>);
+    await waitFor(() => expect(onDailyGoalComplete).toHaveBeenCalledOnce());
+  });
+
   it("shows the system study card, context, and at most two ordered examples", async () => {
     const user = userEvent.setup();
     const value = controller({ examples: [

@@ -1,8 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { countNewPhrasesOnShanghaiDay, shanghaiDayBounds } from "../domain/dailyTask";
 import { previewLearningGroup } from "../domain/learningSelection";
 import type {
+  LearningSessionPurpose,
   LearningSessionRecord,
   Phrase,
   PhraseLearningState,
@@ -10,12 +12,15 @@ import type {
   SpeechPreferences,
   TrainingEvent,
 } from "../domain/types";
+import { DEFAULT_DAILY_NEW_PHRASE_GOAL } from "../domain/types";
 import type { BrowserSpeechService } from "../services/speech";
 import type { PhraseRepository } from "../storage/repository";
 
-export type NewLearningPhase = "loading" | "study" | "test" | "complete" | "empty" | "error";
+export type NewLearningPhase = "loading" | "study" | "test" | "complete" | "goal-complete" | "empty" | "error";
 
 export interface NewPhraseLearningController {
+  purpose: LearningSessionPurpose;
+  sessionId?: string;
   phase: NewLearningPhase;
   current?: Phrase;
   examples: Phrase[];
@@ -25,6 +30,7 @@ export interface NewPhraseLearningController {
   revealed: boolean;
   error?: string;
   busy: boolean;
+  dailyRemaining: number;
   replay(): Promise<void>;
   nextStudyPhrase(): Promise<void>;
   reveal(): Promise<void>;
@@ -35,6 +41,8 @@ export interface NewPhraseLearningController {
 export interface UseNewPhraseLearningOptions {
   repository: PhraseRepository;
   speech: Pick<BrowserSpeechService, "speak" | "cancel">;
+  purpose: LearningSessionPurpose;
+  dailyGoal?: number;
   now?: () => Date;
   idFactory?: () => string;
 }
@@ -53,6 +61,7 @@ interface LearningStateWrite {
 
 interface SessionCreation {
   repository: PhraseRepository;
+  purpose: LearningSessionPurpose;
   promise: Promise<LearningSessionRecord>;
 }
 
@@ -94,6 +103,14 @@ function shanghaiDate(value: Date): string {
   return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
 }
 
+function shanghaiDayRange(date: string): { from: Date; to: Date } {
+  const { startInclusive, endExclusive } = shanghaiDayBounds(date);
+  return {
+    from: new Date(startInclusive),
+    to: new Date(Date.parse(endExclusive) - 1),
+  };
+}
+
 function cursorAfterFiltering(ids: string[], cursor: number, survivingIds: Set<string>): number {
   return ids.slice(0, Math.min(cursor, ids.length)).filter((id) => survivingIds.has(id)).length;
 }
@@ -109,10 +126,13 @@ function sameSessionProgress(left: LearningSessionRecord, right: LearningSession
 export function useNewPhraseLearning({
   repository,
   speech,
+  purpose,
+  dailyGoal = DEFAULT_DAILY_NEW_PHRASE_GOAL,
   now = systemNow,
   idFactory = createId,
 }: UseNewPhraseLearningOptions): NewPhraseLearningController {
   const [phase, setPhase] = useState<NewLearningPhase>("loading");
+  const [sessionId, setSessionId] = useState<string>();
   const [queue, setQueue] = useState<Phrase[]>([]);
   const [allPhrases, setAllPhrases] = useState<Phrase[]>([]);
   const [studyIndex, setStudyIndex] = useState(0);
@@ -120,6 +140,7 @@ export function useNewPhraseLearning({
   const [revealed, setRevealed] = useState(false);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(true);
+  const [dailyRemaining, setDailyRemaining] = useState(0);
 
   const phaseRef = useRef<NewLearningPhase>("loading");
   const queueRef = useRef<Phrase[]>([]);
@@ -173,6 +194,10 @@ export function useNewPhraseLearning({
     if (mountedRef.current) setRevealed(next);
   }, []);
 
+  const replaceDailyRemaining = useCallback((next: number) => {
+    if (mountedRef.current) setDailyRemaining(next);
+  }, []);
+
   const setVisibleError = useCallback((message?: string) => {
     if (mountedRef.current) setError(message);
   }, []);
@@ -224,7 +249,12 @@ export function useNewPhraseLearning({
   const initialize = useCallback(() => {
     const generation = ++generationRef.current;
     const creationAtStart = sessionCreationRef.current;
+    const started = readNow();
+    const date = shanghaiDate(started);
+    const dailyRange = purpose === "daily" ? shanghaiDayRange(date) : undefined;
     pendingReviewRef.current = undefined;
+    sessionRef.current = undefined;
+    if (mountedRef.current) setSessionId(undefined);
     setOperation(true);
     setVisibleError(undefined);
     replacePhase("loading");
@@ -233,32 +263,40 @@ export function useNewPhraseLearning({
     replaceStudyIndex(0);
     replaceTestIndex(0);
     replaceRevealed(false);
+    replaceDailyRemaining(0);
 
     void (async () => {
-      const [phrases, states, initialActive, categories, preferences] = await Promise.all([
+      const [phrases, states, initialActive, categories, preferences, dailyEvents] = await Promise.all([
         repository.listPhrases(),
         repository.listPhraseLearningStates(),
-        repository.getActiveLearningSession(),
+        repository.getActiveLearningSession(purpose),
         repository.listCategories(),
         repository.getSpeechPreferences().catch(() => defaultPreferences),
+        dailyRange ? repository.listTrainingEvents(dailyRange.from, dailyRange.to) : Promise.resolve([]),
       ]);
       if (!mountedRef.current || generation !== generationRef.current) return;
       setAllPhrases(phrases);
       learningStatesRef.current = new Map(states.map((state) => [state.phraseId, state]));
       preferencesRef.current = preferences;
+      const remaining = purpose === "daily"
+        ? Math.max(0, dailyGoal - countNewPhrasesOnShanghaiDay(dailyEvents, date))
+        : 0;
+      replaceDailyRemaining(remaining);
 
       let active = initialActive;
       const pendingCreation = creationAtStart;
-      if (!active && pendingCreation?.repository === repository) {
+      if (!active && pendingCreation?.repository === repository && pendingCreation.purpose === purpose) {
         const result = await waitForCreationWindow(pendingCreation.promise);
         if (!mountedRef.current || generation !== generationRef.current) return;
         if (result.status !== "timeout") {
-          active = await repository.getActiveLearningSession();
+          active = await repository.getActiveLearningSession(purpose);
           if (!mountedRef.current || generation !== generationRef.current) return;
         }
       }
 
       const restoreActive = async (saved: LearningSessionRecord) => {
+        const savedPurpose = saved.purpose ?? "autonomous";
+        if (savedPurpose !== purpose) throw new Error("学习会话用途不匹配");
         const byId = new Map(phrases.map((item) => [item.id, item]));
         const restoredWithPositions = saved.phraseIds.flatMap((id, position) => {
           const item = byId.get(id);
@@ -282,6 +320,7 @@ export function useNewPhraseLearning({
         }
         const normalized: LearningSessionRecord = {
           ...saved,
+          purpose: savedPurpose,
           phraseIds: restored.map((item) => item.id),
           studyIndex: normalizedStudy,
           testIndex: normalizedTest,
@@ -290,6 +329,7 @@ export function useNewPhraseLearning({
         if (!sameSessionProgress(saved, normalized)) await repository.saveLearningSession(normalized);
         if (!mountedRef.current || generation !== generationRef.current) return;
         sessionRef.current = normalized;
+        if (mountedRef.current) setSessionId(normalized.id);
         replaceQueue(restored);
         replaceStudyIndex(normalizedStudy);
         replaceTestIndex(normalizedTest);
@@ -311,9 +351,13 @@ export function useNewPhraseLearning({
         return;
       }
 
-      const started = readNow();
-      const date = shanghaiDate(started);
-      const preview = previewLearningGroup(phrases, states, categories.map((item) => item.id), { date });
+      if (purpose === "daily" && remaining === 0) {
+        replacePhase("goal-complete");
+        setOperation(false);
+        return;
+      }
+      const target = purpose === "daily" ? Math.min(5, remaining) : 5;
+      const preview = previewLearningGroup(phrases, states, categories.map((item) => item.id), { date, target });
       const { themeCategoryId } = preview;
       if (!themeCategoryId) {
         replacePhase("empty");
@@ -328,6 +372,7 @@ export function useNewPhraseLearning({
       }
       const session: LearningSessionRecord = {
         id: readId(),
+        purpose,
         date,
         themeCategoryId,
         phraseIds: selected.map((item) => item.id),
@@ -339,6 +384,7 @@ export function useNewPhraseLearning({
       };
       const creation: SessionCreation = {
         repository,
+        purpose,
         promise: repository.saveLearningSession(session).then(() => session),
       };
       sessionCreationRef.current = creation;
@@ -354,7 +400,7 @@ export function useNewPhraseLearning({
         await creation.promise;
       } catch (cause) {
         if (!mountedRef.current || generation !== generationRef.current) return;
-        const recovered = await repository.getActiveLearningSession();
+        const recovered = await repository.getActiveLearningSession(purpose);
         if (!mountedRef.current || generation !== generationRef.current) return;
         if (recovered) {
           await restoreActive(recovered);
@@ -364,18 +410,20 @@ export function useNewPhraseLearning({
       }
       if (!mountedRef.current || generation !== generationRef.current) return;
       sessionRef.current = session;
+      if (mountedRef.current) setSessionId(session.id);
       replaceQueue(selected);
       replacePhase("study");
       setOperation(false);
     })().catch(() => {
       if (!mountedRef.current || generation !== generationRef.current) return;
       sessionRef.current = undefined;
+      setSessionId(undefined);
       replaceQueue([]);
       replacePhase("error");
       setVisibleError("学习内容暂时无法加载或保存，请重试。");
       setOperation(false);
     });
-  }, [readId, readNow, replacePhase, replaceQueue, replaceRevealed, replaceStudyIndex, replaceTestIndex, repository, setOperation, setVisibleError]);
+  }, [dailyGoal, purpose, readId, readNow, replaceDailyRemaining, replacePhase, replaceQueue, replaceRevealed, replaceStudyIndex, replaceTestIndex, repository, setOperation, setVisibleError]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -541,6 +589,8 @@ export function useNewPhraseLearning({
     : [];
 
   return {
+    purpose,
+    sessionId,
     phase,
     current,
     examples,
@@ -550,6 +600,7 @@ export function useNewPhraseLearning({
     revealed,
     error,
     busy,
+    dailyRemaining,
     replay,
     nextStudyPhrase,
     reveal,

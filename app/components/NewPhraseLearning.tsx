@@ -5,9 +5,10 @@ import type { ReviewResult } from "../domain/types";
 import type { NewPhraseLearningController } from "../hooks/useNewPhraseLearning";
 import { AppIcon } from "./AppIcon";
 
-export function NewPhraseLearning({ controller, onHome }: {
+export function NewPhraseLearning({ controller, onHome, onStartAutonomous }: {
   controller: NewPhraseLearningController;
   onHome: () => void;
+  onStartAutonomous?: () => void;
 }) {
   const [pending, setPending] = useState(false);
   const [status, setStatus] = useState("");
@@ -41,9 +42,10 @@ export function NewPhraseLearning({ controller, onHome }: {
   const disabled = controller.busy || pending;
   const exit = () => { void run(onHome); };
   const actionStatus = status && <p className="new-learning-status" role="status">{status}</p>;
+  const preparationCopy = controller.purpose === "daily" ? "正在准备今日任务内容" : "正在准备自主学习内容";
 
   if (controller.phase === "loading") {
-    return <section className="new-learning-loading" aria-live="polite">正在准备自主学习内容</section>;
+    return <section className="new-learning-loading" aria-live="polite">{preparationCopy}</section>;
   }
 
   if (controller.phase === "error") {
@@ -62,13 +64,32 @@ export function NewPhraseLearning({ controller, onHome }: {
   if (controller.phase === "empty") {
     return <section className="new-learning-empty">
       <h1>暂无新句</h1>
-      <p>可以去句库添加新的表达，再回来继续学习。</p>
+      <p>{controller.purpose === "daily" && controller.dailyRemaining > 0
+        ? `还差 ${controller.dailyRemaining} 句，可去句库添加`
+        : "可以去句库添加新的表达，再回来继续学习。"}</p>
       {actionStatus}
       <button type="button" disabled={disabled} onClick={exit}>返回首页</button>
     </section>;
   }
 
+  if (controller.phase === "goal-complete") {
+    return <section className="new-learning-complete">
+      <AppIcon name="completion" size={36} />
+      <h1>今日任务已完成</h1>
+      {actionStatus}
+      <div className="new-learning-state-actions">
+        <button type="button" disabled={disabled} onClick={exit}>回到首页</button>
+        <button type="button" className="primary" disabled={disabled} onClick={() => { void run(() => onStartAutonomous?.()); }}>
+          开始自主学习
+        </button>
+      </div>
+    </section>;
+  }
+
   if (controller.phase === "complete") {
+    if (controller.purpose === "daily") {
+      return <section className="new-learning-loading" aria-live="polite">{preparationCopy}</section>;
+    }
     return <section className="new-learning-complete">
       <AppIcon name="completion" size={36} />
       <h1>本组学习完成</h1>
@@ -87,7 +108,7 @@ export function NewPhraseLearning({ controller, onHome }: {
     && Number.isInteger(index) && index >= 0 && index < controller.total;
   const current = controller.current;
   if (!current || !validProgress) {
-    return <section className="new-learning-loading" aria-live="polite">正在准备自主学习内容</section>;
+    return <section className="new-learning-loading" aria-live="polite">{preparationCopy}</section>;
   }
 
   const showAnswer = isStudy || controller.revealed;
@@ -102,8 +123,10 @@ export function NewPhraseLearning({ controller, onHome }: {
       <button type="button" className="new-learning-close" aria-label="关闭学习并返回首页" disabled={disabled} onClick={exit}>
         <AppIcon name="close" size={22} />
       </button>
-      <span className="task-mode task-mode-learning">
-        {isStudy ? "自主学习 · 先学后测" : "自主学习 · 小测"}
+      <span className={`task-mode ${controller.purpose === "daily" ? "task-mode-daily-learning" : "task-mode-learning"}`}>
+        {controller.purpose === "daily"
+          ? "今日任务 · 新句学习"
+          : isStudy ? "自主学习 · 先学后测" : "自主学习 · 小测"}
       </span>
       <span aria-label={`学习进度 ${progress}`}>{progress}</span>
       <div className="learning-track" role="progressbar" aria-label="新句学习进度" aria-valuemin={0} aria-valuemax={controller.total} aria-valuenow={index + 1}>
