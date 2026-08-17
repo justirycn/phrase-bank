@@ -69,6 +69,8 @@ describe("Qwen content release workflow", () => {
     expect(source).toContain("npm run content:publish -- --version $CONTENT_VERSION");
     expect(source).toContain(focusedTests);
     expect(source).toContain('git add "public/content/system-content-$CONTENT_VERSION.json" app/domain/bundledSystemContent.ts');
+    expect(source).not.toContain("git diff --cached --quiet &&");
+    expect(source).toMatch(/if git diff --cached --quiet; then\r?\n\s+echo "Qwen content publish produced no changes"\r?\n\s+exit 1\r?\n\s+fi/);
     const scpArtifactPositions = [...normalized.matchAll(/(?:^|\n)[ \t]*(?:-[ \t]+)?(?:run:[ \t]*)?scp\b[^\r\n]*:(\/opt\/phrase-bank\/\.content-agent\/(?:candidate|report)-\$CONTENT_VERSION\.json)/g)]
       .map((match) => match.index ?? -1)
       .sort((left, right) => left - right);

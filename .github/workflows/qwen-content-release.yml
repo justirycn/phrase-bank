@@ -66,7 +66,11 @@ jobs:
       - run: test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || { echo "main advanced during Qwen generation"; exit 1; }
       - run: git add "public/content/system-content-$CONTENT_VERSION.json" app/domain/bundledSystemContent.ts
       - name: Require generated changes
-        run: git diff --cached --quiet && { echo "Qwen content publish produced no changes"; exit 1; }
+        run: |
+          if git diff --cached --quiet; then
+            echo "Qwen content publish produced no changes"
+            exit 1
+          fi
       - run: git diff --cached --check
       - name: Commit generated content
         run: |
