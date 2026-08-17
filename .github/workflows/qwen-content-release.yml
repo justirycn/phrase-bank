@@ -1,0 +1,76 @@
+name: Generate and deploy Qwen content
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: phrase-bank-qwen-content
+  cancel-in-progress: false
+
+env:
+  CONTENT_VERSION: 2026.08.3
+
+jobs:
+  generate-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      TENCENT_HOST: ${{ secrets.TENCENT_HOST }}
+      TENCENT_SSH_KEY: ${{ secrets.TENCENT_SSH_KEY }}
+      TENCENT_USER: ${{ secrets.TENCENT_USER }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Configure SSH
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$TENCENT_SSH_KEY" > ~/.ssh/tencent_qwen
+          chmod 600 ~/.ssh/tencent_qwen
+          ssh-keyscan -H "$TENCENT_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Generate and independently review content on the server
+        run: |
+          ssh -i ~/.ssh/tencent_qwen -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST" "CONTENT_VERSION='$CONTENT_VERSION' bash -se" <<'REMOTE'
+          set -euo pipefail
+          cd /opt/phrase-bank
+          test -f /etc/phrase-bank/qwen-content.env
+          env_mode="$(stat -c '%a' /etc/phrase-bank/qwen-content.env)"
+          test "$env_mode" = "600"
+          test -z "$(git status --porcelain --untracked-files=no)"
+          command git fetch origin main
+          git checkout main
+          git pull --ff-only origin main
+          mkdir -p .content-agent
+          docker run --rm --env-file /etc/phrase-bank/qwen-content.env -v "$PWD:/workspace" -w /workspace node:22-bookworm-slim sh -lc "npm ci && npm run content:qwen -- --version '$CONTENT_VERSION'"
+          REMOTE
+      - name: Retrieve reviewed artifacts
+        run: mkdir -p .content-agent
+      - run: scp -i ~/.ssh/tencent_qwen -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST:/opt/phrase-bank/.content-agent/candidate-$CONTENT_VERSION.json" ".content-agent/candidate-$CONTENT_VERSION.json"
+      - run: scp -i ~/.ssh/tencent_qwen -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST:/opt/phrase-bank/.content-agent/report-$CONTENT_VERSION.json" ".content-agent/report-$CONTENT_VERSION.json"
+      - run: npm run content:publish -- --version $CONTENT_VERSION
+      - run: npm test -- tests/contentAgent tests/deployment/qwenSecrets.test.ts tests/deployment/qwenContentReleaseWorkflow.test.ts
+      - run: npm test
+      - run: npm run lint
+      - run: npm run build
+      - run: git diff --check
+      - run: git fetch origin main
+      - run: test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || { echo "main advanced during Qwen generation"; exit 1; }
+      - run: git add "public/content/system-content-$CONTENT_VERSION.json" app/domain/bundledSystemContent.ts
+      - name: Require generated changes
+        run: git diff --cached --quiet && { echo "Qwen content publish produced no changes"; exit 1; }
+      - run: git diff --cached --check
+      - name: Commit generated content
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "content: publish Qwen phrase library $CONTENT_VERSION"
+      - run: git push origin HEAD:main
