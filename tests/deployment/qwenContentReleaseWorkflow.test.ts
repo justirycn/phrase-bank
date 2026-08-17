@@ -7,8 +7,12 @@ const workflow = () => readFileSync(resolve(process.cwd(), ".github/workflows/qw
 const normalizeContinuations = (source: string) => source.replace(/\\[ \t]*\r?\n[ \t]*/g, " ");
 const logicalCommands = (source: string) => normalizeContinuations(source)
   .split(/\r?\n/)
-  .map((line) => line.trim().replace(/^(?:-\s*)?run:\s*(?:\|\s*)?/, "").trim())
+  .map((line) => line.trim().replace(/^(?:-\s*)?run:\s*(?:\|\s*)?/, "").trim().replace(/\s+/g, " "))
   .filter((line) => line.length > 0 && line !== "|" && !line.startsWith("#"));
+const expectedScpCommands = [
+  'scp -i ~/.ssh/tencent_qwen -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST:/opt/phrase-bank/.content-agent/candidate-$CONTENT_VERSION.json" ".content-agent/candidate-$CONTENT_VERSION.json"',
+  'scp -i ~/.ssh/tencent_qwen -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST:/opt/phrase-bank/.content-agent/report-$CONTENT_VERSION.json" ".content-agent/report-$CONTENT_VERSION.json"',
+];
 const commandLine = (source: string, command: string) => {
   const escaped = command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = source.match(new RegExp(`^[ \\t]*(?:-[ \\t]+)?(?:run:[ \\t]*)?${escaped}[ \\t]*$`, "m"));
@@ -42,7 +46,7 @@ describe("Qwen content release workflow", () => {
 
     const normalized = normalizeContinuations(source);
     const scpCommands = logicalCommands(normalized).filter((command) => /^scp(?:\s|$)/.test(command));
-    expect(scpCommands).toHaveLength(2);
+    expect(scpCommands).toEqual(expectedScpCommands);
     const remoteSourcePaths = scpCommands.flatMap((command) => {
       const paths = [...command.matchAll(/:(\/opt\/phrase-bank\/\.content-agent\/(?:candidate|report)-\$CONTENT_VERSION\.json)(?=["'\s]|$)/g)].map((match) => match[1]);
       expect(paths).toHaveLength(1);
