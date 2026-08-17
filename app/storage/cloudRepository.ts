@@ -18,7 +18,8 @@ export class CloudPhraseRepository extends LocalPhraseRepository {
   }
   private async sync() {
     const snapshot = await super.exportSnapshot();
-    const response = await this.fetcher.call(globalThis, "/api/repository", { method: "PUT", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ snapshot }) });
+    const body = await new Response(new Response(JSON.stringify({ snapshot })).body!.pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
+    const response = await this.fetcher.call(globalThis, "/api/repository", { method: "PUT", headers: { "content-encoding": "gzip" }, body });
     if (response.status === 401) throw new AuthenticationError("登录已过期");
     if (!response.ok) throw new Error("云端数据保存失败");
   }

@@ -1,8 +1,8 @@
 export interface BilingualValue { en: string; zh: string }
-export interface PhraseFamily { subcategory: string; intent: string; actions: BilingualValue[]; contexts: BilingualValue[] }
+export interface PhraseFamily { subcategory: string; subcategoryZh?: string; intent: string; actions: BilingualValue[]; contexts: BilingualValue[] }
 export interface CategoryBlueprint { id: "daily" | "travel" | "work" | "business" | "supply-chain" | "social"; families: PhraseFamily[] }
 const p = (values: Array<[string, string]>): BilingualValue[] => values.map(([en, zh]) => ({ en, zh }));
-const family = (subcategory: string, intent: string, actions: Array<[string, string]>, contexts: Array<[string, string]>): PhraseFamily => ({ subcategory, intent, actions: p(actions), contexts: p(contexts) });
+const family = (subcategory: string, intent: string, actions: Array<[string, string]>, contexts: Array<[string, string]>, subcategoryZh?: string): PhraseFamily => ({ subcategory, subcategoryZh, intent, actions: p(actions), contexts: p(contexts) });
 
 export const BLUEPRINTS: CategoryBlueprint[] = [
   { id: "daily", families: [
@@ -37,17 +37,20 @@ export const BLUEPRINTS: CategoryBlueprint[] = [
 
 function makeWorkFamilies(): PhraseFamily[] {
   const topics = [["the project scope", "项目范围"], ["the delivery timeline", "交付时间表"], ["the customer feedback", "客户反馈"], ["the next action", "下一步行动"]] as Array<[string, string]>;
-  return ["planning", "meetings", "priorities", "progress", "feedback", "ownership", "risks", "decisions", "quality", "collaboration"].map((name, index) => family(name, "coordinate work", index % 2 ? [["clarify", "澄清"], ["document", "记录"], ["share", "分享"]] : [["review", "审阅"], ["discuss", "讨论"], ["confirm", "确认"]], topics));
+  const names = [["planning", "工作规划"], ["meetings", "会议"], ["priorities", "优先事项"], ["progress", "工作进度"], ["feedback", "反馈"], ["ownership", "职责分工"], ["risks", "风险"], ["decisions", "决策"], ["quality", "质量"], ["collaboration", "协作"]] as const;
+  return names.map(([name, nameZh], index) => family(name, "coordinate work", index % 2 ? [["clarify", "澄清"], ["document", "记录"], ["share", "分享"]] : [["review", "审阅"], ["discuss", "讨论"], ["confirm", "确认"]], topics, nameZh));
 }
 function makeBusinessFamilies(): PhraseFamily[] {
   const topics = [["the price", "价格"], ["the payment terms", "付款条款"], ["the delivery date", "交付日期"], ["the warranty", "保修条款"], ["the final proposal", "最终方案"]] as Array<[string, string]>;
-  return ["pricing", "payment", "delivery", "contract", "volume", "service", "warranty", "follow-up", "comparison", "agreement"].map((name, index) => family(name, "negotiate a business term", index % 2 ? [["clarify", "澄清"], ["reconsider", "重新考虑"]] : [["discuss", "讨论"], ["confirm", "确认"]], topics));
+  const names = [["pricing", "价格协商"], ["payment", "付款协商"], ["delivery", "交付协商"], ["contract", "合同协商"], ["volume", "数量协商"], ["service", "服务协商"], ["warranty", "保修协商"], ["follow-up", "后续跟进"], ["comparison", "方案比较"], ["agreement", "协议确认"]] as const;
+  return names.map(([name, nameZh], index) => family(name, "negotiate a business term", index % 2 ? [["clarify", "澄清"], ["reconsider", "重新考虑"]] : [["discuss", "讨论"], ["confirm", "确认"]], topics, nameZh));
 }
 function makeSupplyFamilies(): PhraseFamily[] {
-  const names = ["sample approval", "packaging review", "material sourcing", "production planning", "quality control", "supplier onboarding", "order confirmation", "shipment preparation", "delivery tracking", "issue resolution"];
-  return names.map((name, index) => family(name, "coordinate product delivery", index % 2 ? [["inspect", "检查"], ["verify", "核实"]] : [["confirm", "确认"], ["update", "更新"]], (index < 5 ? [["the product sample", "产品样品"], ["the packaging", "包装"], ["the material specification", "材料规格"], ["the production schedule", "生产计划"]] : [["the minimum order quantity", "最小起订量"], ["the lead time", "交期"], ["the quality report", "质量报告"]]) as Array<[string, string]>));
+  const names = [["sample approval", "样品确认"], ["packaging review", "包装审核"], ["material sourcing", "材料采购"], ["production planning", "生产规划"], ["quality control", "质量控制"], ["supplier onboarding", "供应商准入"], ["order confirmation", "订单确认"], ["shipment preparation", "出货准备"], ["delivery tracking", "交付跟踪"], ["issue resolution", "问题处理"]] as const;
+  return names.map(([name, nameZh], index) => family(name, "coordinate product delivery", index % 2 ? [["inspect", "检查"], ["verify", "核实"]] : [["confirm", "确认"], ["update", "更新"]], (index < 5 ? [["the product sample", "产品样品"], ["the packaging", "包装"], ["the material specification", "材料规格"], ["the production schedule", "生产计划"]] : [["the minimum order quantity", "最小起订量"], ["the lead time", "交期"], ["the quality report", "质量报告"]]) as Array<[string, string]>, nameZh));
 }
 function makeSocialFamilies(): PhraseFamily[] {
   const topics = [["how I feel", "我的感受"], ["what I need", "我的需要"], ["what happened yesterday", "昨天发生的事"]] as Array<[string, string]>;
-  return ["feelings", "boundaries", "gratitude", "apology", "support"].map((name, index) => family(name, "express a social need", index % 2 ? [["talk honestly about", "坦诚谈谈"], ["set clear expectations about", "明确说明"]] : [["talk about", "谈谈"], ["make time to discuss", "抽时间讨论"]], topics));
+  const names = [["feelings", "感受"], ["boundaries", "相处界限"], ["gratitude", "感谢"], ["apology", "道歉"], ["support", "支持"]] as const;
+  return names.map(([name, nameZh], index) => family(name, "express a social need", index % 2 ? [["talk honestly about", "坦诚谈谈"], ["set clear expectations about", "明确说明"]] : [["talk about", "谈谈"], ["make time to discuss", "抽时间讨论"]], topics, nameZh));
 }

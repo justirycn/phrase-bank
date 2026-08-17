@@ -5,6 +5,7 @@ import {
   selectLearningGroup,
 } from "../../app/domain/learningSelection";
 import type { Phrase, PhraseLearningState } from "../../app/domain/types";
+import { generateSystemContent } from "../../scripts/content-agent/generator";
 
 const timestamp = "2026-08-10T08:00:00.000Z";
 
@@ -175,6 +176,20 @@ describe("selectLearningGroup", () => {
     const second = selectLearningGroup(phrases, [], options).map(({ id }) => id);
 
     expect(first).toEqual(second);
+  });
+
+  it("spreads a five-phrase system group across different subcategories", () => {
+    const generated = generateSystemContent().phrases
+      .filter(({ categoryId, kind }) => categoryId === "supply-chain" && kind === "core")
+      .map((item) => phrase(item.id, { ...item }));
+
+    const result = selectLearningGroup(generated, [], {
+      date: "2026-08-10",
+      themeCategoryId: "supply-chain",
+      target: 5,
+    });
+
+    expect(new Set(result.map(({ subcategory }) => subcategory))).toHaveLength(5);
   });
 
   it("deduplicates phrase IDs and never exceeds the target", () => {

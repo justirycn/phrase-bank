@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { generateSystemContent } from "../../scripts/content-agent/generator";
 import { inspectSystemContent } from "../../scripts/content-agent/qualityGate";
 
-const artifact = resolve(process.cwd(), "public/content/system-content-2026.08.1.json");
+const artifact = resolve(process.cwd(), "public/content/system-content-2026.08.2.json");
 
 describe("published system content package", () => {
   it("matches deterministic generation and passes the independent quality gate", () => {

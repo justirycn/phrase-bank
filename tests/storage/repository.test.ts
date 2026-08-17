@@ -45,12 +45,19 @@ describe("LocalPhraseRepository", () => {
     expect(await repo.getActiveSystemContentVersion()).toBe("v1");
     expect(await repo.getPhrase("sys-core")).toMatchObject({ english: "System core", origin: "system", kind: "core" });
     expect(await repo.listPhraseLearningStates()).toContainEqual(expect.objectContaining({ phraseId: "sys-core", masteredDates: [] }));
+    const learnedState: PhraseLearningState = {
+      phraseId: "sys-core", stage: "learned", firstSeenAt: "2026-08-10T00:00:00.000Z",
+      firstTestedAt: "2026-08-11T00:00:00.000Z", firstResult: "good", consecutiveGood: 1,
+      masteredDates: ["2026-08-11"], updatedAt: "2026-08-11T00:00:00.000Z",
+    };
+    await repo.savePhraseLearningState(learnedState);
 
     const v2 = contentPackage("v2", "Updated system core");
     v2.phrases = v2.phrases.slice(0, 1);
     await repo.installSystemContentPackage(v2);
     await repo.installSystemContentPackage(v2);
     expect(await repo.getPhrase("sys-core")).toMatchObject({ english: "Updated system core", contentVersion: "v2" });
+    expect(await repo.getPhraseLearningState("sys-core")).toEqual(learnedState);
     expect((await repo.getPhrase("sys-example"))?.retiredAt).toBeDefined();
 
     await repo.rollbackSystemContentPackage("v1");

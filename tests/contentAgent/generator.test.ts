@@ -22,4 +22,30 @@ describe("offline content agent", () => {
       expect([2, 3]).toContain(orders.length);
     }
   });
+
+  it("varies business and supply-chain sentence shapes and translates their full context", () => {
+    const content = generateSystemContent();
+    const packaging = content.phrases.filter(({ subcategory, kind }) => subcategory === "packaging review" && kind === "core");
+    const pricing = content.phrases.filter(({ subcategory, kind }) => subcategory === "pricing" && kind === "core");
+
+    expect(packaging).toHaveLength(8);
+    expect(packaging.filter(({ english }) => english.startsWith("For packaging review,"))).toHaveLength(2);
+    expect(packaging.every(({ chinese }) => chinese.includes("包装审核"))).toBe(true);
+    expect(pricing.every(({ chinese }) => chinese.includes("价格协商"))).toBe(true);
+  });
+
+  it("rejects a mechanically repeated family with untranslated context", () => {
+    const content = generateSystemContent();
+    const broken = {
+      ...content,
+      phrases: content.phrases.map((phrase, index) => phrase.subcategory === "packaging review" && phrase.kind === "core"
+        ? { ...phrase, english: `For packaging review, we need to inspect item ${index}.`, chinese: `我想检查项目${index}。` }
+        : phrase),
+    };
+
+    expect(inspectSystemContent(broken).errors).toEqual(expect.arrayContaining([
+      expect.stringContaining("repeated family opening: packaging review"),
+      expect.stringContaining("missing translated context: packaging review"),
+    ]));
+  });
 });

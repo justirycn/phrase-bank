@@ -4,6 +4,20 @@ import { CloudPhraseRepository } from "../../app/storage/cloudRepository";
 import { createNewPhrase } from "../../app/domain/review";
 import { countNewPhrasesOnShanghaiDay } from "../../app/domain/dailyTask";
 import type { LearningSessionRecord } from "../../app/domain/types";
+import { generateSystemContent } from "../../scripts/content-agent/generator";
+
+async function decodeUpload(init?: RequestInit) {
+  const encoding = new Headers(init?.headers).get("content-encoding");
+  const body = new Response(init?.body).body;
+  const decoded = encoding === "gzip" && body
+    ? body.pipeThrough(new DecompressionStream("gzip"))
+    : body;
+  return {
+    encoding,
+    bytes: (await new Response(init?.body).arrayBuffer()).byteLength,
+    json: await new Response(decoded).json() as { snapshot: unknown },
+  };
+}
 
 describe("CloudPhraseRepository", () => {
   it("invokes the browser fetch function with the global context", async () => {
@@ -27,11 +41,33 @@ describe("CloudPhraseRepository", () => {
     expect(fetcher).toHaveBeenCalledWith("/api/repository", expect.objectContaining({ method: "PUT" }));
   });
 
+  it("compresses a full system-content snapshot before uploading it", async () => {
+    let upload: Awaited<ReturnType<typeof decodeUpload>> | undefined;
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        upload = await decodeUpload(init);
+        return Response.json({ ok: true });
+      }
+      return Response.json({ snapshot: null });
+    });
+    const repo = new CloudPhraseRepository(fetcher);
+    await repo.initialize();
+
+    await repo.installSystemContentPackage(generateSystemContent());
+
+    expect(upload?.encoding).toBe("gzip");
+    expect(upload?.bytes).toBeLessThan(100_000);
+    expect(upload?.json.snapshot).toMatchObject({
+      format: "personal-phrase-bank",
+      phrases: expect.arrayContaining([expect.objectContaining({ id: "sys-supply-chain-02-1-2" })]),
+    });
+  });
+
   it("uploads daily mastery preference changes", async () => {
     const uploads: unknown[] = [];
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method === "PUT") {
-        uploads.push(JSON.parse(String(init.body)));
+        uploads.push((await decodeUpload(init)).json);
         return Response.json({ ok: true });
       }
       return Response.json({ snapshot: null });
@@ -86,7 +122,7 @@ describe("CloudPhraseRepository", () => {
     };
     const repo = new CloudPhraseRepository(async (_input, init) => {
       if (init?.method === "PUT") {
-        uploads.push(JSON.parse(String(init.body)));
+        uploads.push((await decodeUpload(init)).json);
         return Response.json({ ok: true });
       }
       return Response.json({ snapshot });
@@ -139,7 +175,7 @@ describe("CloudPhraseRepository", () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.method !== "PUT") return Response.json({ snapshot: null });
       if (failNextUpload) { failNextUpload = false; return Response.json({}, { status: 503 }); }
-      uploads.push(JSON.parse(String(init.body)));
+      uploads.push((await decodeUpload(init)).json);
       return Response.json({ ok: true });
     });
     const repo = new CloudPhraseRepository(fetcher);

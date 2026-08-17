@@ -12,5 +12,22 @@ describe("repository route", () => {
     expect((await PUT(new Request("https://x/api/repository", { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ snapshot }) }))).status).toBe(200);
     expect(await (await GET(new Request("https://x/api/repository", { headers: { cookie } }))).json()).toEqual({ snapshot });
   });
+
+  it("accepts a gzip-compressed cloud snapshot", async () => {
+    const snapshot = { format: "personal-phrase-bank", version: 5, phrases: [{ id: "compressed" }] };
+    const encoded = new TextEncoder().encode(JSON.stringify({ snapshot }));
+    const compressed = await new Response(
+      new Blob([encoded]).stream().pipeThrough(new CompressionStream("gzip")),
+    ).arrayBuffer();
+
+    const response = await PUT(new Request("https://x/api/repository", {
+      method: "PUT",
+      headers: { cookie, "content-type": "application/json", "content-encoding": "gzip" },
+      body: compressed,
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await (await GET(new Request("https://x/api/repository", { headers: { cookie } }))).json()).toEqual({ snapshot });
+  });
 });
 // @vitest-environment node

@@ -43,6 +43,11 @@ function unique(phrases: Phrase[]): Phrase[] {
   return [...new Map(phrases.map((phrase) => [phrase.id, phrase])).values()];
 }
 
+function spreadSubcategories(phrases: Phrase[]): Phrase[] {
+  const representatives = new Map(phrases.map((phrase) => [phrase.subcategory?.trim() || phrase.id, phrase]));
+  return unique([...representatives.values(), ...phrases]);
+}
+
 export function selectLearningGroup(
   phrases: Phrase[],
   states: PhraseLearningState[],
@@ -61,14 +66,14 @@ export function selectLearningGroup(
   const personal = eligible
     .filter(isPersonal)
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
-  const themed = stableOrder(
+  const themed = spreadSubcategories(stableOrder(
     eligible.filter((phrase) => !isPersonal(phrase) && phrase.categoryId === options.themeCategoryId),
     options.date,
-  );
-  const fallback = stableOrder(
+  ));
+  const fallback = spreadSubcategories(stableOrder(
     eligible.filter((phrase) => !isPersonal(phrase) && phrase.categoryId !== options.themeCategoryId),
     options.date,
-  );
+  ));
   return unique([...personal, ...themed, ...fallback]).slice(0, Math.max(0, options.target));
 }
 
