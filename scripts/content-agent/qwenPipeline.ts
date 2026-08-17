@@ -32,14 +32,14 @@ const TOTAL_REQUESTS = CATEGORY_QUOTAS.reduce((total, [, quota]) => total + Math
 function generationMessages(category: string, coreCount: number, exampleCount: number, chunkIndex: number, chunkCount: number, source: BatchResponse, options: PipelineOptions): QwenMessage[] {
   return [
     { role: "system", content: "你是英语口语课程内容设计师。只返回 JSON，不要 Markdown。内容必须自然、实用、准确，适合中国成年学习者。" },
-    { role: "user", content: `优化 ${category} 类别第 ${chunkIndex + 1}/${chunkCount} 批：精确 ${coreCount} 个核心语言块，每个核心恰好 ${exampleCount} 个案例。只改写英文和中文以提升自然度与准确性；必须逐条保留输入中的 id、父子关系、顺序、类别、意图和 CEFR，批次之间不得重复。使用版本 ${options.version} 和质检版本 ${options.qualityVersion}。返回 '{"phrases":[...]}'。输入模板：${JSON.stringify(source)}` },
+    { role: "user", content: `优化 ${category} 类别第 ${chunkIndex + 1}/${chunkCount} 批：精确 ${coreCount} 个核心语言块，每个核心恰好 ${exampleCount} 个案例。只允许修改 english 和 chinese；其他所有字段必须与输入模板完全一致，包括 id、origin、kind、categoryId、subcategory、cefrLevel、intent、parentPhraseId、unlockOrder、contentVersion 和 qualityVersion。英文必须是自然、多样的口语表达；不得整批使用同一种开头或机械重复模式。中文必须完整翻译子场景，包括英文中的引导上下文，并与英文含义完整对应。批次之间不得重复。使用版本 ${options.version} 和质检版本 ${options.qualityVersion}。返回 '{"phrases":[...]}'。输入模板：${JSON.stringify(source)}` },
   ];
 }
 
-function reviewMessages(category: string, coreCount: number, batch: BatchResponse): QwenMessage[] {
+function reviewMessages(category: string, coreCount: number, batch: BatchResponse, options: PipelineOptions): QwenMessage[] {
   return [
-    { role: "system", content: "你是独立审校员，不继承生成上下文。检查口语自然度、中英文一致性、实用性、重复、冒犯或危险内容。只返回 JSON。" },
-    { role: "user", content: `逐条独立审校 ${category} 批次中的全部内容（共 ${coreCount} 个核心及其案例）。不要复述整批；只返回需要修改的条目。若修正后整批可发布，返回 '{"status":"pass","issues":[],"corrections":[{"id":"原ID","english":"修正后的英文","chinese":"修正后的中文"}]}'；无法安全修正才返回 fail。corrections 可为空，ID 必须来自输入。输入：${JSON.stringify(batch)}` },
+    { role: "system", content: "你是独立审校员，不继承生成上下文。检查双语完整性、完整翻译子场景、自然口语、实用性、机械重复的表达模式或句首开头、冒犯或危险内容。只返回 JSON。" },
+    { role: "user", content: `逐条独立审校 ${category} 批次中的全部内容（共 ${coreCount} 个核心及其案例）。中文必须完整翻译子场景，包括英文中的引导上下文；检查中英文含义是否完整对应，并识别机械重复模式或整批同一种开头。只可修正 english 和 chinese，版本必须是 ${options.version}，质检版本必须是 ${options.qualityVersion}。不要复述整批；只返回需要修改的条目。若修正后整批可发布，返回 '{"status":"pass","issues":[],"corrections":[{"id":"原ID","english":"修正后的英文","chinese":"修正后的中文"}]}'；无法安全修正才返回 fail。corrections 可为空，ID 必须来自输入。输入：${JSON.stringify(batch)}` },
   ];
 }
 
@@ -62,6 +62,11 @@ function applyReview(category: string, generated: BatchResponse, review: ReviewR
   }) };
 }
 
+function stableMetadata(phrase: SystemContentPhrase) {
+  const metadata = Object.fromEntries(Object.entries(phrase).filter(([key]) => key !== "english" && key !== "chinese"));
+  return JSON.stringify(Object.fromEntries(Object.entries(metadata).sort(([left], [right]) => left.localeCompare(right))));
+}
+
 function assertBatch(category: string, coreCount: number, batch: BatchResponse, source?: BatchResponse) {
   if (!batch || !Array.isArray(batch.phrases)) throw new Error(`${category} 批次格式无效`);
   if (batch.phrases.some((phrase) => phrase.categoryId !== category)) throw new Error(`${category} 批次包含错误类别`);
@@ -71,6 +76,11 @@ function assertBatch(category: string, coreCount: number, batch: BatchResponse, 
     const expectedIds = source.phrases.map(({ id }) => id).sort();
     const actualIds = batch.phrases.map(({ id }) => id).sort();
     if (JSON.stringify(actualIds) !== JSON.stringify(expectedIds)) throw new Error(`${category} 批次 ID 与输入模板不一致`);
+    const expectedById = new Map(source.phrases.map((phrase) => [phrase.id, phrase]));
+    for (const actualPhrase of batch.phrases) {
+      const expectedPhrase = expectedById.get(actualPhrase.id);
+      if (stableMetadata(actualPhrase) !== stableMetadata(expectedPhrase!)) throw new Error(`${category} 批次元数据与输入模板不一致`);
+    }
   }
 }
 
@@ -93,7 +103,7 @@ async function reviewValidBatch(options: PipelineOptions, category: string, core
   for (let attempt = 1; attempt <= MAX_VALIDATION_ATTEMPTS; attempt += 1) {
     let response: ReviewResponse;
     try {
-      response = parseJson<ReviewResponse>(await options.client.complete(reviewMessages(category, coreCount, generated)));
+      response = parseJson<ReviewResponse>(await options.client.complete(reviewMessages(category, coreCount, generated, options)));
     } catch (error) {
       lastError = error;
       continue;
@@ -113,8 +123,19 @@ export async function buildQwenCandidate(options: PipelineOptions): Promise<Syst
   const resumedById = new Map((options.resumePhrases ?? []).map((phrase) => [phrase.id, phrase]));
   let completedRequests = 0;
   const sourceContent = options.sourceContent ?? generateSystemContent();
+  const targetSource: SystemContentPackage = {
+    ...sourceContent,
+    version: options.version,
+    generatedAt: options.generatedAt,
+    qualityVersion: options.qualityVersion,
+    phrases: sourceContent.phrases.map((phrase) => ({
+      ...phrase,
+      contentVersion: options.version,
+      qualityVersion: options.qualityVersion,
+    })),
+  };
   for (const [category, coreQuota] of CATEGORY_QUOTAS) {
-    const sourcePhrases = sourceContent.phrases.filter((phrase) => phrase.categoryId === category);
+    const sourcePhrases = targetSource.phrases.filter((phrase) => phrase.categoryId === category);
     const sourceCores = sourcePhrases.filter(({ kind }) => kind === "core");
     if (sourceCores.length !== coreQuota) throw new Error(`${category} 输入模板配额错误`);
     const chunkCount = Math.ceil(sourceCores.length / MAX_CORES_PER_REQUEST);
