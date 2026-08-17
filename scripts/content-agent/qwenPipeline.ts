@@ -87,8 +87,9 @@ function assertBatch(category: string, coreCount: number, batch: BatchResponse, 
 async function generateValidBatch(options: PipelineOptions, category: string, coreCount: number, exampleCount: number, chunkIndex: number, chunkCount: number, source: BatchResponse) {
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_VALIDATION_ATTEMPTS; attempt += 1) {
+    const response = await options.client.complete(generationMessages(category, coreCount, exampleCount, chunkIndex, chunkCount, source, options));
     try {
-      const generated = parseJson<BatchResponse>(await options.client.complete(generationMessages(category, coreCount, exampleCount, chunkIndex, chunkCount, source, options)));
+      const generated = parseJson<BatchResponse>(response);
       assertBatch(category, coreCount, generated, source);
       return generated;
     } catch (error) {
@@ -102,13 +103,14 @@ async function reviewValidBatch(options: PipelineOptions, category: string, core
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_VALIDATION_ATTEMPTS; attempt += 1) {
     let response: ReviewResponse;
+    const review = await options.client.complete(reviewMessages(category, coreCount, generated, options));
     try {
-      response = parseJson<ReviewResponse>(await options.client.complete(reviewMessages(category, coreCount, generated, options)));
+      response = parseJson<ReviewResponse>(review);
     } catch (error) {
       lastError = error;
       continue;
     }
-    if (response.status !== "pass") throw new Error(`${category} 审校未通过`);
+    if (response.status === "fail") throw new Error(`${category} 审校未通过`);
     try {
       return applyReview(category, generated, response);
     } catch (error) {

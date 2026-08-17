@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { generateSystemContent } from "../../scripts/content-agent/generator";
 import { buildQwenCandidate, runQwenAgent } from "../../scripts/content-agent/qwenPipeline";
-import type { QwenClient } from "../../scripts/content-agent/qwenClient";
+import { createQwenClient, type QwenClient } from "../../scripts/content-agent/qwenClient";
 
 const categories = ["daily", "travel", "work", "business", "supply-chain", "social"] as const;
 const quotas = { daily: 180, travel: 100, work: 120, business: 100, "supply-chain": 70, social: 30 };
@@ -71,6 +71,30 @@ describe("Qwen content pipeline", () => {
     await expect(buildQwenCandidate({ client: fakeClient(fenced), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).resolves.toMatchObject({ version: "2026.08.3" });
 
     await expect(buildQwenCandidate({ client: fakeClient(responseQueue("2026.08.3", "fail")), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).rejects.toThrow("审校未通过");
+  });
+
+  it("does not retry a Qwen authentication error in the content pipeline", async () => {
+    const fetcher = vi.fn(async () => new Response("unauthorized", { status: 401 }));
+    const client = createQwenClient({ apiKey: "test-secret", baseUrl: "https://example.invalid/v1", model: "qwen-plus", fetcher, maxAttempts: 3 });
+
+    await expect(buildQwenCandidate({ client, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).rejects.toThrow("认证失败");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a malformed review status as a validation failure", async () => {
+    const outputs = responseQueue("2026.08.3");
+    outputs.splice(1, 0, JSON.stringify({ status: "unknown", issues: [], corrections: [] }));
+    const client = fakeClient(outputs);
+
+    await expect(buildQwenCandidate({ client, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).resolves.toMatchObject({ version: "2026.08.3" });
+    expect(client.complete).toHaveBeenCalledTimes(121);
+  });
+
+  it("stops after one explicit review failure", async () => {
+    const client = fakeClient(responseQueue("2026.08.3", "fail"));
+
+    await expect(buildQwenCandidate({ client, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).rejects.toThrow("审校未通过");
+    expect(client.complete).toHaveBeenCalledTimes(2);
   });
 
   it("writes candidate and passing report only after the complete pipeline succeeds", async () => {
