@@ -6,11 +6,13 @@
 
 日常更新请优先使用 GitHub 的一键流程：进入仓库的 **Actions**，选择 **Generate and deploy Qwen content**，点击 **Run workflow**。当前自动流程固定发布版本 `2026.08.3`；需要下一个版本时，先在仓库中更新该工作流的版本号，再运行它。
 
-Qwen 的 Key 只保存在腾讯云服务器的 `/etc/phrase-bank/qwen-content.env`，权限必须是 `600`。GitHub Actions 只使用服务器连接所需的 `TENCENT_HOST`、`TENCENT_SSH_KEY` 和 `TENCENT_USER`，不会读取、输出或复制 Qwen Key。
+Qwen 的 Key 只保存在腾讯云服务器的 `/etc/phrase-bank/qwen-content.env`，由运行 SSH 的同一用户拥有，权限必须是 `600`。GitHub Actions 只使用服务器连接所需的 `TENCENT_HOST`、`TENCENT_SSH_KEY` 和 `TENCENT_USER`，不会读取、输出或复制 Qwen Key。
+
+当前 SSH 设置会使用 `ssh-keyscan` 获取主机指纹；这属于首次信任（TOFU），并不是带外验证的主机密钥固定。`StrictHostKeyChecking=yes` 会校验本次取得的 `known_hosts`，但首次指纹仍应通过腾讯云控制台或其他可信渠道核对。
 
 工作流会在服务器生成候选内容并进行独立审校，再把候选与审校报告取回，在 GitHub 上执行发布、聚焦测试、完整测试、lint、构建和 Git 差异检查。任一生成、审校或质量门失败都会停止，绝不会发布新句库或创建提交。
 
-成功后，工作流只提交版本化句库和版本引用到 `main`；现有的 `Test and deploy` 工作流会因这个提交自动部署。可在 Actions 页面依次查看 Qwen 生成任务和随后触发的部署任务；两者都成功后，再打开网页确认“系统句库”已安装新版本。
+成功后，工作流只提交版本化句库和版本引用到 `main`，随后明确触发 `Test and deploy` 工作流部署。不要依赖机器人 `GITHUB_TOKEN` 推送自动触发 `push` 工作流。可在 Actions 页面依次查看 Qwen 生成任务和随后明确触发的部署任务；两者都成功后，再打开网页确认“系统句库”已安装新版本。
 
 以下保留的手动步骤仅用于恢复或排查自动流程，而不是日常发布方式。
 
@@ -25,7 +27,9 @@ Qwen 的 Key 只保存在腾讯云服务器的 `/etc/phrase-bank/qwen-content.en
 通过腾讯云网页终端登录服务器，然后打开一个只允许管理员读取的配置文件：
 
 ```bash
-sudo install -m 600 /dev/null /etc/phrase-bank/qwen-content.env
+SSH_USER="$(id -un)"
+SSH_GROUP="$(id -gn)"
+sudo install -o "$SSH_USER" -g "$SSH_GROUP" -m 600 /dev/null /etc/phrase-bank/qwen-content.env
 sudo nano /etc/phrase-bank/qwen-content.env
 ```
 
@@ -40,6 +44,7 @@ DASHSCOPE_MODEL=qwen-plus
 如果百炼控制台给出带工作空间 ID 的专属地址，应使用控制台地址替换第二行。再次限制文件权限：
 
 ```bash
+sudo chown "$SSH_USER:$SSH_GROUP" /etc/phrase-bank/qwen-content.env
 sudo chmod 600 /etc/phrase-bank/qwen-content.env
 ```
 
@@ -50,13 +55,18 @@ sudo chmod 600 /etc/phrase-bank/qwen-content.env
 进入服务器上的 Phrase Bank 项目目录，先确认代码是最新版本。以下示例把版本写成 `2026.08.3`；以后每次必须使用新的版本号。
 
 ```bash
-git pull --ff-only github main
+git pull --ff-only origin main
+docker run --rm \
+  -v "$PWD:/workspace" \
+  -w /workspace \
+  node:22-bookworm-slim \
+  sh -lc 'npm ci'
 docker run --rm \
   --env-file /etc/phrase-bank/qwen-content.env \
   -v "$PWD:/workspace" \
   -w /workspace \
   node:22-bookworm-slim \
-  sh -lc 'npm ci && npm run content:qwen -- --version 2026.08.3'
+  sh -lc 'npm run content:qwen -- --version 2026.08.3'
 ```
 
 Agent 将 600 个核心拆成最多 10 个核心的小批次，预计执行 60 次生成和 60 次独立审校，共 120 个逻辑请求，并持续显示进度。网络限流时每个请求最多尝试 3 次，因此硬上限是 360 次 HTTP 尝试。任何一批失败都会停止，且不会改变线上句库。

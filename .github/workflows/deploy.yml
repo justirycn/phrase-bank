@@ -44,6 +44,8 @@ jobs:
         run: |
           ssh -i ~/.ssh/tencent_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST" 'bash -se' <<'REMOTE'
           set -euo pipefail
+          exec 9>/opt/phrase-bank.operation.lock
+          flock 9
           if [ ! -d /opt/phrase-bank/.git ]; then
             git clone https://github.com/justirycn/phrase-bank.git /opt/phrase-bank
           fi

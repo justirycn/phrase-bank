@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const workflow = () => readFileSync(resolve(process.cwd(), ".github/workflows/qwen-content-release.yml"), "utf8");
+const deployWorkflow = () => readFileSync(resolve(process.cwd(), ".github/workflows/deploy.yml"), "utf8");
+const runbook = () => readFileSync(resolve(process.cwd(), "docs/runbooks/qwen-content-update.md"), "utf8");
 const normalizeContinuations = (source: string) => source.replace(/\\[ \t]*\r?\n[ \t]*/g, " ");
 const logicalCommands = (source: string) => normalizeContinuations(source)
   .split(/\r?\n/)
@@ -18,6 +20,12 @@ const commandLine = (source: string, command: string) => {
   const match = source.match(new RegExp(`^[ \\t]*(?:-[ \\t]+)?(?:run:[ \\t]*)?${escaped}[ \\t]*$`, "m"));
   expect(match, `expected workflow command: ${command}`).not.toBeNull();
   return match?.index ?? -1;
+};
+const lastCommandLine = (source: string, command: string) => {
+  const escaped = command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const matches = [...source.matchAll(new RegExp(`^[ \\t]*(?:-[ \\t]+)?(?:run:[ \\t]*)?${escaped}[ \\t]*$`, "gm"))];
+  expect(matches, `expected workflow command: ${command}`).not.toHaveLength(0);
+  return matches.at(-1)?.index ?? -1;
 };
 const patternPosition = (source: string, pattern: RegExp, description: string) => {
   const match = pattern.exec(source);
@@ -40,9 +48,8 @@ describe("Qwen content release workflow", () => {
     const secretExpressions = [...source.matchAll(/\$\{\{([\s\S]*?)\}\}/g)].map((match) => match[1]).filter((expression) => /\bsecrets\b/.test(expression));
     const allowedSecrets = ["TENCENT_HOST", "TENCENT_SSH_KEY", "TENCENT_USER"];
     const secretNames = secretExpressions.flatMap((expression) => [...expression.matchAll(/\bsecrets\.([A-Za-z0-9_]+)\b/g)].map((match) => match[1]));
-    expect(secretExpressions).toHaveLength(3);
     expect(secretExpressions.every((expression) => /^\s*secrets\.(?:TENCENT_HOST|TENCENT_SSH_KEY|TENCENT_USER)\s*$/.test(expression))).toBe(true);
-    expect(secretNames.sort()).toEqual(allowedSecrets);
+    expect([...new Set(secretNames)].sort()).toEqual(allowedSecrets);
 
     const normalized = normalizeContinuations(source);
     const scpCommands = logicalCommands(normalized).filter((command) => /^scp(?:\s|$)/.test(command));
@@ -83,7 +90,7 @@ describe("Qwen content release workflow", () => {
       commandLine(normalized, "npm run lint"),
       commandLine(normalized, "npm run build"),
       commandLine(normalized, "git diff --check"),
-      commandLine(normalized, "git fetch origin main"),
+      lastCommandLine(normalized, "git fetch origin main"),
       patternPosition(normalized, /test\s+"\$\(git rev-parse HEAD\)"\s*=\s*"\$\(git rev-parse origin\/main\)"\s*\|\|\s*\{\s*echo\s+"main advanced during Qwen generation";\s*exit\s+1;\s*\}/, "main drift guard"),
       commandLine(normalized, 'git add "public/content/system-content-$CONTENT_VERSION.json" app/domain/bundledSystemContent.ts'),
       commandLine(normalized, "git diff --cached --check"),
@@ -103,7 +110,49 @@ describe("Qwen content release workflow", () => {
     const source = workflow();
     expect(source).toContain("stat -c '%a' /etc/phrase-bank/qwen-content.env");
     expect(source).toContain('test "$env_mode" = "600"');
+    expect(source).toContain('test -r /etc/phrase-bank/qwen-content.env');
+    expect(source).toContain('test "$(stat -c \'%U\' /etc/phrase-bank/qwen-content.env)" = "$(id -un)"');
     expect(source).toContain('test -z "$(git status --porcelain --untracked-files=no)"');
     expect(source).toContain('test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || { echo "main advanced during Qwen generation"; exit 1; }');
+  });
+
+  it("preflights duplicate content, contains SSH credentials, and dispatches deployment explicitly", () => {
+    const source = workflow();
+    const normalized = normalizeContinuations(source);
+    const pushPosition = commandLine(normalized, "git push origin HEAD:main");
+    const dispatchPosition = commandLine(normalized, "gh workflow run deploy.yml --ref main");
+    const duplicateGuard = 'test ! -e "public/content/system-content-$CONTENT_VERSION.json" || { echo "Qwen content version $CONTENT_VERSION is already published"; exit 1; }';
+    const dependencyInstall = 'docker run --rm -v "$PWD:/workspace" -w /workspace node:22-bookworm-slim sh -lc "npm ci"';
+    const qwenGeneration = 'docker run --rm --env-file /etc/phrase-bank/qwen-content.env -v "$PWD:/workspace" -w /workspace node:22-bookworm-slim sh -lc "npm run content:qwen -- --version \'$CONTENT_VERSION\'"';
+
+    expect(source).toContain("actions: write");
+    expect(source).toContain("GH_TOKEN: ${{ github.token }}");
+    expect(pushPosition).toBeLessThan(dispatchPosition);
+    expect(source).not.toMatch(/^\s{4}env:\r?\n(?:\s{6}.*\r?\n)*\s{6}TENCENT_/m);
+    expect(source).toMatch(/name: Remove SSH key\r?\n\s+if: always\(\)\r?\n\s+run: rm -f ~\/\.ssh\/tencent_qwen/);
+    const qualityGates = source.slice(source.indexOf("npm run content:publish"), source.indexOf("git push origin HEAD:main"));
+    expect(qualityGates).not.toContain("TENCENT_");
+    expect(qualityGates).not.toContain("tencent_qwen");
+
+    const runnerFetch = commandLine(normalized, "git fetch origin main");
+    const runnerCheckout = commandLine(normalized, "git checkout --detach origin/main");
+    const duplicatePosition = commandLine(normalized, duplicateGuard);
+    const installPosition = patternPosition(normalized, /docker run --rm -v "\$PWD:\/workspace" -w \/workspace node:22-bookworm-slim sh -lc "npm ci"/, "dependency install without Qwen credentials");
+    const qwenPosition = patternPosition(normalized, /docker run --rm --env-file \/etc\/phrase-bank\/qwen-content\.env -v "\$PWD:\/workspace" -w \/workspace node:22-bookworm-slim sh -lc "npm run content:qwen -- --version '\$CONTENT_VERSION'"/, "Qwen generation with server credentials");
+    expect(source).toContain(dependencyInstall);
+    expect(source).toContain(qwenGeneration);
+    expect(runnerFetch).toBeLessThan(runnerCheckout);
+    expect(runnerCheckout).toBeLessThan(duplicatePosition);
+    expect(duplicatePosition).toBeLessThan(installPosition);
+    expect(installPosition).toBeLessThan(qwenPosition);
+
+    const lockPath = "/opt/phrase-bank.operation.lock";
+    for (const remoteSource of [source, deployWorkflow()]) {
+      expect(remoteSource).toMatch(new RegExp(`exec 9>${lockPath.replace(/[-/\\.^$*+?()[\]{}|]/g, "\\$&")}\\r?\\n\\s+flock 9`));
+    }
+    expect(source.indexOf("exec 9>/opt/phrase-bank.operation.lock")).toBeLessThan(source.indexOf("cd /opt/phrase-bank"));
+    expect(deployWorkflow().indexOf("exec 9>/opt/phrase-bank.operation.lock")).toBeLessThan(deployWorkflow().indexOf("git clone"));
+    expect(runbook()).toContain('sudo chown "$SSH_USER:$SSH_GROUP" /etc/phrase-bank/qwen-content.env');
+    expect(runbook()).toContain("明确触发");
   });
 });
