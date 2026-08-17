@@ -49,7 +49,7 @@ jobs:
         run: |
           ssh -i ~/.ssh/tencent_qwen -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST" "CONTENT_VERSION='$CONTENT_VERSION' bash -se" <<'REMOTE'
           set -euo pipefail
-          exec 9>/opt/phrase-bank.operation.lock
+          exec 9>$HOME/.phrase-bank-operation.lock
           flock 9
           cd /opt/phrase-bank
           test -f /etc/phrase-bank/qwen-content.env

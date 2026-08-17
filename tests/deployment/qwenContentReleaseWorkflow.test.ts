@@ -146,12 +146,13 @@ describe("Qwen content release workflow", () => {
     expect(duplicatePosition).toBeLessThan(installPosition);
     expect(installPosition).toBeLessThan(qwenPosition);
 
-    const lockPath = "/opt/phrase-bank.operation.lock";
+    const lockPath = "$HOME/.phrase-bank-operation.lock";
     for (const remoteSource of [source, deployWorkflow()]) {
       expect(remoteSource).toMatch(new RegExp(`exec 9>${lockPath.replace(/[-/\\.^$*+?()[\]{}|]/g, "\\$&")}\\r?\\n\\s+flock 9`));
+      expect(remoteSource).not.toContain("/opt/phrase-bank.operation.lock");
     }
-    expect(source.indexOf("exec 9>/opt/phrase-bank.operation.lock")).toBeLessThan(source.indexOf("cd /opt/phrase-bank"));
-    expect(deployWorkflow().indexOf("exec 9>/opt/phrase-bank.operation.lock")).toBeLessThan(deployWorkflow().indexOf("git clone"));
+    expect(source.indexOf("exec 9>$HOME/.phrase-bank-operation.lock")).toBeLessThan(source.indexOf("cd /opt/phrase-bank"));
+    expect(deployWorkflow().indexOf("exec 9>$HOME/.phrase-bank-operation.lock")).toBeLessThan(deployWorkflow().indexOf("git clone"));
     expect(runbook()).toContain('sudo chown "$SSH_USER:$SSH_GROUP" /etc/phrase-bank/qwen-content.env');
     expect(runbook()).toContain("明确触发");
   });
