@@ -4,6 +4,11 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const workflow = () => readFileSync(resolve(process.cwd(), ".github/workflows/qwen-content-release.yml"), "utf8");
+const normalizeContinuations = (source: string) => source.replace(/\\[ \t]*\r?\n[ \t]*/g, " ");
+const logicalCommands = (source: string) => normalizeContinuations(source)
+  .split(/\r?\n/)
+  .map((line) => line.trim().replace(/^(?:-\s*)?run:\s*(?:\|\s*)?/, "").trim())
+  .filter((line) => line.length > 0 && line !== "|" && !line.startsWith("#"));
 const commandLine = (source: string, command: string) => {
   const escaped = command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = source.match(new RegExp(`^[ \\t]*(?:-[ \\t]+)?(?:run:[ \\t]*)?${escaped}[ \\t]*$`, "m"));
@@ -28,47 +33,60 @@ describe("Qwen content release workflow", () => {
     expect(source).not.toContain("secrets.DASHSCOPE");
     expect(source).not.toContain("DASHSCOPE_API_KEY=");
 
-    const secretNames = [...source.matchAll(/\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}/g)].map((match) => match[1]);
-    expect(secretNames).toHaveLength(3);
-    expect([...new Set(secretNames)].sort()).toEqual(["TENCENT_HOST", "TENCENT_SSH_KEY", "TENCENT_USER"]);
+    const secretExpressions = [...source.matchAll(/\$\{\{([\s\S]*?)\}\}/g)].map((match) => match[1]).filter((expression) => /\bsecrets\b/.test(expression));
+    const allowedSecrets = ["TENCENT_HOST", "TENCENT_SSH_KEY", "TENCENT_USER"];
+    const secretNames = secretExpressions.flatMap((expression) => [...expression.matchAll(/\bsecrets\.([A-Za-z0-9_]+)\b/g)].map((match) => match[1]));
+    expect(secretExpressions).toHaveLength(3);
+    expect(secretExpressions.every((expression) => /^\s*secrets\.(?:TENCENT_HOST|TENCENT_SSH_KEY|TENCENT_USER)\s*$/.test(expression))).toBe(true);
+    expect(secretNames.sort()).toEqual(allowedSecrets);
 
-    const remoteArtifacts = [...source.matchAll(/\bscp\b[^\r\n]*:(\/opt\/phrase-bank\/\.content-agent\/(?:candidate|report)-\$CONTENT_VERSION\.json)/g)];
-    expect(remoteArtifacts).toHaveLength(2);
-    expect(remoteArtifacts.map((match) => match[1]).sort()).toEqual([
+    const normalized = normalizeContinuations(source);
+    const scpCommands = logicalCommands(normalized).filter((command) => /^scp(?:\s|$)/.test(command));
+    expect(scpCommands).toHaveLength(2);
+    const remoteSourcePaths = scpCommands.flatMap((command) => {
+      const paths = [...command.matchAll(/:(\/opt\/phrase-bank\/\.content-agent\/(?:candidate|report)-\$CONTENT_VERSION\.json)(?=["'\s]|$)/g)].map((match) => match[1]);
+      expect(paths).toHaveLength(1);
+      return paths;
+    });
+    expect(remoteSourcePaths.sort()).toEqual([
       "/opt/phrase-bank/.content-agent/candidate-$CONTENT_VERSION.json",
       "/opt/phrase-bank/.content-agent/report-$CONTENT_VERSION.json",
     ]);
-    expect(source).not.toMatch(/\bscp\b[^\r\n]*(?:\s-r(?:\s|$)|\s--recursive(?:\s|$))/);
-    expect(source).not.toMatch(/\b(?:scp|cp)\b[^\r\n]*(?:\/etc\/phrase-bank|qwen-content\.env)/);
+    expect(scpCommands.some((command) => /(?:^|\s)(?:--recursive|-[A-Za-z]*r[A-Za-z]*)(?=\s|$)/.test(command))).toBe(false);
+    expect(normalized).not.toMatch(/\b(?:scp|cp)\b[^\r\n]*(?:\/etc\/phrase-bank|qwen-content\.env)/);
   });
 
   it("validates before committing and never force-pushes", () => {
     const source = workflow();
+    const normalized = normalizeContinuations(source);
     const focusedTests = "npm test -- tests/contentAgent tests/deployment/qwenSecrets.test.ts tests/deployment/qwenContentReleaseWorkflow.test.ts";
     expect(source).toContain("candidate-$CONTENT_VERSION.json");
     expect(source).toContain("report-$CONTENT_VERSION.json");
     expect(source).toContain("npm run content:publish -- --version $CONTENT_VERSION");
     expect(source).toContain(focusedTests);
     expect(source).toContain('git add "public/content/system-content-$CONTENT_VERSION.json" app/domain/bundledSystemContent.ts');
+    const scpArtifactPositions = [...normalized.matchAll(/(?:^|\n)[ \t]*(?:-[ \t]+)?(?:run:[ \t]*)?scp\b[^\r\n]*:(\/opt\/phrase-bank\/\.content-agent\/(?:candidate|report)-\$CONTENT_VERSION\.json)/g)]
+      .map((match) => match.index ?? -1)
+      .sort((left, right) => left - right);
     const positions = [
-      patternPosition(source, /npm run content:qwen\s+--\s+--version\s+['"]?\$CONTENT_VERSION['"]?/, "remote Qwen generation"),
-      ...[...source.matchAll(/\bscp\b[^\r\n]*:(\/opt\/phrase-bank\/\.content-agent\/(?:candidate|report)-\$CONTENT_VERSION\.json)/g)]
-        .map((match) => match.index ?? -1)
-        .sort((left, right) => left - right),
-      commandLine(source, "npm run content:publish -- --version $CONTENT_VERSION"),
-      commandLine(source, focusedTests),
-      commandLine(source, "npm test"),
-      commandLine(source, "npm run lint"),
-      commandLine(source, "npm run build"),
-      commandLine(source, "git diff --check"),
-      commandLine(source, "git fetch origin main"),
-      patternPosition(source, /test\s+"\$\(git rev-parse HEAD\)"\s*=\s*"\$\(git rev-parse origin\/main\)"\s*\|\|\s*\{\s*echo\s+"main advanced during Qwen generation";\s*exit\s+1;\s*\}/, "main drift guard"),
-      commandLine(source, 'git add "public/content/system-content-$CONTENT_VERSION.json" app/domain/bundledSystemContent.ts'),
-      commandLine(source, "git diff --cached --check"),
-      commandLine(source, 'git commit -m "content: publish Qwen phrase library $CONTENT_VERSION"'),
-      commandLine(source, "git push origin HEAD:main"),
+      patternPosition(normalized, /npm run content:qwen\s+--\s+--version\s+['"]?\$CONTENT_VERSION['"]?/, "remote Qwen generation"),
+      ...scpArtifactPositions,
+      commandLine(normalized, "npm run content:publish -- --version $CONTENT_VERSION"),
+      commandLine(normalized, focusedTests),
+      commandLine(normalized, "npm test"),
+      commandLine(normalized, "npm run lint"),
+      commandLine(normalized, "npm run build"),
+      commandLine(normalized, "git diff --check"),
+      commandLine(normalized, "git fetch origin main"),
+      patternPosition(normalized, /test\s+"\$\(git rev-parse HEAD\)"\s*=\s*"\$\(git rev-parse origin\/main\)"\s*\|\|\s*\{\s*echo\s+"main advanced during Qwen generation";\s*exit\s+1;\s*\}/, "main drift guard"),
+      commandLine(normalized, 'git add "public/content/system-content-$CONTENT_VERSION.json" app/domain/bundledSystemContent.ts'),
+      commandLine(normalized, "git diff --cached --check"),
+      commandLine(normalized, 'git commit -m "content: publish Qwen phrase library $CONTENT_VERSION"'),
+      commandLine(normalized, "git push origin HEAD:main"),
     ];
     positions.slice(1).forEach((position, index) => expect(positions[index]).toBeLessThan(position));
+    const pushCommands = logicalCommands(normalized).filter((command) => /^git\s+push(?:\s|$)/.test(command));
+    expect(pushCommands).toEqual(["git push origin HEAD:main"]);
     expect(source).not.toContain("git push --force");
     expect(source).not.toMatch(/\bgit\s+push\b[^\r\n]*--force(?:-with-lease)?(?:\s|$)/);
     expect(source).not.toMatch(/\bgit\s+push\b[^\r\n]*\s-f(?:\s|$)/);
