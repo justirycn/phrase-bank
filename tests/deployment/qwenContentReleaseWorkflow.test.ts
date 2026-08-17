@@ -4,6 +4,12 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const workflow = () => readFileSync(resolve(process.cwd(), ".github/workflows/qwen-content-release.yml"), "utf8");
+const commandLine = (source: string, command: string) => {
+  const escaped = command.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = source.match(new RegExp(`^[ \\t]*(?:-[ \\t]+)?(?:run:[ \\t]*)?${escaped}[ \\t]*$`, "m"));
+  expect(match, `expected workflow command: ${command}`).not.toBeNull();
+  return match?.index ?? -1;
+};
 
 describe("Qwen content release workflow", () => {
   it("is manual, serialized, and reads Qwen credentials only on the server", () => {
@@ -20,15 +26,21 @@ describe("Qwen content release workflow", () => {
 
   it("validates before committing and never force-pushes", () => {
     const source = workflow();
+    const focusedTests = "npm test -- tests/contentAgent tests/deployment/qwenSecrets.test.ts tests/deployment/qwenContentReleaseWorkflow.test.ts";
     expect(source).toContain("candidate-$CONTENT_VERSION.json");
     expect(source).toContain("report-$CONTENT_VERSION.json");
     expect(source).toContain("npm run content:publish -- --version $CONTENT_VERSION");
-    expect(source).toContain("npm test");
-    expect(source).toContain("npm run lint");
-    expect(source).toContain("npm run build");
-    expect(source).toContain("git diff --cached --check");
-    expect(source).toContain("git push origin HEAD:main");
-    expect(source.indexOf("npm test")).toBeLessThan(source.indexOf("git push origin HEAD:main"));
+    expect(source).toContain(focusedTests);
+    const positions = [
+      commandLine(source, "npm run content:publish -- --version $CONTENT_VERSION"),
+      commandLine(source, focusedTests),
+      commandLine(source, "npm test"),
+      commandLine(source, "npm run lint"),
+      commandLine(source, "npm run build"),
+      commandLine(source, "git diff --cached --check"),
+      commandLine(source, "git push origin HEAD:main"),
+    ];
+    positions.slice(1).forEach((position, index) => expect(positions[index]).toBeLessThan(position));
     expect(source).not.toContain("git push --force");
   });
 
@@ -36,8 +48,7 @@ describe("Qwen content release workflow", () => {
     const source = workflow();
     expect(source).toContain("stat -c '%a' /etc/phrase-bank/qwen-content.env");
     expect(source).toContain('test "$env_mode" = "600"');
-    expect(source).toContain("git status --porcelain --untracked-files=no");
-    expect(source).toContain("git rev-parse origin/main");
-    expect(source).toContain("main advanced during Qwen generation");
+    expect(source).toContain('test -z "$(git status --porcelain --untracked-files=no)"');
+    expect(source).toContain('test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" || { echo "main advanced during Qwen generation"; exit 1; }');
   });
 });
