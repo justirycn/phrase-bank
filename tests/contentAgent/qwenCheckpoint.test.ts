@@ -121,6 +121,30 @@ describe("Qwen checkpoint import", () => {
     await expect(readdir(join(destinationRoot, "invalid"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("cleans a stale pending file on failure so a safe retry can import without changing the source", async () => {
+    const { sourceContent, phrases } = fixture();
+    const source = (await checkpointFile({ version: VERSION, phrases }, "phrase-bank-qwen-import-stale-source-")).path;
+    const destinationRoot = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-import-stale-destination-"));
+    const destination = join(destinationRoot, `checkpoint-${VERSION}.json`);
+    const pending = `${destination}.pending`;
+    const originalSource = await readFile(source, "utf8");
+    await writeFile(pending, "stale pending content", "utf8");
+
+    await expect(importQwenCheckpoint({ source, destination, version: VERSION, sourceContent })).rejects.toMatchObject({ code: "EEXIST" });
+    expect(await readdir(destinationRoot)).not.toContain(`checkpoint-${VERSION}.json.pending`);
+
+    await expect(importQwenCheckpoint({ source, destination, version: VERSION, sourceContent })).resolves.toEqual({ count: 1_220, destination });
+    expect(await readFile(source, "utf8")).toBe(originalSource);
+    await expect(loadQwenCheckpoint({ path: destination, version: VERSION, sourceContent })).resolves.toMatchObject({ phrases });
+
+    const conflicting = structuredClone(phrases);
+    conflicting[0].english = "Conflicting reviewed content.";
+    const conflictingSource = (await checkpointFile({ version: VERSION, phrases: conflicting }, "phrase-bank-qwen-import-stale-conflict-")).path;
+    const originalDestination = await readFile(destination, "utf8");
+    await expect(importQwenCheckpoint({ source: conflictingSource, destination, version: VERSION, sourceContent })).rejects.toThrow(/conflict/i);
+    expect(await readFile(destination, "utf8")).toBe(originalDestination);
+  });
+
   it("provides a required-argument CLI that reports only count and destination", async () => {
     const { phrases } = fixture();
     const directory = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-import-cli-"));

@@ -93,7 +93,12 @@ export async function importQwenCheckpoint(options: ImportOptions): Promise<{ co
   let pendingCreated = false;
   let pendingFile: Awaited<ReturnType<typeof open>> | undefined;
   try {
-    pendingFile = await open(pending, "wx");
+    try {
+      pendingFile = await open(pending, "wx");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") await rm(pending, { force: true });
+      throw error;
+    }
     pendingCreated = true;
     await pendingFile.writeFile(serialized, "utf8");
     await pendingFile.close();
