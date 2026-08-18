@@ -88,7 +88,7 @@ describe("renderLocalReviewPage", () => {
     for (const text of [
       "本地 Qwen 句库审核", "版本", "核心句", "600", "总句数", "2000", "报告", "门禁",
       "候选哈希", "审核状态", "抽样", "通过", "问题", "未决定", "搜索", "分类", "子分类",
-      "类型", "仅看抽样", "仅看问题", "仅看提示", "清除筛选", "批准此版本", "重新加载",
+      "类型", "仅看抽样", "仅看问题", "仅看提示", "清除筛选", "批准此版本", "重新加载", "加载更多",
     ]) expect(html).toContain(text);
     expect(html).toContain('<main id="main-content"');
     expect(html).toContain('role="status"');
@@ -96,6 +96,7 @@ describe("renderLocalReviewPage", () => {
     expect(html).toContain('id="sample-only" type="checkbox" checked');
     expect(html).toContain('id="approve" type="button" aria-describedby="approval-help" disabled');
     expect(html).toContain('id="review-list"');
+    expect(html).toContain('id="load-more" type="button" aria-describedby="result-count" hidden');
     expect(html).toContain("document.createElement(\"article\")");
   });
 
@@ -158,6 +159,9 @@ describe("renderLocalReviewPage", () => {
     expect(html).toContain("phrase.chinese");
     expect(html).toContain("phrase.id");
     expect(html).toContain("model.phrases.filter");
+    expect(html).toContain("const PAGE_SIZE = 100");
+    expect(html).toContain("searchTextById = new Map(phrases.map");
+    expect(html).toContain("searchTextById.get(phrase.id)");
     expect(html).not.toContain(".sort(");
     expect(html).toContain('decision === "pass"');
     expect(html).toContain('decision === "issue"');
@@ -187,12 +191,56 @@ describe("renderLocalReviewPage", () => {
     expect(html).toMatch(/padding-bottom/);
     expect(html).toMatch(/@media\s*\(max-width:\s*700px\)/);
     expect(html).toMatch(/grid-template-columns:\s*1fr/);
+    expect(html).toMatch(/#load-more\s*\{[^}]*min-height:\s*44px/);
+    expect(html).toMatch(/@media\s*\(max-width:\s*700px\)[\s\S]*#load-more\s*\{[^}]*width:\s*100%/);
     expect(html).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
     expect(html).not.toMatch(/position:\s*fixed/);
   });
 });
 
 describe("local review page runtime", () => {
+  it("bounds a 2,000-phrase result set, loads pages, and searches beyond the first page", async () => {
+    const large = payload();
+    large.content.phrases = Array.from({ length: 2000 }, (_, index) => ({
+      id: `phrase-${String(index).padStart(4, "0")}`,
+      categoryId: index % 2 === 0 ? "daily" : "work",
+      subcategory: index % 2 === 0 ? "common" : "planning",
+      kind: index % 3 === 0 ? "core" : "example",
+      parentPhraseId: index % 3 === 0 ? undefined : `phrase-${String(index - (index % 3)).padStart(4, "0")}`,
+      english: index === 1999 ? "Unique final audit phrase" : `English phrase ${index}`,
+      chinese: `中文短语 ${index}`,
+    })) as typeof large.content.phrases;
+    large.review.sampledIds = ["phrase-0000", "phrase-0001", "phrase-0002"];
+    large.review.items = {} as typeof large.review.items;
+    const fetchMock = vi.fn().mockResolvedValue(response(large));
+    const dom = boot(fetchMock);
+    await vi.waitFor(() => expect(rowIds(dom)).toHaveLength(3));
+
+    (dom.window.document.getElementById("sample-only") as HTMLInputElement).click();
+    expect(rowIds(dom)).toHaveLength(100);
+    expect(dom.window.document.getElementById("result-count")?.textContent).toBe("显示 100 / 2000 条");
+    const loadMore = dom.window.document.getElementById("load-more") as HTMLButtonElement;
+    expect(loadMore.hidden).toBe(false);
+    expect(loadMore.disabled).toBe(false);
+    loadMore.click();
+    expect(rowIds(dom)).toHaveLength(200);
+    expect(dom.window.document.getElementById("result-count")?.textContent).toBe("显示 200 / 2000 条");
+    const pass = [...dom.window.document.querySelectorAll("#phrase-phrase-0000 button")]
+      .find((button) => button.textContent === "通过") as HTMLButtonElement;
+    pass.click();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(rowIds(dom)).toHaveLength(100));
+    expect(dom.window.document.getElementById("result-count")?.textContent).toBe("显示 100 / 2000 条");
+
+    change(dom, "search", "phrase-1999");
+    expect(rowIds(dom)).toEqual(["phrase-1999"]);
+    expect(dom.window.document.getElementById("result-count")?.textContent).toBe("显示 1 / 1 条");
+    expect(loadMore.hidden).toBe(true);
+    dom.window.document.getElementById("clear-filters")?.click();
+    expect(rowIds(dom).length).toBeLessThanOrEqual(100);
+    expect(dom.window.document.getElementById("result-count")?.textContent).toBe("显示 3 / 3 条");
+  }, 15_000);
+
   it("renders the nested payload safely and derives concrete blockers including non-sampled issues", async () => {
     const fetchMock = vi.fn().mockResolvedValue(response(payload()));
     const dom = boot(fetchMock);

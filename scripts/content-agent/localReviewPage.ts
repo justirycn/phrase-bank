@@ -51,6 +51,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
     #search { width: min(25rem, 100%); }
     .approval { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin-block: 1rem; }
     #review-list { display: grid; gap: 1rem; margin-block: 1rem; }
+    #load-more { min-height: 44px; margin-block: .5rem 1rem; }
     article { overflow-wrap: anywhere; }
     .row-heading { display: flex; flex-wrap: wrap; align-items: start; justify-content: space-between; gap: .5rem; }
     .meta, .badges, .actions { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
@@ -70,6 +71,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       .filters > *, .filters label, .filters button { flex: 1 1 100%; width: 100%; }
       .filters .check { flex: 1 1 auto; width: auto; }
       .actions button { flex: 1 1 8rem; }
+      #load-more { width: 100%; }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
@@ -130,6 +132,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       <h2 id="list-heading">候选句</h2>
       <p id="result-count" role="status" aria-live="polite"></p>
       <div id="review-list"></div>
+      <button id="load-more" type="button" aria-describedby="result-count" hidden>加载更多</button>
     </section>
   </main>
   <script type="module" nonce="${escapedNonce}">
@@ -143,8 +146,9 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       subcategory: byId("subcategory"), kind: byId("kind"), sampleOnly: byId("sample-only"),
       issueOnly: byId("issue-only"), hintOnly: byId("hint-only"), clear: byId("clear-filters"),
       approve: byId("approve"), approvalHelp: byId("approval-help"), approvalStatus: byId("approval-status"),
-      resultCount: byId("result-count"), list: byId("review-list"),
+      resultCount: byId("result-count"), list: byId("review-list"), loadMore: byId("load-more"),
     };
+    const PAGE_SIZE = 100;
     const retryButton = elements.retry;
     const pendingIds = new Set();
     const pendingNotes = new Map();
@@ -152,6 +156,8 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
     let loading = false;
     let approvalPending = false;
     let approvalEnabled = false;
+    let viewLimit = PAGE_SIZE;
+    let searchTextById = new Map();
 
     function setText(element, value) {
       element.textContent = value == null || value === "" ? "—" : String(value);
@@ -343,16 +349,21 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       return article;
     }
 
+    function normalizeSearch(value) {
+      return String(value || "").normalize("NFKC").toLocaleLowerCase();
+    }
+
+    function searchableText(phrase) {
+      return normalizeSearch([phrase.id, phrase.english, phrase.chinese, phrase.categoryId, phrase.subcategory, phrase.parentPhraseId || ""].join(" "));
+    }
+
     function matchesSearch(phrase, query) {
-      if (!query) return true;
-      const haystack = [phrase.id, phrase.english, phrase.chinese, phrase.categoryId, phrase.subcategory, phrase.parentPhraseId || ""]
-        .join(" ").toLocaleLowerCase();
-      return haystack.includes(query);
+      return !query || (searchTextById.get(phrase.id) || "").includes(query);
     }
 
     function renderRows() {
       if (!model) return;
-      const query = elements.search.value.trim().toLocaleLowerCase();
+      const query = normalizeSearch(elements.search.value.trim());
       const samples = sampledSet();
       const items = reviewItems();
       const phrases = model.phrases.filter((phrase) =>
@@ -363,15 +374,19 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
         && (!elements.sampleOnly.checked || samples.has(phrase.id))
         && (!elements.issueOnly.checked || items[phrase.id]?.decision === "issue")
         && (!elements.hintOnly.checked || hintsFor(phrase).length > 0));
+      const visiblePhrases = phrases.slice(0, viewLimit);
       elements.list.replaceChildren();
-      for (const phrase of phrases) elements.list.append(renderPhrase(phrase));
+      for (const phrase of visiblePhrases) elements.list.append(renderPhrase(phrase));
       if (phrases.length === 0) {
         const empty = document.createElement("p");
         empty.className = "empty";
         empty.textContent = "没有符合当前筛选条件的候选句。";
         elements.list.append(empty);
       }
-      setText(elements.resultCount, "显示 " + phrases.length + " 条候选句");
+      setText(elements.resultCount, "显示 " + visiblePhrases.length + " / " + phrases.length + " 条");
+      const allVisible = visiblePhrases.length >= phrases.length;
+      elements.loadMore.hidden = allVisible;
+      elements.loadMore.disabled = allVisible;
     }
 
     function applyPayload(payload) {
@@ -389,6 +404,8 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
         reportStatus: payload.report && payload.report.status ? payload.report.status : payload.reportStatus,
         gateStatus: payload.gateStatus || (payload.report && payload.report.status === "pass" ? "通过" : "未通过"),
       };
+      searchTextById = new Map(phrases.map((phrase) => [phrase.id, searchableText(phrase)]));
+      viewLimit = PAGE_SIZE;
       updateSummary();
       updateFilterOptions();
       renderRows();
@@ -492,16 +509,22 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       }
     }
 
-    elements.search.addEventListener("input", renderRows);
-    for (const control of [elements.subcategory, elements.kind, elements.sampleOnly, elements.issueOnly, elements.hintOnly]) {
-      control.addEventListener("change", renderRows);
+    function resetView() {
+      viewLimit = PAGE_SIZE;
+      renderRows();
     }
-    elements.category.addEventListener("change", () => { updateSubcategoryOptions(); renderRows(); });
+
+    elements.search.addEventListener("input", resetView);
+    for (const control of [elements.subcategory, elements.kind, elements.sampleOnly, elements.issueOnly, elements.hintOnly]) {
+      control.addEventListener("change", resetView);
+    }
+    elements.category.addEventListener("change", () => { updateSubcategoryOptions(); resetView(); });
     elements.clear.addEventListener("click", () => {
       elements.search.value = ""; elements.category.value = ""; elements.kind.value = "";
       elements.sampleOnly.checked = true; elements.issueOnly.checked = false; elements.hintOnly.checked = false;
-      updateSubcategoryOptions(); elements.subcategory.value = ""; renderRows();
+      updateSubcategoryOptions(); elements.subcategory.value = ""; resetView();
     });
+    elements.loadMore.addEventListener("click", () => { viewLimit += PAGE_SIZE; renderRows(); });
     retryButton.addEventListener("click", loadReview);
     elements.approve.addEventListener("click", approveVersion);
     loadReview();
