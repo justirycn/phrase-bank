@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
 import { execFile as nodeExecFile } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { lstat, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { generateSystemContent } from "../../scripts/content-agent/generator";
 import { buildReviewModel, type ReviewState } from "../../scripts/content-agent/localReview";
 import { inspectSystemContent } from "../../scripts/content-agent/qualityGate";
@@ -16,6 +15,7 @@ import {
   runApprovedRelease,
   validateApprovedRelease,
 } from "../../scripts/content-agent/approvedRelease";
+import { createTempRootTracker } from "./tempRoots";
 
 const VERSION = "2026.08.3";
 const ALLOWED = [`public/content/system-content-${VERSION}.json`, "app/domain/bundledSystemContent.ts"];
@@ -27,6 +27,9 @@ const blobOid = (raw: string) => createHash("sha1").update(Buffer.from(`blob ${B
 const approvedOutputHashes = () => Object.fromEntries(Object.entries(APPROVED_OUTPUTS).map(([path, raw]) => [path, blobOid(raw)]));
 const execFile = promisify(nodeExecFile);
 const git = async (cwd: string, ...args: string[]) => (await execFile("git", args, { cwd, encoding: "utf8", windowsHide: true })).stdout;
+const tempRoots = createTempRootTracker();
+
+afterEach(async () => tempRoots.cleanup());
 
 function approvedReview(overrides: Partial<ReviewState> = {}): ReviewState {
   return {
@@ -42,7 +45,7 @@ function approvedReview(overrides: Partial<ReviewState> = {}): ReviewState {
 }
 
 async function artifactFixture() {
-  const root = await mkdtemp(join(tmpdir(), "approved-release-"));
+  const root = await tempRoots.create("phrase-bank-approved-release-");
   const content = generateSystemContent();
   const qualityVersion = "qwen-plus-review-v2";
   const candidate = {
@@ -108,7 +111,7 @@ describe("approved release artifact gate", () => {
     const linked = join(files.root, "linked-candidate.json");
     await symlink(files.candidatePath, linked, "file");
     await expect(assertSafeReleasePaths(files.root, [{ path: linked, kind: "file" }])).rejects.toThrow(/symbolic|reparse/i);
-    const outside = await mkdtemp(join(tmpdir(), "approved-release-outside-"));
+    const outside = await tempRoots.create("phrase-bank-approved-release-outside-");
     const linkedDirectory = join(files.root, "public");
     await symlink(outside, linkedDirectory, "junction");
     await expect(assertSafeReleasePaths(files.root, [{ path: join(linkedDirectory, "content", "output.json"), kind: "output" }])).rejects.toThrow(/symbolic|reparse/i);
@@ -401,7 +404,7 @@ describe("approved release orchestration", () => {
   });
 
   it("disables a real mutating commit hook and safely restores a linked worktree after a simulated push failure", async () => {
-    const root = await mkdtemp(join(tmpdir(), "approved-release-git-"));
+    const root = await tempRoots.create("phrase-bank-approved-release-git-");
     const repository = join(root, "repository");
     const origin = join(root, "origin.git");
     const worktree = join(root, "release");
@@ -468,12 +471,12 @@ describe("approved release orchestration", () => {
       expect(rollback).toHaveBeenCalledTimes(1);
       expect(calls.some(([program]) => program === "gh")).toBe(false);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await tempRoots.cleanup();
     }
   }, 20_000);
 
   it("refuses real cleanup when staged, unstaged, or symlink output state drifts before push", async () => {
-    const root = await mkdtemp(join(tmpdir(), "approved-release-drift-"));
+    const root = await tempRoots.create("phrase-bank-approved-release-drift-");
     const repository = join(root, "repository");
     const origin = join(root, "origin.git");
     const outside = join(root, "outside.txt");
@@ -548,7 +551,7 @@ describe("approved release orchestration", () => {
       }
       expect(await readFile(outside, "utf8")).toBe("outside-owned\n");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await tempRoots.cleanup();
     }
   }, 30_000);
 });

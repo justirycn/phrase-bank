@@ -1,5 +1,7 @@
-import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { constants, type BigIntStats } from "node:fs";
+import { lstat, mkdir, open, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import type { SystemContentPackage, SystemContentPhrase } from "../../app/domain/types";
 import { inspectSystemContent } from "./qualityGate";
 import type { QwenClient, QwenMessage } from "./qwenClient";
@@ -12,7 +14,19 @@ const CATEGORY_QUOTAS = [
 
 interface PipelineProgress { category: string; stage: "generate" | "review"; completed: number; total: number; }
 interface PipelineOptions { client: QwenClient; version: string; generatedAt: string; qualityVersion: string; sourceContent?: SystemContentPackage; resumePhrases?: SystemContentPhrase[]; onProgress?: (progress: PipelineProgress) => void; onBatchCompleted?: (phrases: SystemContentPhrase[]) => Promise<void>; }
-interface AgentOptions extends PipelineOptions { outputDir: string; }
+interface CheckpointFileHandle {
+  writeFile(data: string, encoding: BufferEncoding): Promise<unknown>;
+  sync(): Promise<unknown>;
+  stat(options: { bigint: true }): Promise<BigIntStats>;
+  close(): Promise<unknown>;
+}
+interface CheckpointDependencies {
+  open?: (path: string, flags: number) => Promise<CheckpointFileHandle>;
+  openDestination?: typeof open;
+  rename?: (source: string, destination: string) => Promise<void>;
+  retryDelay?: (milliseconds: number) => Promise<void>;
+}
+interface AgentOptions extends PipelineOptions { outputDir: string; checkpointDependencies?: CheckpointDependencies; }
 interface BatchResponse { phrases: SystemContentPhrase[]; }
 interface PhrasePatch { id: string; english: string; chinese: string; }
 interface PatchResponse { phrases: PhrasePatch[]; }
@@ -74,7 +88,6 @@ function stableMetadata(phrase: SystemContentPhrase) {
 function validatePatchSlice(value: unknown, requestedIds: string[], collectedIds: Set<string>): PhrasePatch[] {
   if (!value || typeof value !== "object" || !Array.isArray((value as PatchResponse).phrases)) throw new Error("Qwen 补丁格式无效：phrases 必须是数组");
   const patches = (value as { phrases: unknown[] }).phrases;
-  if (!patches.length) throw new Error("Qwen 补丁验证失败：补丁不能为空");
   const actualIds: string[] = [];
   const errors: string[] = [];
   for (const [index, patch] of patches.entries()) {
@@ -90,8 +103,11 @@ function validatePatchSlice(value: unknown, requestedIds: string[], collectedIds
     if (typeof candidate.english !== "string" || !candidate.english.trim()) errors.push(`第 ${index + 1} 条英文无效`);
     if (typeof candidate.chinese !== "string" || !candidate.chinese.trim()) errors.push(`第 ${index + 1} 条中文无效`);
   }
+  const schemaErrorCount = errors.length;
   const duplicateIds = [...new Set(actualIds.filter((id, index) => actualIds.indexOf(id) !== index))];
   const requested = new Set(requestedIds);
+  const acceptedRequestedIds = new Set(actualIds.filter((id) => requested.has(id)));
+  if (!acceptedRequestedIds.size && schemaErrorCount === 0) throw new Error("Qwen 补丁验证失败：无进展：响应未包含任何请求 ID");
   const unrequestedIds = [...new Set(actualIds.filter((id) => !requested.has(id)))];
   const repeatedIds = unrequestedIds.filter((id) => collectedIds.has(id));
   const unknownIds = unrequestedIds.filter((id) => !collectedIds.has(id));
@@ -103,6 +119,138 @@ function validatePatchSlice(value: unknown, requestedIds: string[], collectedIds
   if (patches.length !== requestedIds.length) errors.push(`补丁数量错误：期望 ${requestedIds.length}，实际 ${patches.length}`);
   if (errors.length) throw new Error(`Qwen 补丁验证失败：${errors.join("；")}`);
   return patches as PhrasePatch[];
+}
+
+const CHECKPOINT_REPLACE_ATTEMPTS = 5;
+// The local agent contract permits one generating process. Canonical keys prevent
+// aliases inside that process from racing; progress is still rechecked before rename.
+const checkpointWriteQueues = new Map<string, Promise<void>>();
+
+async function checkpointRetryDelay(milliseconds: number) {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function removeOwnedCheckpointTemp(path: string, identity: { dev: bigint; ino: bigint }) {
+  try {
+    const metadata = await lstat(path, { bigint: true });
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.dev !== identity.dev || metadata.ino !== identity.ino) return;
+    await rm(path, { force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+}
+
+async function assertOwnedCheckpointPath(path: string, identity: { dev: bigint; ino: bigint }) {
+  let metadata: BigIntStats;
+  try {
+    metadata = await lstat(path, { bigint: true });
+  } catch (error) {
+    throw new Error("Qwen 检查点临时文件所有权已变化", { cause: error });
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.dev !== identity.dev || metadata.ino !== identity.ino) {
+    throw new Error("Qwen 检查点临时文件所有权已变化");
+  }
+}
+
+async function readCheckpointProgress(path: string, version: string, expectedSourceSha256: string) {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+  try {
+    const identity = await handle.stat({ bigint: true });
+    if (!identity.isFile() || identity.isSymbolicLink()) throw new Error("Qwen 检查点文件类型无效");
+    const pathMetadata = await lstat(path, { bigint: true });
+    if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink() || pathMetadata.dev !== identity.dev || pathMetadata.ino !== identity.ino) throw new Error("Qwen 检查点文件所有权已变化");
+    const raw = await handle.readFile("utf8");
+    const value = JSON.parse(raw) as { version?: unknown; sourceSha256?: unknown; phrases?: unknown };
+    if (value.version !== version || (value.sourceSha256 !== undefined && value.sourceSha256 !== expectedSourceSha256) || !Array.isArray(value.phrases)) throw new Error("Qwen 检查点进度验证失败");
+    return value.phrases.length;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function serializeCheckpointWrite(path: string, operation: () => Promise<void>) {
+  const physicalParent = await realpath(dirname(path));
+  const physicalPath = join(physicalParent, basename(path));
+  const key = process.platform === "win32" ? physicalPath.toLowerCase() : physicalPath;
+  const previous = checkpointWriteQueues.get(key) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(operation);
+  checkpointWriteQueues.set(key, current);
+  try {
+    await current;
+  } finally {
+    if (checkpointWriteQueues.get(key) === current) checkpointWriteQueues.delete(key);
+  }
+}
+
+async function writeCheckpointAtomicallyLocked(options: {
+  checkpointPath: string;
+  serialized: string;
+  version: string;
+  sourceContent: SystemContentPackage;
+  phraseCount: number;
+  dependencies?: CheckpointDependencies;
+}) {
+  const expectedSourceSha256 = sourceSha256(options.sourceContent);
+  const initialProgress = await readCheckpointProgress(options.checkpointPath, options.version, expectedSourceSha256);
+  if (initialProgress !== undefined && initialProgress >= options.phraseCount) return;
+  const pendingPath = `${options.checkpointPath}.pending.${process.pid}.${randomUUID()}`;
+  const openCheckpoint = options.dependencies?.open ?? open;
+  const renameCheckpoint = options.dependencies?.rename ?? rename;
+  const retryDelay = options.dependencies?.retryDelay ?? checkpointRetryDelay;
+  let pendingFile: CheckpointFileHandle | undefined;
+  let identity: { dev: bigint; ino: bigint } | undefined;
+  try {
+    pendingFile = await openCheckpoint(pendingPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW);
+    const handleMetadata = await pendingFile.stat({ bigint: true });
+    if (!handleMetadata.isFile() || handleMetadata.isSymbolicLink()) throw new Error("Qwen 检查点临时文件类型无效");
+    identity = { dev: handleMetadata.dev, ino: handleMetadata.ino };
+    await assertOwnedCheckpointPath(pendingPath, identity);
+    await pendingFile.writeFile(options.serialized, "utf8");
+    await pendingFile.sync();
+    await pendingFile.close();
+    pendingFile = undefined;
+    await assertOwnedCheckpointPath(pendingPath, identity);
+    for (let attempt = 1; ; attempt += 1) {
+      await assertOwnedCheckpointPath(pendingPath, identity);
+      const currentProgress = await readCheckpointProgress(options.checkpointPath, options.version, expectedSourceSha256);
+      if (currentProgress !== undefined && currentProgress >= options.phraseCount) return;
+      try {
+        await renameCheckpoint(pendingPath, options.checkpointPath);
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if ((code !== "EPERM" && code !== "EACCES") || attempt >= CHECKPOINT_REPLACE_ATTEMPTS) throw error;
+        await retryDelay(10 * 2 ** (attempt - 1));
+      }
+    }
+    await assertOwnedCheckpointPath(options.checkpointPath, identity);
+    const checkpointHandle = await (options.dependencies?.openDestination ?? open)(options.checkpointPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const checkpointIdentity = await checkpointHandle.stat({ bigint: true });
+      if (checkpointIdentity.dev !== identity.dev || checkpointIdentity.ino !== identity.ino) throw new Error("Qwen 检查点原子替换验证失败：所有权变化");
+      await assertOwnedCheckpointPath(options.checkpointPath, identity);
+      if (await checkpointHandle.readFile("utf8") !== options.serialized) throw new Error("Qwen 检查点原子替换验证失败：内容不一致");
+    } finally {
+      await checkpointHandle.close();
+    }
+    identity = undefined;
+  } finally {
+    try {
+      await pendingFile?.close();
+    } finally {
+      if (identity) await removeOwnedCheckpointTemp(pendingPath, identity);
+    }
+  }
+}
+
+async function writeCheckpointAtomically(options: Parameters<typeof writeCheckpointAtomicallyLocked>[0]) {
+  await serializeCheckpointWrite(options.checkpointPath, () => writeCheckpointAtomicallyLocked(options));
 }
 
 function sourceSlices(source: BatchResponse): BatchResponse[] {
@@ -266,24 +414,14 @@ export async function runQwenAgent(options: AgentOptions) {
     sourceContent,
     resumePhrases,
     onBatchCompleted: async (phrases) => {
-      const pendingPath = `${checkpointPath}.pending`;
-      let pendingCreated = false;
-      let pendingFile: Awaited<ReturnType<typeof open>> | undefined;
-      try {
-        pendingFile = await open(pendingPath, "wx");
-        pendingCreated = true;
-        await pendingFile.writeFile(`${JSON.stringify({ version: options.version, sourceSha256: sourceSha256(sourceContent), phrases })}\n`, "utf8");
-        await pendingFile.close();
-        pendingFile = undefined;
-        await rename(pendingPath, checkpointPath);
-        pendingCreated = false;
-      } finally {
-        try {
-          await pendingFile?.close();
-        } finally {
-          if (pendingCreated) await rm(pendingPath, { force: true });
-        }
-      }
+      await writeCheckpointAtomically({
+        checkpointPath,
+        serialized: `${JSON.stringify({ version: options.version, sourceSha256: sourceSha256(sourceContent), phrases })}\n`,
+        version: options.version,
+        sourceContent,
+        phraseCount: phrases.length,
+        dependencies: options.checkpointDependencies,
+      });
       await options.onBatchCompleted?.(phrases);
     },
   });

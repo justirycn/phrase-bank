@@ -1,16 +1,19 @@
 // @vitest-environment node
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { generateSystemContent } from "../../scripts/content-agent/generator";
 import { assertContentVersion, importQwenCheckpoint, loadQwenCheckpoint, sourceSha256 } from "../../scripts/content-agent/qwenCheckpoint";
 import { parseImportQwenCheckpointArguments } from "../../scripts/import-qwen-checkpoint";
+import { createTempRootTracker } from "./tempRoots";
 
 const VERSION = "2026.08.3";
 const execFileAsync = promisify(execFile);
+const tempRoots = createTempRootTracker();
+
+afterEach(async () => tempRoots.cleanup());
 
 function fixture() {
   const sourceContent = generateSystemContent();
@@ -25,7 +28,7 @@ function fixture() {
 }
 
 async function checkpointFile(value: unknown, prefix = "phrase-bank-qwen-checkpoint-") {
-  const directory = await mkdtemp(join(tmpdir(), prefix));
+  const directory = await tempRoots.create(prefix);
   const path = join(directory, "checkpoint.json");
   await writeFile(path, `${JSON.stringify(value)}\n`, "utf8");
   return { directory, path };
@@ -95,7 +98,7 @@ describe("Qwen checkpoint import", () => {
   it("validates before an atomic import, never changes the source, and is idempotent for identical content", async () => {
     const { sourceContent, phrases } = fixture();
     const source = (await checkpointFile({ version: VERSION, phrases }, "phrase-bank-qwen-import-source-")).path;
-    const destinationRoot = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-import-destination-"));
+    const destinationRoot = await tempRoots.create("phrase-bank-qwen-import-destination-");
     const destination = join(destinationRoot, "nested", `checkpoint-${VERSION}.json`);
     const originalSource = await readFile(source, "utf8");
 
@@ -112,7 +115,7 @@ describe("Qwen checkpoint import", () => {
 
   it("refuses a different valid checkpoint and cleans pending files after validation or write failures", async () => {
     const { sourceContent, phrases } = fixture();
-    const destinationRoot = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-import-conflict-"));
+    const destinationRoot = await tempRoots.create("phrase-bank-qwen-import-conflict-");
     const destination = join(destinationRoot, `checkpoint-${VERSION}.json`);
     const firstSource = (await checkpointFile({ version: VERSION, phrases }, "phrase-bank-qwen-import-first-")).path;
     await importQwenCheckpoint({ source: firstSource, destination, version: VERSION, sourceContent });
@@ -134,7 +137,7 @@ describe("Qwen checkpoint import", () => {
   it("does not touch an unowned legacy pending file and imports through an owned unique temporary file", async () => {
     const { sourceContent, phrases } = fixture();
     const source = (await checkpointFile({ version: VERSION, phrases }, "phrase-bank-qwen-import-stale-source-")).path;
-    const destinationRoot = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-import-stale-destination-"));
+    const destinationRoot = await tempRoots.create("phrase-bank-qwen-import-stale-destination-");
     const destination = join(destinationRoot, `checkpoint-${VERSION}.json`);
     const pending = `${destination}.pending`;
     const originalSource = await readFile(source, "utf8");
@@ -156,7 +159,7 @@ describe("Qwen checkpoint import", () => {
   it("handles concurrent identical imports and leaves one valid destination without owned temp files", async () => {
     const { sourceContent, phrases } = fixture();
     const source = (await checkpointFile({ version: VERSION, phrases }, "phrase-bank-qwen-concurrent-same-source-")).path;
-    const destinationRoot = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-concurrent-same-destination-"));
+    const destinationRoot = await tempRoots.create("phrase-bank-qwen-concurrent-same-destination-");
     const destination = join(destinationRoot, `checkpoint-${VERSION}.json`);
 
     const results = await Promise.all(Array.from({ length: 12 }, () => importQwenCheckpoint({ source, destination, version: VERSION, sourceContent })));
@@ -173,7 +176,7 @@ describe("Qwen checkpoint import", () => {
     conflicting[0].english = "Conflicting concurrent content.";
     const secondSource = (await checkpointFile({ version: VERSION, phrases: conflicting }, "phrase-bank-qwen-concurrent-second-")).path;
     for (let iteration = 0; iteration < 5; iteration += 1) {
-      const destinationRoot = await mkdtemp(join(tmpdir(), `phrase-bank-qwen-concurrent-conflict-${iteration}-`));
+      const destinationRoot = await tempRoots.create(`phrase-bank-qwen-concurrent-conflict-${iteration}-`);
       const destination = join(destinationRoot, `checkpoint-${VERSION}.json`);
       const results = await Promise.allSettled([
         importQwenCheckpoint({ source: firstSource, destination, version: VERSION, sourceContent }),
@@ -192,7 +195,7 @@ describe("Qwen checkpoint import", () => {
   it("ignores realistic old lock, claim, and pending artifacts without deleting any foreign path", async () => {
     const { sourceContent, phrases } = fixture();
     const source = (await checkpointFile({ version: VERSION, phrases }, "phrase-bank-qwen-foreign-artifacts-source-")).path;
-    const destinationRoot = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-foreign-artifacts-destination-"));
+    const destinationRoot = await tempRoots.create("phrase-bank-qwen-foreign-artifacts-destination-");
     const destination = join(destinationRoot, `checkpoint-${VERSION}.json`);
     const foreignArtifacts = new Map([
       [`${destination}.lock`, JSON.stringify({ pid: 2_147_483_647, token: "old-lock-owner" })],
@@ -209,7 +212,7 @@ describe("Qwen checkpoint import", () => {
 
   it("provides a required-argument CLI that reports only count and destination", async () => {
     const { phrases } = fixture();
-    const directory = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-import-cli-"));
+    const directory = await tempRoots.create("phrase-bank-qwen-import-cli-");
     const source = join(directory, "server-checkpoint.json");
     await writeFile(source, `${JSON.stringify({ version: VERSION, phrases })}\n`, "utf8");
     const tsxCli = resolve("node_modules/tsx/dist/cli.mjs");
