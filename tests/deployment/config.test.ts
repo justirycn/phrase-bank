@@ -25,13 +25,15 @@ describe("deployment configuration", () => {
 
   it("tests main before deploying with the three approved secrets", async () => {
     const workflow = await text(".github/workflows/deploy.yml");
+    const remoteScript = await text(".github/scripts/deploy-exact-sha.sh");
     expect(workflow).toContain("branches: [main]");
     expect(workflow.indexOf("npm test")).toBeLessThan(workflow.indexOf("deploy:"));
     for (const name of ["TENCENT_HOST", "TENCENT_USER", "TENCENT_SSH_KEY"]) expect(workflow).toContain(`secrets.${name}`);
     expect(workflow).toContain("StrictHostKeyChecking=yes");
-    expect(workflow.indexOf("docker compose build")).toBeLessThan(workflow.indexOf("docker compose up -d"));
-    expect(workflow).not.toContain("sudo docker");
-    expect(workflow).toContain("https://phrase.archdemy.com/");
-    expect(workflow).toContain("--resolve phrase.archdemy.com:443:127.0.0.1");
+    expect(workflow).toContain('bash -se" < .github/scripts/deploy-exact-sha.sh');
+    expect(remoteScript.indexOf("docker compose build")).toBeLessThan(remoteScript.indexOf("docker compose up -d"));
+    expect(remoteScript).not.toContain("sudo docker");
+    expect(remoteScript).toContain("https://phrase.archdemy.com/");
+    expect(remoteScript).toContain("--resolve phrase.archdemy.com:443:127.0.0.1");
   });
 });

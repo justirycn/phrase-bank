@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const workflow = () => readFileSync(resolve(process.cwd(), ".github/workflows/qwen-content-release.yml"), "utf8");
 const deployWorkflow = () => readFileSync(resolve(process.cwd(), ".github/workflows/deploy.yml"), "utf8");
+const deployRemoteScript = () => readFileSync(resolve(process.cwd(), ".github/scripts/deploy-exact-sha.sh"), "utf8");
 const runbook = () => readFileSync(resolve(process.cwd(), "docs/runbooks/qwen-content-update.md"), "utf8");
 const localCommandSources = () => [
   "scripts/import-qwen-checkpoint.ts",
@@ -102,6 +103,45 @@ describe("Qwen content release workflow", () => {
     expect(source).toContain("重新审核并批准");
   });
 
+  it("requires PowerShell 7.3 fail-fast guards before every executable operator block", () => {
+    const source = runbook();
+    expect(source).toContain("PowerShell 7.3");
+    const blocks = [...source.matchAll(/```powershell\r?\n([\s\S]*?)```/gu)].map((match) => match[1]);
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block).toMatch(/^\$ErrorActionPreference = "Stop"\r?\n\$PSNativeCommandUseErrorActionPreference = \$true\r?\n/u);
+      const firstNativeAction = block.search(/^(?:git|gh|npm)\s/mu);
+      if (firstNativeAction >= 0) expect(firstNativeAction).toBeGreaterThan(block.indexOf("$PSNativeCommandUseErrorActionPreference = $true"));
+    }
+  });
+
+  it("recovers the exact push deployment run before guarded manual dispatch", () => {
+    const source = runbook();
+    const rerun = source.indexOf("gh run rerun $pushRunId --failed");
+    const watch = source.indexOf("gh run watch $pushRunId --exit-status");
+    const fetch = source.indexOf("git fetch --no-tags origin main", watch);
+    const verify = source.indexOf('if ($originMainSha -ne $approvedSha)', fetch);
+    const dispatch = source.indexOf("gh workflow run deploy.yml --ref main -f approved_sha=$approvedSha", verify);
+    expect(source).toContain("gh run rerun <exact push-event RUN_ID> --failed");
+    expect(source).toMatch(/Where-Object \{\s*\$_\.event -eq "push" -and\s*\$_\.headSha -eq \$approvedSha -and\s*\$_\.workflowName -eq "Test and deploy"\s*\}/u);
+    expect([rerun, watch, fetch, verify, dispatch].every((position) => position >= 0)).toBe(true);
+    expect(rerun).toBeLessThan(watch);
+    expect(watch).toBeLessThan(fetch);
+    expect(fetch).toBeLessThan(verify);
+    expect(verify).toBeLessThan(dispatch);
+  });
+
+  it("documents ssh-keyscan TOFU risk and trusted-channel host-key pinning", () => {
+    const source = runbook();
+    expect(source).toContain("TOFU");
+    expect(source).toContain("中间人攻击");
+    expect(source).toContain("腾讯云控制台");
+    expect(source).toContain("ssh-keygen -lf");
+    expect(source).toContain("逐字比较");
+    expect(source).toContain("固定");
+    expect(source).not.toMatch(/SHA256:[A-Za-z0-9+/]{20,}/u);
+  });
+
   it("keeps server generation manual and recovery-only without local dispatches", () => {
     const source = workflow();
     expect(source).toContain("workflow_dispatch:");
@@ -123,14 +163,16 @@ describe("Qwen content release workflow", () => {
     expect(source).toMatch(/push:\r?\n\s+branches: \[main\]/);
   });
   it("deploys the exact event SHA instead of a later main revision", () => {
-    const source = deployWorkflow();
-    expect(source).toContain("DEPLOY_SHA: ${{ github.sha }}");
-    expect(source).toContain('case "$DEPLOY_SHA" in');
+    const workflowSource = deployWorkflow();
+    const source = deployRemoteScript();
+    expect(workflowSource).toContain("DEPLOY_SHA: ${{ github.sha }}");
+    expect(workflowSource).toContain('"DEPLOY_SHA=\'$DEPLOY_SHA\' bash -se" < .github/scripts/deploy-exact-sha.sh');
+    expect(source).toContain('case "${DEPLOY_SHA:-}" in');
     expect(source).toContain('test "${#DEPLOY_SHA}" = 40');
-    expect(source).toContain('"DEPLOY_SHA=\'$DEPLOY_SHA\' bash -se"');
     expect(source).not.toContain("git clone");
-    expect(source).toContain("git init /opt/phrase-bank");
-    expect(source).toContain("git -C /opt/phrase-bank remote add origin https://github.com/justirycn/phrase-bank.git");
+    expect(source).toContain('repository_path="${1:-/opt/phrase-bank}"');
+    expect(source).toContain('git init "$repository_path"');
+    expect(source).toContain('git -C "$repository_path" remote add origin https://github.com/justirycn/phrase-bank.git');
     expect(source).toContain("Refusing non-repository deploy directory");
     expect(source).toContain("git fetch --no-tags origin main");
     expect(source).toContain('git cat-file -e "$DEPLOY_SHA^{commit}"');
@@ -152,9 +194,9 @@ describe("Qwen content release workflow", () => {
     order.slice(1).forEach((position, index) => expect(order[index]).toBeLessThan(position));
   });
   it("makes duplicate push and dispatch deploys idempotent for the exact SHA", () => {
-    const source = deployWorkflow();
+    const source = deployRemoteScript();
     const lock = source.indexOf("flock 9");
-    const markerCheck = source.indexOf('test "$(cat "$deployment_marker")" = "$DEPLOY_SHA"');
+    const markerCheck = source.indexOf('if [ "$marker_sha" = "$DEPLOY_SHA" ]');
     const earlyHealth = source.indexOf("if deployment_is_healthy; then", markerCheck);
     const earlyExit = source.indexOf("exit 0", earlyHealth);
     const dockerBuild = source.indexOf("docker compose build");
@@ -164,6 +206,9 @@ describe("Qwen content release workflow", () => {
     const markerMove = source.indexOf('mv -f -- "$deployment_marker_pending" "$deployment_marker"');
     expect(source).toContain('deployment_marker="$HOME/.phrase-bank-deployed-sha"');
     expect(source).toContain("deployment_is_healthy() {");
+    expect(source).toContain("validate_existing_marker() {");
+    expect(source).toContain("Refusing hard-linked deployment marker");
+    expect(source).toContain("Invalid deployment marker content");
     expect([lock, markerCheck, earlyHealth, earlyExit, dockerBuild, dockerUp, finalHealth, markerWrite, markerMove]
       .every((position) => position >= 0)).toBe(true);
     expect(lock).toBeLessThan(markerCheck);
@@ -291,12 +336,12 @@ describe("Qwen content release workflow", () => {
     expect(installPosition).toBeLessThan(qwenPosition);
 
     const lockPath = "$HOME/.phrase-bank-operation.lock";
-    for (const remoteSource of [source, deployWorkflow()]) {
-      expect(remoteSource).toMatch(new RegExp(`exec 9>${lockPath.replace(/[-/\\.^$*+?()[\]{}|]/g, "\\$&")}\\r?\\n\\s+flock 9`));
+    for (const remoteSource of [source, deployRemoteScript()]) {
+      expect(remoteSource).toMatch(new RegExp(`exec 9>(?:")?${lockPath.replace(/[-/\\.^$*+?()[\]{}|]/g, "\\$&")}(?:")?\\r?\\n\\s*flock 9`));
       expect(remoteSource).not.toContain("/opt/phrase-bank.operation.lock");
     }
     expect(source.indexOf("exec 9>$HOME/.phrase-bank-operation.lock")).toBeLessThan(source.indexOf("cd /opt/phrase-bank"));
-    expect(deployWorkflow().indexOf("exec 9>$HOME/.phrase-bank-operation.lock")).toBeLessThan(deployWorkflow().indexOf("git init /opt/phrase-bank"));
+    expect(deployRemoteScript().indexOf('exec 9>"$HOME/.phrase-bank-operation.lock"')).toBeLessThan(deployRemoteScript().indexOf('git init "$repository_path"'));
     expect(runbook()).toContain('sudo chown "$SSH_USER:$SSH_GROUP" /etc/phrase-bank/qwen-content.env');
     expect(runbook()).toContain("明确触发");
   });

@@ -27,13 +27,12 @@ const yamlSection = (yaml: string, name: string, indent = 0) => {
 
 describe("HTTPS reverse proxy", () => {
   it("checks the public HTTPS endpoint during deployment", () => {
-    const workflow = rootFile(".github/workflows/deploy.yml");
-    const remoteScript = workflow.match(/<<'REMOTE'\r?\n([\s\S]*?)\r?\n\s+REMOTE/)?.[1] ?? "";
+    const remoteScript = rootFile(".github/scripts/deploy-exact-sha.sh");
     const retryLoop = remoteScript.match(
-      /for attempt in \$\(seq 1 24\); do\r?\n([\s\S]*?)\r?\n\s+done/,
+      /for attempt in \$\(seq 1 "\$health_attempts"\); do\r?\n([\s\S]*?)\r?\ndone/,
     )?.[1] ?? "";
     const healthCheck = remoteScript.match(
-      /deployment_is_healthy\(\) \{\r?\n([\s\S]*?)\r?\n\s+\}/,
+      /deployment_is_healthy\(\) \{\r?\n([\s\S]*?)\r?\n\}/,
     )?.[1] ?? "";
 
     expect(remoteScript).not.toBe("");

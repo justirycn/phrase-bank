@@ -2,7 +2,7 @@
 
 推荐且默认的操作方式是在自己的 Windows 电脑上创建一个干净的独立 worktree，在其中恢复断点、继续 Qwen 生成、完成本机审核，并在明确批准后发布。检查点、候选、报告和审核状态始终留在同一个 worktree 的 `.content-agent` 中。此流程不会定时调用 Qwen，也不会自动发布。
 
-本文命令以版本 `2026.08.3` 为例。开始新版本时，应在所有命令中使用同一个新版本号。下面所有 PowerShell 命令必须在同一个终端会话中依次执行。
+本文命令以版本 `2026.08.3` 为例。开始新版本时，应在所有命令中使用同一个新版本号。下面所有命令要求 **PowerShell 7.3 或更高版本**，并且必须在同一个终端会话中依次执行。每个可执行代码块都先启用 PowerShell 与原生命令的 fail-fast；`git`、`gh` 或 `npm` 返回非零状态时必须立即停止。
 
 ## 开始前：把 Key 放在项目外
 
@@ -11,6 +11,8 @@
 用记事本创建配置。只在记事本中粘贴真实 Key：
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.phrase-bank" | Out-Null
 notepad "$env:USERPROFILE\.phrase-bank\qwen-content.env"
 ```
@@ -25,6 +27,27 @@ DASHSCOPE_MODEL=qwen-plus
 
 如果百炼控制台提供带工作空间 ID 的专属地址，应使用控制台地址。地域、工作空间、Key 与地址必须匹配。程序会拒绝仓库内的配置文件、符号链接、重复项、缺项和未知配置项；日志不会打印 Key。
 
+## SSH 主机密钥：先核验，再固定
+
+当前 GitHub Actions 使用 `ssh-keyscan` 动态取得腾讯云主机密钥。这只是首次信任（TOFU）：`StrictHostKeyChecking=yes` 只会检查本次刚取得的值，不能阻止首次连接时的中间人攻击。
+
+在派发任何工作流前，管理员必须通过与 SSH 网络路径不同的可信渠道（例如腾讯云控制台的 VNC/网页终端）在服务器上读取真实主机公钥指纹；不要猜测或在本文填写指纹。然后在 PowerShell 7.3 中扫描公开主机密钥并逐字比较：
+
+```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+$hostName = Read-Host "腾讯云主机名或 IP"
+$expectedFingerprint = Read-Host "粘贴从可信控制台取得的完整指纹"
+$scanPath = Join-Path $env:TEMP "phrase-bank-known-hosts"
+ssh-keyscan -t ed25519 $hostName | Set-Content -Encoding ascii $scanPath
+$scannedFingerprints = @(ssh-keygen -lf $scanPath)
+if (-not ($scannedFingerprints -match [regex]::Escape($expectedFingerprint))) { throw "主机密钥指纹不匹配；停止连接" }
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
+Copy-Item $scanPath "$env:USERPROFILE\.ssh\phrase-bank-known_hosts" -Force
+```
+
+只有逐字比较成功的完整主机密钥行才能固定到专用 `known_hosts` 文件。指纹变化时立即停止，回到腾讯云控制台核实轮换或安全事件。上述操作固定的是本机连接；当前 Actions 动态 `ssh-keyscan` 仍是 TOFU，不能把它描述成已固定。生产派发前应由基础设施负责人通过单独评审，把同一条已核验主机密钥固定到 Actions 的 `known_hosts` 来源；本文不虚构指纹、变量值或秘密。
+
 ## 推荐流程：同一个 worktree 完成恢复、审核和发布
 
 ### 1. 先创建精确基于 `origin/main` 的独立 worktree
@@ -32,6 +55,8 @@ DASHSCOPE_MODEL=qwen-plus
 从现有仓库根目录开始。先更新远端引用并记录精确 SHA，再创建 detached 的 linked worktree。唯一请求 ID 同时用于 worktree、工作流标题和 artifact，因此不会误取另一个人的导出任务。
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 $repoRoot = (git rev-parse --show-toplevel).Trim()
 git fetch --no-tags origin main
 $releaseSha = (git rev-parse origin/main).Trim()
@@ -53,6 +78,8 @@ GitHub Actions 中的工作流名称是 **Export Qwen checkpoint**。它只读�
 以下命令派发带版本和唯一请求 ID 的任务，然后轮询最多约一分钟。选择条件必须同时匹配工作流名称、事件类型、精确 head SHA、版本和请求 ID；找不到或出现重复匹配都会停止，绝不退回“最新一条”任务。
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 $expectedTitle = "Export Qwen checkpoint 2026.08.3 ($requestId)"
 gh workflow run qwen-checkpoint-export.yml --ref main -f version=2026.08.3 -f request_id=$requestId
 $runId = $null
@@ -91,6 +118,8 @@ npm run content:checkpoint:import -- --version 2026.08.3 --source .content-agent
 下面的命令会产生 Qwen API 费用。应在确认兼容检查点导入成功并获得明确许可后运行：
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 npm run content:qwen:local -- --version 2026.08.3
 ```
 
@@ -102,6 +131,8 @@ npm run content:qwen:local -- --version 2026.08.3
 ### 4. 在 localhost 页面审核并明确停止服务
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 npm run content:review -- --version 2026.08.3
 ```
 
@@ -116,6 +147,8 @@ npm run content:review -- --version 2026.08.3
 不要切换目录或另建 worktree。确认审核服务已经退出后，在保存上述全部 `.content-agent` 文件的当前 worktree 中运行：
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 npm run content:release:approved -- --version 2026.08.3
 ```
 
@@ -126,11 +159,60 @@ npm run content:release:approved -- --version 2026.08.3
 
 命令使用非强制推送，并确认远端 `main` 精确指向该提交。随后它明确运行 `deploy.yml`，把同一个 40 位提交 SHA 作为 `approved_sha` 传入；部署工作流拒绝 SHA 不一致的事件，并在服务器检出该精确提交，而不是稍后的 `main`。
 
+## 精确部署失败后的恢复
+
+发布命令的 push 会先产生一个 `deploy.yml` push-event 任务。显式派发失败或部署步骤失败时，优先重跑这个**精确任务 ID**的失败作业，不能选择“最新任务”。通用形式是 `gh run rerun <exact push-event RUN_ID> --failed`。以下命令用已批准提交的 40 位 SHA 精确筛选 workflow、event 和 head SHA，要求唯一匹配，然后重跑并监控同一个 ID：
+
+```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+$approvedSha = Read-Host "已批准并已推送的 40 位提交 SHA"
+if ($approvedSha -notmatch '^[0-9a-f]{40}$') { throw "批准 SHA 格式无效" }
+$pushRuns = gh run list --workflow deploy.yml --event push --commit $approvedSha --limit 100 --json databaseId,event,headSha,workflowName | ConvertFrom-Json
+$matchingPushRuns = @($pushRuns | Where-Object {
+  $_.event -eq "push" -and
+  $_.headSha -eq $approvedSha -and
+  $_.workflowName -eq "Test and deploy"
+})
+if ($matchingPushRuns.Count -ne 1) { throw "无法唯一确定精确 push-event 部署任务" }
+$pushRunId = $matchingPushRuns[0].databaseId
+gh run rerun $pushRunId --failed
+gh run watch $pushRunId --exit-status
+```
+
+只有精确 push-event 任务无法恢复时才考虑手动派发。派发前必须重新 fetch，并证明 `origin/main` 仍然逐字等于已批准 SHA；不相等时禁止派发。派发后按返回的精确 manual run ID 监控，不要监控“最新任务”：
+
+```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
+git fetch --no-tags origin main
+$originMainSha = (git rev-parse origin/main).Trim()
+if ($originMainSha -ne $approvedSha) { throw "origin/main 已不再指向批准 SHA；禁止手动部署" }
+$beforeManualIds = @(gh run list --workflow deploy.yml --event workflow_dispatch --commit $approvedSha --limit 100 --json databaseId | ConvertFrom-Json | ForEach-Object databaseId)
+gh workflow run deploy.yml --ref main -f approved_sha=$approvedSha
+$manualRunId = $null
+for ($attempt = 1; $attempt -le 30 -and -not $manualRunId; $attempt++) {
+  $manualRuns = gh run list --workflow deploy.yml --event workflow_dispatch --commit $approvedSha --limit 100 --json databaseId,event,headSha,workflowName | ConvertFrom-Json
+  $newMatches = @($manualRuns | Where-Object {
+    $_.databaseId -notin $beforeManualIds -and
+    $_.event -eq "workflow_dispatch" -and
+    $_.headSha -eq $approvedSha -and
+    $_.workflowName -eq "Test and deploy"
+  })
+  if ($newMatches.Count -gt 1) { throw "发现多个候选手动部署任务；停止监控" }
+  if ($newMatches.Count -eq 1) { $manualRunId = $newMatches[0].databaseId } else { Start-Sleep -Seconds 2 }
+}
+if (-not $manualRunId) { throw "未找到精确的手动部署任务" }
+gh run watch $manualRunId --exit-status
+```
+
 ### 6. 部署确认后的安全清理
 
 先确认精确 SHA 的部署和网页健康检查成功。清理会删除该 worktree 内的 `.content-agent` 检查点、候选、报告和审核记录；如果需要保留审计材料，应先复制到仓库之外的受保护位置。然后回到原仓库并执行非强制删除：
 
 ```powershell
+$ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $true
 Set-Location $repoRoot
 git worktree remove $worktreePath
 ```
