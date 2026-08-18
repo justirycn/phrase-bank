@@ -286,8 +286,10 @@ describe("PhraseBankApp", () => {
     expect(screen.queryByText("Missing state")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
     await user.click(screen.getByRole("button", { name: /掌握/ }));
-    const secondPrompt = await screen.findByText(/^(已学习提示|已掌握提示)$/);
-    expect(secondPrompt.textContent).toBe(firstPromptText === "已学习提示" ? "已掌握提示" : "已学习提示");
+    const expectedSecond = firstPromptText === "已学习提示" ? "已掌握提示" : "已学习提示";
+    const secondPrompt = await screen.findByText(expectedSecond);
+    expect(secondPrompt.textContent).toBe(expectedSecond);
+    expect(secondPrompt.textContent).not.toBe(firstPromptText);
     expect(screen.getByText(/第\s*2\s*\/\s*2\s*个/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
     await user.click(screen.getByRole("button", { name: /掌握/ }));
