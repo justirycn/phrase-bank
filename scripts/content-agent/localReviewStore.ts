@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, realpath, rename, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, readFile, realpath, rename, unlink } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { ReviewItem, ReviewState } from "./localReview";
@@ -15,10 +16,12 @@ export interface LocalReviewSeed {
 
 export interface SaveReviewDependencies {
   validIds?: readonly string[];
-  writeTemp?: (path: string, contents: string) => Promise<void>;
+  writeTemp?: (path: string, contents: string, claimIdentity: (identity: { dev: bigint; ino: bigint }) => void) => Promise<void>;
   atomicReplace?: (temporaryPath: string, destinationPath: string) => Promise<void>;
+  retryDelay?: (milliseconds: number) => Promise<void>;
   syncDirectory?: (directoryPath: string) => Promise<void>;
   syncCommittedDestination?: (destinationPath: string) => Promise<void>;
+  openCommittedDestination?: typeof open;
   platform?: NodeJS.Platform;
 }
 
@@ -38,7 +41,13 @@ const STATE_KEYS = new Set(["format", "version", "candidateSha256", "sampleSeed"
 const ITEM_KEYS = new Set(["decision", "note", "updatedAt"]);
 const VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
+const REVIEW_REPLACE_ATTEMPTS = 5;
 const PATH_QUEUES = new Map<string, Promise<void>>();
+
+interface OwnedTempIdentity {
+  dev: bigint;
+  ino: bigint;
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   // Persisted JSON records use the ordinary object prototype; null and custom prototypes are rejected.
@@ -164,14 +173,27 @@ function sameIdentity(value: Record<string, unknown>, seed: LocalReviewSeed): bo
     && sameArray(value.sampledIds as string[], seed.sampledIds);
 }
 
-async function defaultWriteTemp(path: string, contents: string): Promise<void> {
+async function defaultWriteTemp(
+  path: string,
+  contents: string,
+  claimIdentity: (identity: OwnedTempIdentity) => void,
+): Promise<void> {
   const handle = await open(path, "wx");
   try {
+    const metadata = await handle.stat({ bigint: true });
+    if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("Review temporary file has an invalid type");
+    const identity = { dev: metadata.dev, ino: metadata.ino };
+    claimIdentity(identity);
+    await assertOwnedTempPath(path, identity);
     await handle.writeFile(contents, "utf8");
     await handle.sync();
   } finally {
     await handle.close();
   }
+}
+
+async function defaultRetryDelay(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function defaultSyncDirectory(path: string): Promise<void> {
@@ -183,11 +205,20 @@ async function defaultSyncDirectory(path: string): Promise<void> {
   }
 }
 
-async function defaultSyncCommittedDestination(path: string): Promise<void> {
+async function defaultSyncCommittedDestination(
+  path: string,
+  identity: OwnedTempIdentity,
+  openCommitted: typeof open,
+): Promise<void> {
   // Node cannot request MOVEFILE_WRITE_THROUGH for rename. Reopening read/write and syncing invokes
   // FlushFileBuffers on Windows, the strongest low-latency committed-file primitive Node exposes.
-  const handle = await open(path, "r+");
+  const handle = await openCommitted(path, constants.O_RDWR | constants.O_NOFOLLOW);
   try {
+    const metadata = await handle.stat({ bigint: true });
+    if (!metadata.isFile() || metadata.dev !== identity.dev || metadata.ino !== identity.ino) {
+      throw new Error("Review committed destination ownership changed");
+    }
+    await assertOwnedCommittedDestination(path, identity);
     await handle.sync();
   } finally {
     await handle.close();
@@ -210,8 +241,55 @@ function parentDirectoriesForCreatedPath(firstCreated: string, targetDirectory: 
   return parents;
 }
 
-async function removeOwnedTemp(path: string): Promise<void> {
+async function assertOwnedTempPath(path: string, identity: OwnedTempIdentity): Promise<void> {
+  let metadata;
   try {
+    metadata = await lstat(path, { bigint: true });
+  } catch (error) {
+    throw new Error("Review temporary file ownership changed", { cause: error });
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.dev !== identity.dev || metadata.ino !== identity.ino) {
+    throw new Error("Review temporary file ownership changed");
+  }
+}
+
+async function assertOwnedCommittedDestination(path: string, identity: OwnedTempIdentity): Promise<void> {
+  let metadata;
+  try {
+    metadata = await lstat(path, { bigint: true });
+  } catch (error) {
+    throw new Error("Review committed destination ownership changed", { cause: error });
+  }
+  if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.dev !== identity.dev || metadata.ino !== identity.ino) {
+    throw new Error("Review committed destination ownership changed");
+  }
+}
+
+async function verifyCommittedDestination(path: string, identity: OwnedTempIdentity, contents: string): Promise<void> {
+  let handle;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    throw new Error("Review committed destination ownership changed", { cause: error });
+  }
+  try {
+    const metadata = await handle.stat({ bigint: true });
+    if (!metadata.isFile() || metadata.dev !== identity.dev || metadata.ino !== identity.ino) {
+      throw new Error("Review committed destination ownership changed");
+    }
+    await assertOwnedCommittedDestination(path, identity);
+    if (await handle.readFile("utf8") !== contents) throw new Error("Review committed destination contents changed");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function removeOwnedTemp(path: string, identity?: OwnedTempIdentity): Promise<void> {
+  try {
+    if (identity) {
+      const metadata = await lstat(path, { bigint: true });
+      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.dev !== identity.dev || metadata.ino !== identity.ino) return;
+    }
     await unlink(path);
   } catch (error) {
     if (!hasErrorCode(error, "ENOENT")) throw error;
@@ -248,24 +326,44 @@ export async function saveReview(path: string, state: ReviewState, dependencies:
   const parent = dirname(path);
   const createdDirectory = await mkdir(parent, { recursive: true });
   const temporaryPath = join(parent, `.${basename(path)}.pending-${process.pid}-${randomUUID()}`);
+  let temporaryIdentity: OwnedTempIdentity | undefined;
   try {
-    await (dependencies.writeTemp ?? defaultWriteTemp)(temporaryPath, contents);
+    await (dependencies.writeTemp ?? defaultWriteTemp)(temporaryPath, contents, (identity) => { temporaryIdentity = identity; });
+    if (!temporaryIdentity) {
+      const metadata = await lstat(temporaryPath, { bigint: true });
+      if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("Review temporary file has an invalid type");
+      temporaryIdentity = { dev: metadata.dev, ino: metadata.ino };
+    }
+    const ownedIdentity = temporaryIdentity;
     const platform = dependencies.platform ?? process.platform;
     if (platform !== "win32" && createdDirectory) {
       for (const directory of parentDirectoriesForCreatedPath(createdDirectory, parent)) {
         await (dependencies.syncDirectory ?? defaultSyncDirectory)(directory);
       }
     }
-    await (dependencies.atomicReplace ?? rename)(temporaryPath, path);
+    for (let attempt = 1; ; attempt += 1) {
+      await assertOwnedTempPath(temporaryPath, ownedIdentity);
+      try {
+        await (dependencies.atomicReplace ?? rename)(temporaryPath, path);
+        break;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (platform !== "win32" || (code !== "EPERM" && code !== "EACCES") || attempt >= REVIEW_REPLACE_ATTEMPTS) throw error;
+        await (dependencies.retryDelay ?? defaultRetryDelay)(10 * 2 ** (attempt - 1));
+      }
+    }
+    await verifyCommittedDestination(path, ownedIdentity, contents);
     if (platform === "win32") {
-      await (dependencies.syncCommittedDestination ?? defaultSyncCommittedDestination)(path);
+      if (dependencies.syncCommittedDestination) await dependencies.syncCommittedDestination(path);
+      else await defaultSyncCommittedDestination(path, ownedIdentity, dependencies.openCommittedDestination ?? open);
     } else {
       // A sync failure after rename is reported without rollback: the new file may already be durable and is reloaded next time.
       await (dependencies.syncDirectory ?? defaultSyncDirectory)(parent);
     }
+    temporaryIdentity = undefined;
   } catch (error) {
     try {
-      await removeOwnedTemp(temporaryPath);
+      if (temporaryIdentity) await removeOwnedTemp(temporaryPath, temporaryIdentity);
     } catch (cleanupError) {
       throw new AggregateError([error, cleanupError], "Review save failed and its owned temporary file could not be cleaned");
     }

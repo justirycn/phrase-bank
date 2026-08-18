@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -49,6 +50,12 @@ function decided(seed: LocalReviewSeed): ReviewState {
     },
     approvedAt: "2026-08-18T12:01:00.000Z",
   };
+}
+
+function transientReplaceError(code: "EPERM" | "EACCES"): NodeJS.ErrnoException {
+  const error = new Error(`simulated ${code} replacement contention`) as NodeJS.ErrnoException;
+  error.code = code;
+  return error;
 }
 
 describe("loadOrCreateReview", () => {
@@ -199,7 +206,12 @@ describe("saveReview", () => {
     await writeFile(foreign, "foreign");
 
     const dependencies = failure === "write"
-      ? { validIds: seed.validIds, writeTemp: async (path: string) => { await writeFile(path, "partial", { flag: "wx" }); throw new Error("write failed"); } }
+      ? { validIds: seed.validIds, writeTemp: async (path: string, _contents: string, claimIdentity: (identity: { dev: bigint; ino: bigint }) => void) => {
+        await writeFile(path, "partial", { flag: "wx" });
+        const metadata = await lstat(path, { bigint: true });
+        claimIdentity({ dev: metadata.dev, ino: metadata.ino });
+        throw new Error("write failed");
+      } }
       : { validIds: seed.validIds, atomicReplace: async () => { throw new Error("replace failed"); } };
     await expect(saveReview(seed.path, { ...decided(seed), approvedAt: "2026-08-18T12:03:00.000Z" }, dependencies)).rejects.toThrow(`${failure} failed`);
 
@@ -318,6 +330,128 @@ describe("saveReview", () => {
       syncCommittedDestination: async () => { throw new Error("committed file sync failed"); },
     })).rejects.toThrow("committed file sync failed");
     expect(JSON.parse(await readFile(seed.path, "utf8"))).toEqual(next);
+  });
+
+  it("retries transient Windows replacement contention without losing the pending review", async () => {
+    const { seed } = await fixture();
+    const prior = decided(seed);
+    await saveReview(seed.path, prior, { validIds: seed.validIds });
+    const next = { ...prior, approvedAt: "2026-08-18T12:03:00.000Z" };
+    const attempts: string[] = [];
+    const delays: number[] = [];
+
+    await saveReview(seed.path, next, {
+      validIds: seed.validIds,
+      platform: "win32",
+      atomicReplace: async (temporaryPath, destinationPath) => {
+        attempts.push(temporaryPath);
+        if (attempts.length === 1) throw transientReplaceError("EPERM");
+        if (attempts.length === 2) throw transientReplaceError("EACCES");
+        await rename(temporaryPath, destinationPath);
+      },
+      retryDelay: async (milliseconds) => { delays.push(milliseconds); },
+      syncCommittedDestination: async () => undefined,
+    });
+
+    expect(attempts).toHaveLength(3);
+    expect(new Set(attempts).size).toBe(1);
+    expect(delays).toEqual([10, 20]);
+    expect(JSON.parse(await readFile(seed.path, "utf8"))).toEqual(next);
+    expect((await readdir(dirname(seed.path))).filter((name) => name.includes(".pending-"))).toEqual([]);
+  });
+
+  it("revalidates temporary-file ownership before a Windows replacement retry and never follows or deletes a swapped link", async () => {
+    const { seed } = await fixture();
+    const prior = decided(seed);
+    await saveReview(seed.path, prior, { validIds: seed.validIds });
+    const priorBytes = await readFile(seed.path, "utf8");
+    const foreignPath = join(dirname(seed.path), "foreign-review.json");
+    await writeFile(foreignPath, "foreign bytes", "utf8");
+    let pendingPath = "";
+    let attempts = 0;
+
+    await expect(saveReview(seed.path, { ...prior, approvedAt: "2026-08-18T12:03:00.000Z" }, {
+      validIds: seed.validIds,
+      platform: "win32",
+      atomicReplace: async (temporaryPath) => {
+        pendingPath = temporaryPath;
+        attempts += 1;
+        throw transientReplaceError("EPERM");
+      },
+      retryDelay: async () => {
+        await rm(pendingPath, { force: true });
+        await symlink(foreignPath, pendingPath, "file");
+      },
+      syncCommittedDestination: async () => undefined,
+    })).rejects.toThrow(/ownership|temporary|临时|所有权/i);
+
+    expect(attempts).toBe(1);
+    expect(await readFile(seed.path, "utf8")).toBe(priorBytes);
+    expect((await lstat(pendingPath)).isSymbolicLink()).toBe(true);
+    expect(await readFile(foreignPath, "utf8")).toBe("foreign bytes");
+  });
+
+  it("does not delete an unproven foreign link left at the temporary path by a failed writer", async () => {
+    const { seed } = await fixture();
+    const foreignPath = join(dirname(seed.path), "foreign-write.json");
+    await mkdir(dirname(seed.path), { recursive: true });
+    await writeFile(foreignPath, "foreign write bytes", "utf8");
+    let pendingPath = "";
+
+    await expect(saveReview(seed.path, decided(seed), {
+      validIds: seed.validIds,
+      writeTemp: async (path) => {
+        pendingPath = path;
+        await symlink(foreignPath, path, "file");
+        throw new Error("writer lost ownership");
+      },
+    })).rejects.toThrow("writer lost ownership");
+
+    expect((await lstat(pendingPath)).isSymbolicLink()).toBe(true);
+    expect(await readFile(foreignPath, "utf8")).toBe("foreign write bytes");
+  });
+
+  it("rejects a foreign destination link swapped in immediately after Windows replacement without following it", async () => {
+    const { seed } = await fixture();
+    await saveReview(seed.path, decided(seed), { validIds: seed.validIds });
+    const foreignPath = join(dirname(seed.path), "foreign-destination.json");
+    await writeFile(foreignPath, "foreign destination bytes", "utf8");
+
+    await expect(saveReview(seed.path, { ...decided(seed), approvedAt: "2026-08-18T12:03:00.000Z" }, {
+      validIds: seed.validIds,
+      platform: "win32",
+      atomicReplace: async (temporaryPath, destinationPath) => {
+        await rename(temporaryPath, destinationPath);
+        await rm(destinationPath, { force: true });
+        await symlink(foreignPath, destinationPath, "file");
+      },
+    })).rejects.toThrow(/ownership|committed|destination|所有权|已提交/i);
+
+    expect((await lstat(seed.path)).isSymbolicLink()).toBe(true);
+    expect(await readFile(foreignPath, "utf8")).toBe("foreign destination bytes");
+  });
+
+  it("uses no-follow read/write open when a destination swap races the Windows durability sync", async () => {
+    const { seed } = await fixture();
+    const foreignPath = join(dirname(seed.path), "foreign-sync.json");
+    await mkdir(dirname(seed.path), { recursive: true });
+    await writeFile(foreignPath, "foreign sync bytes", "utf8");
+    let flagsSeen: number | string | undefined;
+
+    await expect(saveReview(seed.path, decided(seed), {
+      validIds: seed.validIds,
+      platform: "win32",
+      openCommittedDestination: (async (path: string, flags: number | string) => {
+        flagsSeen = flags;
+        await rm(path, { force: true });
+        await symlink(foreignPath, path, "file");
+        return open(path, flags);
+      }) as typeof open,
+    })).rejects.toThrow();
+
+    expect(flagsSeen).toBe(constants.O_RDWR | constants.O_NOFOLLOW);
+    expect((await lstat(seed.path)).isSymbolicLink()).toBe(true);
+    expect(await readFile(foreignPath, "utf8")).toBe("foreign sync bytes");
   });
 
   it("persists a newly created review directory entry before commit and the commit afterward on POSIX", async () => {
@@ -492,6 +626,39 @@ describe("createLocalReviewStore", () => {
     await expect(failing.update((current) => ({ ...current, items: { "phrase-1": { decision: "issue", note: "bad", updatedAt: "2026-08-18T12:00:00.000Z" } } }))).rejects.toThrow("replace failed");
     const saved = await healthy.update((current) => ({ ...current, items: { "phrase-2": { decision: "pass", note: "good", updatedAt: "2026-08-18T12:00:00.000Z" } } }));
     expect(saved.items).toEqual({ "phrase-2": expect.objectContaining({ note: "good" }) });
+  });
+
+  it("preserves prior state after bounded Windows retry exhaustion and keeps the queue usable", async () => {
+    const { seed } = await fixture();
+    await saveReview(seed.path, decided(seed), { validIds: seed.validIds });
+    const priorBytes = await readFile(seed.path, "utf8");
+    let attempts = 0;
+    const store = await createLocalReviewStore(seed, {
+      platform: "win32",
+      atomicReplace: async (temporaryPath, destinationPath) => {
+        attempts += 1;
+        if (attempts <= 5) throw transientReplaceError(attempts % 2 ? "EPERM" : "EACCES");
+        await rename(temporaryPath, destinationPath);
+      },
+      retryDelay: async () => undefined,
+      syncCommittedDestination: async () => undefined,
+    });
+
+    await expect(store.update((current) => ({
+      ...current,
+      approvedAt: "2026-08-18T12:02:00.000Z",
+    }))).rejects.toMatchObject({ code: "EPERM" });
+    expect(attempts).toBe(5);
+    expect(await readFile(seed.path, "utf8")).toBe(priorBytes);
+    expect((await readdir(dirname(seed.path))).filter((name) => name.includes(".pending-"))).toEqual([]);
+
+    const recovered = await store.update((current) => ({
+      ...current,
+      approvedAt: "2026-08-18T12:03:00.000Z",
+    }));
+    expect(attempts).toBe(6);
+    expect(recovered.approvedAt).toBe("2026-08-18T12:03:00.000Z");
+    expect(JSON.parse(await readFile(seed.path, "utf8"))).toEqual(recovered);
   });
 
   it("reloads disk truth after post-rename sync failure and keeps the shared queue usable", async () => {
