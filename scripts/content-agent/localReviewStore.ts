@@ -27,6 +27,11 @@ export interface LocalReviewStore {
   update(mutator: (current: ReviewState) => ReviewState | Promise<ReviewState>): Promise<ReviewState>;
 }
 
+export interface CanonicalLocalReviewPath {
+  physicalPath: string;
+  queueKey: string;
+}
+
 const FORMAT = "phrase-bank-local-review";
 const SEED_KEYS = new Set(["path", "version", "candidateSha256", "sampleSeed", "sampledIds", "validIds"]);
 const STATE_KEYS = new Set(["format", "version", "candidateSha256", "sampleSeed", "sampledIds", "items", "approvedAt"]);
@@ -319,11 +324,6 @@ function assertSameIdentity(state: ReviewState, seed: LocalReviewSeed): void {
   }
 }
 
-function platformCanonicalPath(path: string): string {
-  const absolute = resolve(nativeWindowsPath(path));
-  return process.platform === "win32" ? absolute.toLowerCase() : absolute;
-}
-
 function nativeWindowsPath(path: string): string {
   if (process.platform !== "win32") return path;
   if (path.startsWith("\\\\?\\UNC\\")) return `\\\\${path.slice(8)}`;
@@ -331,13 +331,20 @@ function nativeWindowsPath(path: string): string {
   return path;
 }
 
-export async function canonicalLocalReviewPath(path: string): Promise<string> {
+export async function canonicalLocalReviewPath(
+  path: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<CanonicalLocalReviewPath> {
   let cursor = resolve(path);
   const missingSegments: string[] = [];
   while (true) {
     try {
       const existingAncestor = await realpath(cursor);
-      return platformCanonicalPath(resolve(nativeWindowsPath(existingAncestor), ...missingSegments));
+      const physicalPath = resolve(nativeWindowsPath(existingAncestor), ...missingSegments);
+      return {
+        physicalPath,
+        queueKey: platform === "win32" ? physicalPath.toLowerCase() : physicalPath,
+      };
     } catch (error) {
       if (!hasErrorCode(error, "ENOENT")) throw error;
       const parent = dirname(cursor);
@@ -364,16 +371,16 @@ export async function createLocalReviewStore(
   dependencies: Omit<SaveReviewDependencies, "validIds"> = {},
 ): Promise<LocalReviewStore> {
   validateSeed(seed);
-  const pathKey = await canonicalLocalReviewPath(seed.path);
-  const storageSeed = { ...seed, path: pathKey };
-  await enqueuePathOperation(pathKey, () => loadOrCreateReview(storageSeed));
+  const { physicalPath, queueKey } = await canonicalLocalReviewPath(seed.path);
+  const storageSeed = { ...seed, path: physicalPath };
+  await enqueuePathOperation(queueKey, () => loadOrCreateReview(storageSeed));
 
   return {
     read() {
-      return enqueuePathOperation(pathKey, () => loadOrCreateReview(storageSeed));
+      return enqueuePathOperation(queueKey, () => loadOrCreateReview(storageSeed));
     },
     update(mutator) {
-      return enqueuePathOperation(pathKey, async () => {
+      return enqueuePathOperation(queueKey, async () => {
         const current = await loadOrCreateReview(storageSeed);
         const next = await mutator(immutableClone(current));
         validateState(next);

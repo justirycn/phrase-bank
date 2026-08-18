@@ -520,8 +520,29 @@ describe("createLocalReviewStore", () => {
     const realTarget = join(directory, "missing", "nested", "review.json");
     const aliasTarget = join(alias, "missing", "nested", "review.json");
 
-    expect(await canonicalLocalReviewPath(realTarget)).toBe(await canonicalLocalReviewPath(aliasTarget));
+    const realCanonical = await canonicalLocalReviewPath(realTarget);
+    const aliasCanonical = await canonicalLocalReviewPath(aliasTarget);
+    expect(aliasCanonical).toEqual(realCanonical);
     await expect(readdir(join(directory, "missing"))).rejects.toThrow();
+  });
+
+  it("preserves mixed-case physical paths while deriving a lowercase Windows queue key", async () => {
+    const { directory } = await fixture();
+    const mixedTail = join("MissingReviewDir", "MiXeD-Review.JSON");
+    const canonical = await canonicalLocalReviewPath(join(directory, mixedTail), "win32");
+
+    expect(canonical.physicalPath.endsWith(mixedTail)).toBe(true);
+    expect(canonical.queueKey).toBe(canonical.physicalPath.toLowerCase());
+    expect(canonical.physicalPath).not.toBe(canonical.queueKey);
+    await expect(readdir(join(directory, "MissingReviewDir"))).rejects.toThrow();
+  });
+
+  it("keeps case-distinct physical targets and queue keys on case-sensitive platforms", async () => {
+    const { directory } = await fixture();
+    const upper = await canonicalLocalReviewPath(join(directory, "Review-A.json"), "linux");
+    const lower = await canonicalLocalReviewPath(join(directory, "review-a.json"), "linux");
+    expect(upper.physicalPath).not.toBe(lower.physicalPath);
+    expect(upper.queueKey).not.toBe(lower.queueKey);
   });
 
   it("serializes initialization through an alias before any missing review directory is created", async () => {
