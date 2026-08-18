@@ -6,7 +6,8 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { generateSystemContent } from "../../scripts/content-agent/generator";
-import { importQwenCheckpoint, loadQwenCheckpoint, sourceSha256 } from "../../scripts/content-agent/qwenCheckpoint";
+import { assertContentVersion, importQwenCheckpoint, loadQwenCheckpoint, sourceSha256 } from "../../scripts/content-agent/qwenCheckpoint";
+import { parseImportQwenCheckpointArguments } from "../../scripts/import-qwen-checkpoint";
 
 const VERSION = "2026.08.3";
 const execFileAsync = promisify(execFile);
@@ -31,6 +32,15 @@ async function checkpointFile(value: unknown, prefix = "phrase-bank-qwen-checkpo
 }
 
 describe("Qwen checkpoint validation", () => {
+  it.each(["../2026.08.3", "2026/08/3", "2026.08.3;echo pwned", "2026.8.3", "26.08.3", "2026.08.3\nnext"])("rejects unsafe content version %j", (version) => {
+    expect(() => assertContentVersion(version)).toThrow(/version/i);
+  });
+
+  it("accepts only the strict YYYY.MM.N content version shape", () => {
+    expect(assertContentVersion("2026.08.3")).toBe("2026.08.3");
+    expect(assertContentVersion("2026.08.123")).toBe("2026.08.123");
+  });
+
   it("accepts the real 1,220-phrase server prefix in legacy form and preserves its order and content", async () => {
     const { sourceContent, phrases } = fixture();
     const { path } = await checkpointFile({ version: VERSION, phrases });
@@ -121,7 +131,7 @@ describe("Qwen checkpoint import", () => {
     await expect(readdir(join(destinationRoot, "invalid"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("cleans a stale pending file on failure so a safe retry can import without changing the source", async () => {
+  it("does not touch an unowned legacy pending file and imports through an owned unique temporary file", async () => {
     const { sourceContent, phrases } = fixture();
     const source = (await checkpointFile({ version: VERSION, phrases }, "phrase-bank-qwen-import-stale-source-")).path;
     const destinationRoot = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-import-stale-destination-"));
@@ -130,12 +140,10 @@ describe("Qwen checkpoint import", () => {
     const originalSource = await readFile(source, "utf8");
     await writeFile(pending, "stale pending content", "utf8");
 
-    await expect(importQwenCheckpoint({ source, destination, version: VERSION, sourceContent })).rejects.toMatchObject({ code: "EEXIST" });
-    expect(await readdir(destinationRoot)).not.toContain(`checkpoint-${VERSION}.json.pending`);
-
     await expect(importQwenCheckpoint({ source, destination, version: VERSION, sourceContent })).resolves.toEqual({ count: 1_220, destination });
     expect(await readFile(source, "utf8")).toBe(originalSource);
     await expect(loadQwenCheckpoint({ path: destination, version: VERSION, sourceContent })).resolves.toMatchObject({ phrases });
+    expect(await readFile(pending, "utf8")).toBe("stale pending content");
 
     const conflicting = structuredClone(phrases);
     conflicting[0].english = "Conflicting reviewed content.";
@@ -143,6 +151,52 @@ describe("Qwen checkpoint import", () => {
     const originalDestination = await readFile(destination, "utf8");
     await expect(importQwenCheckpoint({ source: conflictingSource, destination, version: VERSION, sourceContent })).rejects.toThrow(/conflict/i);
     expect(await readFile(destination, "utf8")).toBe(originalDestination);
+  });
+
+  it("serializes concurrent identical imports and leaves one valid destination without owned lock or temp files", async () => {
+    const { sourceContent, phrases } = fixture();
+    const source = (await checkpointFile({ version: VERSION, phrases }, "phrase-bank-qwen-concurrent-same-source-")).path;
+    const destinationRoot = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-concurrent-same-destination-"));
+    const destination = join(destinationRoot, `checkpoint-${VERSION}.json`);
+
+    const results = await Promise.all(Array.from({ length: 6 }, () => importQwenCheckpoint({ source, destination, version: VERSION, sourceContent })));
+
+    expect(results).toEqual(Array.from({ length: 6 }, () => ({ count: 1_220, destination })));
+    await expect(loadQwenCheckpoint({ path: destination, version: VERSION, sourceContent })).resolves.toMatchObject({ phrases });
+    expect(await readdir(destinationRoot)).toEqual([`checkpoint-${VERSION}.json`]);
+  });
+
+  it("allows exactly one concurrent conflicting import to win and refuses the loser without corruption", async () => {
+    const { sourceContent, phrases } = fixture();
+    const firstSource = (await checkpointFile({ version: VERSION, phrases }, "phrase-bank-qwen-concurrent-first-")).path;
+    const conflicting = structuredClone(phrases);
+    conflicting[0].english = "Conflicting concurrent content.";
+    const secondSource = (await checkpointFile({ version: VERSION, phrases: conflicting }, "phrase-bank-qwen-concurrent-second-")).path;
+    const destinationRoot = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-concurrent-conflict-destination-"));
+    const destination = join(destinationRoot, `checkpoint-${VERSION}.json`);
+
+    const results = await Promise.allSettled([
+      importQwenCheckpoint({ source: firstSource, destination, version: VERSION, sourceContent }),
+      importQwenCheckpoint({ source: secondSource, destination, version: VERSION, sourceContent }),
+    ]);
+
+    expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(({ status }) => status === "rejected")).toHaveLength(1);
+    expect((results.find(({ status }) => status === "rejected") as PromiseRejectedResult).reason).toEqual(expect.objectContaining({ message: expect.stringMatching(/conflict/i) }));
+    const loaded = await loadQwenCheckpoint({ path: destination, version: VERSION, sourceContent });
+    expect([phrases[0].english, conflicting[0].english]).toContain(loaded.phrases[0].english);
+    expect(await readdir(destinationRoot)).toEqual([`checkpoint-${VERSION}.json`]);
+  });
+
+  it("recovers a dead-owner lock without treating it as an active importer", async () => {
+    const { sourceContent, phrases } = fixture();
+    const source = (await checkpointFile({ version: VERSION, phrases }, "phrase-bank-qwen-stale-lock-source-")).path;
+    const destinationRoot = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-stale-lock-destination-"));
+    const destination = join(destinationRoot, `checkpoint-${VERSION}.json`);
+    await writeFile(`${destination}.lock`, JSON.stringify({ pid: 2_147_483_647, token: "dead-owner" }), "utf8");
+
+    await expect(importQwenCheckpoint({ source, destination, version: VERSION, sourceContent })).resolves.toEqual({ count: 1_220, destination });
+    expect(await readdir(destinationRoot)).toEqual([`checkpoint-${VERSION}.json`]);
   });
 
   it("provides a required-argument CLI that reports only count and destination", async () => {
@@ -161,5 +215,13 @@ describe("Qwen checkpoint import", () => {
     expect(stdout.trim()).toBe(`Imported 1220 phrases to ${destination}`);
     expect(stdout).not.toContain(phrases[0].english);
     expect(JSON.parse(await readFile(resolve("package.json"), "utf8")).scripts["content:checkpoint:import"]).toBe("tsx scripts/import-qwen-checkpoint.ts");
+  });
+
+  it("parses CLI values without accepting missing values, unknown flags, or traversal versions", () => {
+    expect(parseImportQwenCheckpointArguments(["--version", VERSION, "--source", "artifact.json"])).toEqual({ version: VERSION, source: "artifact.json" });
+    expect(() => parseImportQwenCheckpointArguments(["--version", "--source", "artifact.json"])).toThrow(/--version.*value/i);
+    expect(() => parseImportQwenCheckpointArguments(["--version", VERSION, "--source", "--unknown"])).toThrow(/--source.*value/i);
+    expect(() => parseImportQwenCheckpointArguments(["--version", VERSION, "--source", "artifact.json", "--unknown"])).toThrow(/unknown/i);
+    expect(() => parseImportQwenCheckpointArguments(["--version", "../2026.08.3", "--source", "artifact.json"])).toThrow(/version/i);
   });
 });

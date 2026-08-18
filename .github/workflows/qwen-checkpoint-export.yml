@@ -15,6 +15,16 @@ jobs:
   export-checkpoint:
     runs-on: ubuntu-latest
     steps:
+      - name: Validate content version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ ! "$REQUESTED_VERSION" =~ ^([0-9]{4})\.([0-9]{2})\.([0-9]+)$ ]]; then
+            echo "Invalid content version"
+            exit 1
+          fi
+          CONTENT_VERSION=$REQUESTED_VERSION
+          printf 'CONTENT_VERSION=%s\n' "$CONTENT_VERSION" >> "$GITHUB_ENV"
       - name: Configure SSH
         env:
           TENCENT_HOST: ${{ secrets.TENCENT_HOST }}
@@ -31,7 +41,7 @@ jobs:
           TENCENT_USER: ${{ secrets.TENCENT_USER }}
         run: |
           mkdir -p .content-agent
-          scp -i ~/.ssh/tencent_qwen -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST:/opt/phrase-bank/.content-agent/checkpoint-${{ inputs.version }}.json" ".content-agent/checkpoint-${{ inputs.version }}.json"
+          scp -i ~/.ssh/tencent_qwen -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST:/opt/phrase-bank/.content-agent/checkpoint-$CONTENT_VERSION.json" ".content-agent/qwen-checkpoint.json"
       - name: Remove SSH key
         if: always()
         run: rm -f ~/.ssh/tencent_qwen
@@ -39,6 +49,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: qwen-checkpoint-${{ inputs.version }}
-          path: .content-agent/checkpoint-${{ inputs.version }}.json
+          path: .content-agent/qwen-checkpoint.json
           retention-days: 1
           if-no-files-found: error

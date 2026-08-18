@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { link, mkdir, open, readFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { SystemContentPackage, SystemContentPhrase } from "../../app/domain/types";
 
@@ -23,6 +23,12 @@ interface ImportOptions {
 }
 
 const MUTABLE_PHRASE_FIELDS = new Set(["english", "chinese", "contentVersion", "qualityVersion"]);
+const CONTENT_VERSION_PATTERN = /^[0-9]{4}\.[0-9]{2}\.[0-9]+$/;
+
+export function assertContentVersion(version: unknown): string {
+  if (typeof version !== "string" || !CONTENT_VERSION_PATTERN.test(version)) throw new Error("Content version must use YYYY.MM.N with digits only");
+  return version;
+}
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -53,6 +59,7 @@ function validatePhrase(value: unknown, index: number): asserts value is SystemC
 }
 
 export async function loadQwenCheckpoint(options: LoadOptions): Promise<QwenCheckpoint> {
+  assertContentVersion(options.version);
   const parsed = JSON.parse(await readFile(options.path, "utf8")) as Record<string, unknown>;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Checkpoint is malformed");
   if (parsed.version !== options.version) throw new Error(`Checkpoint version does not match ${options.version}`);
@@ -80,37 +87,116 @@ export async function loadQwenCheckpoint(options: LoadOptions): Promise<QwenChec
 export async function importQwenCheckpoint(options: ImportOptions): Promise<{ count: number; destination: string }> {
   const checkpoint = await loadQwenCheckpoint({ path: options.source, version: options.version, sourceContent: options.sourceContent });
   const serialized = `${JSON.stringify(checkpoint)}\n`;
-  try {
-    const existing = await loadQwenCheckpoint({ path: options.destination, version: options.version, sourceContent: options.sourceContent });
-    if (canonical(existing) === canonical(checkpoint)) return { count: checkpoint.phrases.length, destination: options.destination };
-    throw new Error(`Checkpoint conflict: destination already exists at ${options.destination}`);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-
   await mkdir(dirname(options.destination), { recursive: true });
-  const pending = `${options.destination}.pending`;
+  const lock = await acquireImportLock(options.destination);
+  const pending = `${options.destination}.pending.${process.pid}.${lock.token}`;
   let pendingCreated = false;
-  let pendingFile: Awaited<ReturnType<typeof open>> | undefined;
   try {
     try {
-      pendingFile = await open(pending, "wx");
+      const existing = await loadQwenCheckpoint({ path: options.destination, version: options.version, sourceContent: options.sourceContent });
+      if (canonical(existing) === canonical(checkpoint)) return { count: checkpoint.phrases.length, destination: options.destination };
+      throw new Error(`Checkpoint conflict: destination already exists at ${options.destination}`);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") await rm(pending, { force: true });
-      throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+
+    const pendingFile = await open(pending, "wx");
     pendingCreated = true;
-    await pendingFile.writeFile(serialized, "utf8");
-    await pendingFile.close();
-    pendingFile = undefined;
-    await rename(pending, options.destination);
-    pendingCreated = false;
+    try {
+      await pendingFile.writeFile(serialized, "utf8");
+    } finally {
+      await pendingFile.close();
+    }
+    try {
+      await link(pending, options.destination);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const existing = await loadQwenCheckpoint({ path: options.destination, version: options.version, sourceContent: options.sourceContent });
+      if (canonical(existing) !== canonical(checkpoint)) throw new Error(`Checkpoint conflict: destination already exists at ${options.destination}`);
+    }
+    return { count: checkpoint.phrases.length, destination: options.destination };
   } finally {
     try {
-      await pendingFile?.close();
-    } finally {
       if (pendingCreated) await rm(pending, { force: true });
+    } finally {
+      await releaseImportLock(lock);
     }
   }
-  return { count: checkpoint.phrases.length, destination: options.destination };
+}
+
+interface ImportLock {
+  path: string;
+  claimPath: string;
+  token: string;
+}
+
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+async function reclaimDeadLock(path: string): Promise<boolean> {
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+  let owner: { pid?: unknown };
+  try {
+    owner = JSON.parse(raw) as { pid?: unknown };
+  } catch {
+    await rm(path, { force: true });
+    return true;
+  }
+  if (typeof owner.pid === "number" && Number.isInteger(owner.pid) && owner.pid > 0 && processIsAlive(owner.pid)) return false;
+  await rm(path, { force: true });
+  return true;
+}
+
+async function acquireImportLock(destination: string): Promise<ImportLock> {
+  const token = randomUUID();
+  const path = `${destination}.lock`;
+  const claimPath = `${path}.${process.pid}.${token}.claim`;
+  const claim = await open(claimPath, "wx");
+  try {
+    try {
+      await claim.writeFile(JSON.stringify({ pid: process.pid, token }), "utf8");
+    } finally {
+      await claim.close();
+    }
+    const deadline = Date.now() + 10_000;
+    while (true) {
+      try {
+        await link(claimPath, path);
+        return { path, claimPath, token };
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (await reclaimDeadLock(path)) continue;
+        if (Date.now() >= deadline) throw new Error(`Checkpoint import lock is active at ${path}`);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
+  } catch (error) {
+    await rm(claimPath, { force: true });
+    throw error;
+  }
+}
+
+async function releaseImportLock(lock: ImportLock) {
+  try {
+    try {
+      const owner = JSON.parse(await readFile(lock.path, "utf8")) as { token?: unknown };
+      if (owner.token === lock.token) await rm(lock.path, { force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  } finally {
+    await rm(lock.claimPath, { force: true });
+  }
 }

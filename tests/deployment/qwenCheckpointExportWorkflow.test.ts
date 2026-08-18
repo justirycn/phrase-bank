@@ -17,7 +17,7 @@ describe("Qwen checkpoint export workflow", () => {
 
     const scpLines = source.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.startsWith("scp "));
     expect(scpLines).toHaveLength(1);
-    expect(scpLines[0]).toContain("/opt/phrase-bank/.content-agent/checkpoint-${{ inputs.version }}.json");
+    expect(scpLines[0]).toContain("/opt/phrase-bank/.content-agent/checkpoint-$CONTENT_VERSION.json");
     expect(scpLines[0]).not.toMatch(/(?:^|\s)(?:--recursive|-[A-Za-z]*r[A-Za-z]*)(?:\s|$)/);
   });
 
@@ -27,5 +27,21 @@ describe("Qwen checkpoint export workflow", () => {
     expect([...new Set(secretNames)].sort()).toEqual(["TENCENT_HOST", "TENCENT_SSH_KEY", "TENCENT_USER"]);
     expect(source).not.toMatch(/DASHSCOPE|\/etc\/phrase-bank|qwen-content\.env/i);
     expect(source).toMatch(/name: Remove SSH key\r?\n\s+if: always\(\)\r?\n\s+run: rm -f ~\/\.ssh\/tencent_qwen/);
+  });
+
+  it("validates hostile version input before SSH setup and never interpolates it into a shell body", () => {
+    const source = workflow();
+    const validationPosition = source.indexOf("name: Validate content version");
+    const sshPosition = source.indexOf("name: Configure SSH");
+    expect(validationPosition).toBeGreaterThan(-1);
+    expect(validationPosition).toBeLessThan(sshPosition);
+    expect(source).toContain("REQUESTED_VERSION: ${{ inputs.version }}");
+    expect(source).toContain("^([0-9]{4})\\.([0-9]{2})\\.([0-9]+)$");
+    expect(source).toContain("CONTENT_VERSION=$REQUESTED_VERSION");
+
+    const runBodies = [...source.matchAll(/run:\s*\|\r?\n((?:\s{10}.*(?:\r?\n|$))*)/g)].map((match) => match[1]);
+    expect(runBodies.length).toBeGreaterThan(0);
+    expect(runBodies.every((body) => !body.includes("${{ inputs.version }}"))).toBe(true);
+    expect(source.match(/\$\{\{ inputs\.version \}\}/g)).toHaveLength(2);
   });
 });
