@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -46,5 +46,59 @@ describe("Qwen content publisher", () => {
     await writeFile(invalid.candidatePath, "{}\n");
     await expect(publishCandidate(invalid)).rejects.toThrow();
     expect(await readFile(invalid.versionModulePath, "utf8")).toContain('"old"');
+  });
+
+  it("atomically restores the first output when the second rename fails and permits a clean retry", async () => {
+    const files = await fixture();
+    const destination = join(files.publicDir, `system-content-${files.version}.json`);
+    await writeFile(destination, "previous candidate\n");
+    let renames = 0;
+    await expect(publishCandidate({
+      ...files,
+      fileOperations: {
+        rename: async (source, target) => {
+          renames += 1;
+          if (renames === 2) throw new Error("simulated second rename failure");
+          await rename(source, target);
+        },
+      },
+    })).rejects.toThrow(/second rename failure/i);
+    expect(await readFile(destination, "utf8")).toBe("previous candidate\n");
+    expect(await readFile(files.versionModulePath, "utf8")).toContain('"old"');
+    expect((await lstat(destination)).isSymbolicLink()).toBe(false);
+
+    await publishCandidate(files);
+    expect(await readFile(destination, "utf8")).toBe(files.candidateRaw);
+    expect(await readFile(files.versionModulePath, "utf8")).toContain(`"${files.version}"`);
+  });
+
+  it("refuses to overwrite third-party file or symlink drift during rollback", async () => {
+    for (const mode of ["file", "symlink"] as const) {
+      const files = await fixture();
+      const destination = join(files.publicDir, `system-content-${files.version}.json`);
+      const outside = join(files.root, "outside.txt");
+      await writeFile(outside, "outside bytes\n");
+      let renames = 0;
+      await expect(publishCandidate({
+        ...files,
+        fileOperations: {
+          rename: async (source, target) => {
+            renames += 1;
+            if (renames === 1) { await rename(source, target); return; }
+            if (renames === 2) {
+              await rm(destination, { force: true });
+              if (mode === "file") await writeFile(destination, "third-party bytes\n");
+              else await symlink(outside, destination, "file");
+              throw new Error("simulated second rename failure");
+            }
+            await rename(source, target);
+          },
+        },
+      })).rejects.toThrow(/无法安全恢复/);
+      if (mode === "file") expect(await readFile(destination, "utf8")).toBe("third-party bytes\n");
+      else expect((await lstat(destination)).isSymbolicLink()).toBe(true);
+      expect(await readFile(outside, "utf8")).toBe("outside bytes\n");
+      expect(await readFile(files.versionModulePath, "utf8")).toContain('"old"');
+    }
   });
 });

@@ -51,18 +51,37 @@ jobs:
 
       - name: Deploy on Tencent Cloud
         env:
+          DEPLOY_SHA: ${{ github.sha }}
           TENCENT_HOST: ${{ secrets.TENCENT_HOST }}
           TENCENT_USER: ${{ secrets.TENCENT_USER }}
         run: |
-          ssh -i ~/.ssh/tencent_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST" 'bash -se' <<'REMOTE'
+          case "$DEPLOY_SHA" in
+            ""|*[!0-9a-f]*) echo "Invalid deploy SHA"; exit 1 ;;
+          esac
+          test "${#DEPLOY_SHA}" = 40
+          ssh -i ~/.ssh/tencent_deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST" "DEPLOY_SHA='$DEPLOY_SHA' bash -se" <<'REMOTE'
           set -euo pipefail
+          case "$DEPLOY_SHA" in
+            ""|*[!0-9a-f]*) echo "Invalid deploy SHA"; exit 1 ;;
+          esac
+          test "${#DEPLOY_SHA}" = 40
           exec 9>$HOME/.phrase-bank-operation.lock
           flock 9
+          if [ -e /opt/phrase-bank ] && [ ! -d /opt/phrase-bank/.git ]; then
+            echo "Refusing non-repository deploy directory"
+            exit 1
+          fi
           if [ ! -d /opt/phrase-bank/.git ]; then
-            git clone https://github.com/justirycn/phrase-bank.git /opt/phrase-bank
+            git init /opt/phrase-bank
+            git -C /opt/phrase-bank remote add origin https://github.com/justirycn/phrase-bank.git
           fi
           cd /opt/phrase-bank
-          git pull --ff-only origin main
+          test -z "$(git status --porcelain --untracked-files=all)"
+          git fetch --no-tags origin main
+          git cat-file -e "$DEPLOY_SHA^{commit}"
+          git merge-base --is-ancestor "$DEPLOY_SHA" origin/main
+          git checkout --detach "$DEPLOY_SHA"
+          test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
           docker compose build
           docker compose up -d
           for attempt in $(seq 1 24); do

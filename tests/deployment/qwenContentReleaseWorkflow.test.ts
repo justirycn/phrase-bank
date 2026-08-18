@@ -45,6 +45,35 @@ describe("Qwen content release workflow", () => {
     expect(guard).toBeLessThan(source.indexOf("actions/checkout@v4"));
     expect(source).toMatch(/push:\r?\n\s+branches: \[main\]/);
   });
+  it("deploys the exact event SHA instead of a later main revision", () => {
+    const source = deployWorkflow();
+    expect(source).toContain("DEPLOY_SHA: ${{ github.sha }}");
+    expect(source).toContain('case "$DEPLOY_SHA" in');
+    expect(source).toContain('test "${#DEPLOY_SHA}" = 40');
+    expect(source).toContain('"DEPLOY_SHA=\'$DEPLOY_SHA\' bash -se"');
+    expect(source).not.toContain("git clone");
+    expect(source).toContain("git init /opt/phrase-bank");
+    expect(source).toContain("git -C /opt/phrase-bank remote add origin https://github.com/justirycn/phrase-bank.git");
+    expect(source).toContain("Refusing non-repository deploy directory");
+    expect(source).toContain("git fetch --no-tags origin main");
+    expect(source).toContain('git cat-file -e "$DEPLOY_SHA^{commit}"');
+    expect(source).toContain('git merge-base --is-ancestor "$DEPLOY_SHA" origin/main');
+    expect(source).toContain('git checkout --detach "$DEPLOY_SHA"');
+    expect(source).not.toContain('git checkout --detach --force');
+    expect(source).toContain('test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"');
+    expect(source).not.toContain("git pull");
+    const order = [
+      source.indexOf("git fetch --no-tags origin main"),
+      source.indexOf('git cat-file -e "$DEPLOY_SHA^{commit}"'),
+      source.indexOf('git merge-base --is-ancestor "$DEPLOY_SHA" origin/main'),
+      source.indexOf('git checkout --detach "$DEPLOY_SHA"'),
+      source.indexOf('test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"'),
+      source.indexOf("docker compose build"),
+      source.indexOf("docker compose up -d"),
+    ];
+    expect(order.every((position) => position >= 0)).toBe(true);
+    order.slice(1).forEach((position, index) => expect(order[index]).toBeLessThan(position));
+  });
   it("is manual, serialized, and reads Qwen credentials only on the server", () => {
     const source = workflow();
     expect(source).toContain("workflow_dispatch:");
@@ -106,11 +135,11 @@ describe("Qwen content release workflow", () => {
       commandLine(normalized, 'git add "public/content/system-content-$CONTENT_VERSION.json" app/domain/bundledSystemContent.ts'),
       commandLine(normalized, "git diff --cached --check"),
       commandLine(normalized, 'git commit -m "content: publish Qwen phrase library $CONTENT_VERSION"'),
-      commandLine(normalized, "git push origin HEAD:main"),
+      commandLine(normalized, 'git push origin "$release_sha:refs/heads/main"'),
     ];
     positions.slice(1).forEach((position, index) => expect(positions[index]).toBeLessThan(position));
     const pushCommands = logicalCommands(normalized).filter((command) => /^git\s+push(?:\s|$)/.test(command));
-    expect(pushCommands).toEqual(["git push origin HEAD:main"]);
+    expect(pushCommands).toEqual(['git push origin "$release_sha:refs/heads/main"']);
     expect(source).not.toContain("git push --force");
     expect(source).not.toMatch(/\bgit\s+push\b[^\r\n]*--force(?:-with-lease)?(?:\s|$)/);
     expect(source).not.toMatch(/\bgit\s+push\b[^\r\n]*\s-f(?:\s|$)/);
@@ -130,8 +159,8 @@ describe("Qwen content release workflow", () => {
   it("preflights duplicate content, contains SSH credentials, and dispatches deployment explicitly", () => {
     const source = workflow();
     const normalized = normalizeContinuations(source);
-    const pushPosition = commandLine(normalized, "git push origin HEAD:main");
-    const dispatchPosition = commandLine(normalized, "gh workflow run deploy.yml --ref main");
+    const pushPosition = commandLine(normalized, 'git push origin "$release_sha:refs/heads/main"');
+    const dispatchPosition = commandLine(normalized, 'gh workflow run deploy.yml --ref main -f approved_sha="$RELEASE_SHA"');
     const duplicateGuard = 'test ! -e "public/content/system-content-$CONTENT_VERSION.json" || { echo "Qwen content version $CONTENT_VERSION is already published"; exit 1; }';
     const dependencyInstall = 'docker run --rm -v "$PWD:/workspace" -w /workspace node:22-bookworm-slim sh -lc "npm ci"';
     const qwenGeneration = 'docker run --rm --env-file /etc/phrase-bank/qwen-content.env -v "$PWD:/workspace" -w /workspace node:22-bookworm-slim sh -lc "npm run content:qwen -- --version \'$CONTENT_VERSION\'"';
@@ -139,9 +168,12 @@ describe("Qwen content release workflow", () => {
     expect(source).toContain("actions: write");
     expect(source).toContain("GH_TOKEN: ${{ github.token }}");
     expect(pushPosition).toBeLessThan(dispatchPosition);
+    expect(source).toContain("RELEASE_SHA: ${{ steps.publish.outputs.release_sha }}");
+    expect(source).toContain('release_sha="$(git rev-parse HEAD)"');
+    expect(source).toContain('printf \'release_sha=%s\\n\' "$release_sha" >> "$GITHUB_OUTPUT"');
     expect(source).not.toMatch(/^\s{4}env:\r?\n(?:\s{6}.*\r?\n)*\s{6}TENCENT_/m);
     expect(source).toMatch(/name: Remove SSH key\r?\n\s+if: always\(\)\r?\n\s+run: rm -f ~\/\.ssh\/tencent_qwen/);
-    const qualityGates = source.slice(source.indexOf("npm run content:publish"), source.indexOf("git push origin HEAD:main"));
+    const qualityGates = source.slice(source.indexOf("npm run content:publish"), source.indexOf('git push origin "$release_sha:refs/heads/main"'));
     expect(qualityGates).not.toContain("TENCENT_");
     expect(qualityGates).not.toContain("tencent_qwen");
 
@@ -163,7 +195,7 @@ describe("Qwen content release workflow", () => {
       expect(remoteSource).not.toContain("/opt/phrase-bank.operation.lock");
     }
     expect(source.indexOf("exec 9>$HOME/.phrase-bank-operation.lock")).toBeLessThan(source.indexOf("cd /opt/phrase-bank"));
-    expect(deployWorkflow().indexOf("exec 9>$HOME/.phrase-bank-operation.lock")).toBeLessThan(deployWorkflow().indexOf("git clone"));
+    expect(deployWorkflow().indexOf("exec 9>$HOME/.phrase-bank-operation.lock")).toBeLessThan(deployWorkflow().indexOf("git init /opt/phrase-bank"));
     expect(runbook()).toContain('sudo chown "$SSH_USER:$SSH_GROUP" /etc/phrase-bank/qwen-content.env');
     expect(runbook()).toContain("明确触发");
   });

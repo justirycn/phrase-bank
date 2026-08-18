@@ -162,11 +162,11 @@ export async function runApprovedReleaseCli(
       publish: async () => {
         if (!loaded || !approvedSnapshot) throw new Error("Approval validation must complete before publishing");
         await assertSafeReleasePaths(repositoryRoot, [{ path: destination, kind: "output" }, { path: versionModulePath, kind: "output" }]);
-        await publishCandidate({ version, candidatePath: approvedSnapshot.candidatePath, reportPath: approvedSnapshot.reportPath, publicDir, versionModulePath });
         const candidateBytes = Buffer.from(loaded.candidateRaw, "utf8");
         const moduleBytes = Buffer.from(`export const BUNDLED_SYSTEM_CONTENT_VERSION = "${version}";\n`, "utf8");
         ownedOutputs.set(destination, sha256(candidateBytes));
         ownedOutputs.set(versionModulePath, sha256(moduleBytes));
+        await publishCandidate({ version, candidatePath: approvedSnapshot.candidatePath, reportPath: approvedSnapshot.reportPath, publicDir, versionModulePath });
         return {
           [`public/content/system-content-${version}.json`]: gitBlobOid(candidateBytes),
           "app/domain/bundledSystemContent.ts": gitBlobOid(moduleBytes),
