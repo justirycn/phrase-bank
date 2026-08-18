@@ -1,7 +1,69 @@
-import { describe, expect, it } from "vitest";
+import { JSDOM } from "jsdom";
+import { describe, expect, it, vi } from "vitest";
 import { renderLocalReviewPage } from "../../scripts/content-agent/localReviewPage";
 
 const NONCE = "YWJjZGVmMDEyMzQ1Njc4OQ==";
+const HASH = "a".repeat(64);
+
+type ReviewPayload = ReturnType<typeof payload>;
+
+function payload() {
+  return {
+    content: {
+      version: "2026.08.18",
+      phrases: [
+        { id: "daily-core", categoryId: "daily", subcategory: "greetings", kind: "core", english: "Hello.", chinese: "你好。" },
+        { id: "daily-example", categoryId: "daily", subcategory: "follow-up", kind: "example", parentPhraseId: "daily-core", english: '<img onerror="attack()">', chinese: "字面标签" },
+        { id: "work-issue", categoryId: "work", subcategory: "planning", kind: "core", english: "Plan it.", chinese: "规划它。" },
+        { id: "travel-example", categoryId: "travel", subcategory: "airport", kind: "example", parentPhraseId: "travel-core", english: "Where is gate two?", chinese: "二号登机口在哪里？" },
+      ],
+    },
+    report: { status: "pass", coreCount: 600, totalCount: 2000 },
+    review: {
+      sampledIds: ["daily-core", "daily-example", "travel-example"],
+      items: {
+        "daily-core": { decision: "pass", note: "", updatedAt: "2026-08-18T00:00:00.000Z" },
+        "work-issue": { decision: "issue", note: "fix", updatedAt: "2026-08-18T00:00:00.000Z" },
+        "travel-example": { decision: "pass", note: "", updatedAt: "2026-08-18T00:00:00.000Z" },
+      },
+    },
+    candidateSha256: HASH,
+    hintsById: { "daily-example": [{ code: "placeholder", message: "需要核对" }] },
+    canApprove: false,
+  };
+}
+
+function response(value: unknown, ok = true, status = ok ? 200 : 409) {
+  return { ok, status, json: async () => value };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function boot(fetchMock: ReturnType<typeof vi.fn>) {
+  const dom = new JSDOM(renderLocalReviewPage({ nonce: NONCE }), {
+    runScripts: "outside-only",
+    url: "http://127.0.0.1:43127/",
+  });
+  Object.assign(dom.window, { fetch: fetchMock, prompt: vi.fn() });
+  const script = dom.window.document.querySelector("script[type=module]");
+  dom.window.eval(script?.textContent ?? "");
+  return dom;
+}
+
+function change(dom: JSDOM, id: string, value: string | boolean, event = "input") {
+  const control = dom.window.document.getElementById(id) as HTMLInputElement | HTMLSelectElement;
+  if (typeof value === "boolean") (control as HTMLInputElement).checked = value;
+  else control.value = String(value);
+  control.dispatchEvent(new dom.window.Event(event, { bubbles: true }));
+}
+
+function rowIds(dom: JSDOM) {
+  return [...dom.window.document.querySelectorAll("#review-list article h3")].map((node) => node.textContent);
+}
 
 describe("renderLocalReviewPage", () => {
   it("returns a complete zh-CN page with the nonce on its only style and module script", () => {
@@ -125,5 +187,164 @@ describe("renderLocalReviewPage", () => {
     expect(html).toMatch(/grid-template-columns:\s*1fr/);
     expect(html).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
     expect(html).not.toMatch(/position:\s*fixed/);
+  });
+});
+
+describe("local review page runtime", () => {
+  it("renders the nested payload safely and derives concrete blockers including non-sampled issues", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response(payload()));
+    const dom = boot(fetchMock);
+
+    await vi.waitFor(() => expect(rowIds(dom)).toEqual(["daily-core", "daily-example", "travel-example"]));
+    expect(dom.window.document.getElementById("version-value")?.textContent).toBe("2026.08.18");
+    expect(dom.window.document.getElementById("core-count")?.textContent).toBe("600");
+    expect(dom.window.document.getElementById("total-count")?.textContent).toBe("2000");
+    expect(dom.window.document.getElementById("pass-count")?.textContent).toBe("2");
+    expect(dom.window.document.getElementById("issue-count")?.textContent).toBe("1");
+    expect(dom.window.document.getElementById("undecided-count")?.textContent).toBe("1");
+    const help = dom.window.document.getElementById("approval-help")?.textContent;
+    expect(help).toContain("work-issue");
+    expect(help).toContain("daily-example");
+    const hostile = dom.window.document.querySelector("#phrase-daily-example [lang=en]");
+    expect(hostile?.textContent).toBe('<img onerror="attack()">');
+    expect(hostile?.querySelector("img")).toBeNull();
+  });
+
+  it("bounds blocker ID details and reports the remaining count", async () => {
+    const many = payload();
+    const issueItems = Object.fromEntries(Array.from({ length: 22 }, (_, index) => [
+      `issue-${String(index).padStart(2, "0")}`,
+      { decision: "issue", note: "", updatedAt: "2026-08-18T00:00:00.000Z" },
+    ]));
+    many.review.items = issueItems as typeof many.review.items;
+    const dom = boot(vi.fn().mockResolvedValue(response(many)));
+
+    await vi.waitFor(() => expect(dom.window.document.getElementById("approval-help")?.textContent).toContain("另有 2 条"));
+    const help = dom.window.document.getElementById("approval-help")?.textContent;
+    expect(help).toContain("issue-00");
+    expect(help).toContain("issue-19");
+    expect(help).not.toContain("issue-20");
+    expect(help).toContain("daily-core");
+    expect(help).toContain("daily-example");
+    expect(help).toContain("travel-example");
+  });
+
+  it("applies every filter and clear deterministically", async () => {
+    const dom = boot(vi.fn().mockResolvedValue(response(payload())));
+    await vi.waitFor(() => expect(rowIds(dom)).toHaveLength(3));
+
+    change(dom, "search", "daily-core");
+    expect(rowIds(dom)).toEqual(["daily-core", "daily-example"]);
+    change(dom, "search", "");
+    change(dom, "category", "travel", "change");
+    expect(rowIds(dom)).toEqual(["travel-example"]);
+    change(dom, "category", "daily", "change");
+    change(dom, "subcategory", "follow-up", "change");
+    expect(rowIds(dom)).toEqual(["daily-example"]);
+    change(dom, "subcategory", "", "change");
+    change(dom, "kind", "core", "change");
+    expect(rowIds(dom)).toEqual(["daily-core"]);
+    dom.window.document.getElementById("clear-filters")?.click();
+    change(dom, "sample-only", false, "change");
+    change(dom, "issue-only", true, "change");
+    expect(rowIds(dom)).toEqual(["work-issue"]);
+    change(dom, "issue-only", false, "change");
+    change(dom, "hint-only", true, "change");
+    expect(rowIds(dom)).toEqual(["daily-example"]);
+    dom.window.document.getElementById("clear-filters")?.click();
+    expect(rowIds(dom)).toEqual(["daily-core", "daily-example", "travel-example"]);
+  });
+
+  it("posts the current note once while pending and clears a failed-decision alert after retry succeeds", async () => {
+    const firstSave = deferred<ReturnType<typeof response>>();
+    const secondSave = deferred<ReturnType<typeof response>>();
+    const updated = payload();
+    updated.review.items["daily-example"] = { decision: "pass", note: "当前备注", updatedAt: "2026-08-18T01:00:00.000Z" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(payload()))
+      .mockReturnValueOnce(firstSave.promise)
+      .mockResolvedValueOnce(response({ error: "保存失败" }, false))
+      .mockReturnValueOnce(secondSave.promise);
+    const dom = boot(fetchMock);
+    await vi.waitFor(() => expect(rowIds(dom)).toHaveLength(3));
+
+    const note = dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement;
+    note.value = "当前备注";
+    const pass = [...dom.window.document.querySelectorAll("#phrase-daily-example button")]
+      .find((button) => button.textContent === "通过") as HTMLButtonElement;
+    pass.click();
+    pass.click();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      id: "daily-example", decision: "pass", note: "当前备注", candidateSha256: HASH,
+    });
+    expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).disabled).toBe(true);
+    firstSave.resolve(response(updated));
+    await vi.waitFor(() => expect(dom.window.document.getElementById("pass-count")?.textContent).toBe("3"));
+
+    const current = dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement;
+    current.value = "失败后保留";
+    const issue = [...dom.window.document.querySelectorAll("#phrase-daily-example button")]
+      .find((button) => button.textContent === "标记问题") as HTMLButtonElement;
+    issue.click();
+    await vi.waitFor(() => expect(dom.window.document.getElementById("page-error")?.textContent).toContain("保存 daily-example 失败"));
+    expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).value).toBe("失败后保留");
+    expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).disabled).toBe(false);
+
+    const retry = [...dom.window.document.querySelectorAll("#phrase-daily-example button")]
+      .find((button) => button.textContent === "通过") as HTMLButtonElement;
+    retry.click();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    expect(dom.window.document.getElementById("page-error")?.hidden).toBe(true);
+    expect(dom.window.document.getElementById("page-error")?.textContent).toBe("");
+    secondSave.resolve(response(updated));
+    await vi.waitFor(() => expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).value)
+      .toBe("当前备注"));
+    await vi.waitFor(() => expect(dom.window.document.getElementById("page-error")?.hidden).toBe(true));
+    expect(dom.window.document.getElementById("page-error")?.textContent).toBe("");
+  });
+
+  it("requires the exact version, guards pending approval, and gives approved state precedence", async () => {
+    const ready = payload();
+    ready.review.items["daily-example"] = { decision: "pass", note: "", updatedAt: "2026-08-18T01:00:00.000Z" };
+    ready.review.items["work-issue"] = { decision: "pass", note: "resolved", updatedAt: "2026-08-18T01:00:00.000Z" };
+    ready.canApprove = true;
+    const approved: ReviewPayload = structuredClone(ready);
+    (approved.review as typeof approved.review & { approvedAt?: string }).approvedAt = "2026-08-18T02:00:00.000Z";
+    approved.canApprove = false;
+    const approval = deferred<ReturnType<typeof response>>();
+    const fetchMock = vi.fn().mockResolvedValueOnce(response(ready)).mockReturnValueOnce(approval.promise);
+    const dom = boot(fetchMock);
+    await vi.waitFor(() => expect((dom.window.document.getElementById("approve") as HTMLButtonElement).disabled).toBe(false));
+    const prompt = dom.window.prompt as ReturnType<typeof vi.fn>;
+    prompt.mockReturnValueOnce("wrong");
+    dom.window.document.getElementById("approve")?.click();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    prompt.mockReturnValueOnce("2026.08.18");
+    const button = dom.window.document.getElementById("approve") as HTMLButtonElement;
+    button.click();
+    button.click();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ version: "2026.08.18", candidateSha256: HASH });
+    expect(button.disabled).toBe(true);
+    approval.resolve(response(approved));
+    await vi.waitFor(() => expect(dom.window.document.getElementById("approval-help")?.textContent)
+      .toBe("当前候选已批准，等待独立发布命令。"));
+    expect(dom.window.document.getElementById("approved-value")?.textContent).toBe("已批准");
+    expect(dom.window.document.getElementById("approval-status")?.textContent).toBe("版本已批准。");
+    expect((dom.window.document.getElementById("approve") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows a retry after initial GET failure and clears the alert when retry succeeds", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ error: "bad" }, false, 500))
+      .mockResolvedValueOnce(response(payload()));
+    const dom = boot(fetchMock);
+    await vi.waitFor(() => expect((dom.window.document.getElementById("retry") as HTMLButtonElement).hidden).toBe(false));
+    expect(dom.window.document.getElementById("page-error")?.textContent).toContain("加载失败");
+    dom.window.document.getElementById("retry")?.click();
+    await vi.waitFor(() => expect(rowIds(dom)).toHaveLength(3));
+    expect(dom.window.document.getElementById("page-error")?.hidden).toBe(true);
+    expect(dom.window.document.getElementById("page-error")?.textContent).toBe("");
   });
 });

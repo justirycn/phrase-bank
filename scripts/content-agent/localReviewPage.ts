@@ -168,6 +168,13 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       return new Set(model && Array.isArray(model.sampledIds) ? model.sampledIds : []);
     }
 
+    function boundedIds(ids) {
+      const limit = 20;
+      const visible = ids.slice(0, limit).join("、");
+      const remaining = ids.length - limit;
+      return visible + (remaining > 0 ? "，另有 " + remaining + " 条" : "");
+    }
+
     function addOption(select, value) {
       const option = document.createElement("option");
       option.value = value;
@@ -207,8 +214,10 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       const sampleIds = model.sampledIds || [];
       const decisions = Object.values(items);
       const passCount = decisions.filter(({ decision }) => decision === "pass").length;
-      const issueCount = decisions.filter(({ decision }) => decision === "issue").length;
-      const undecidedCount = sampleIds.filter((id) => !items[id]).length;
+      const issueIds = Object.entries(items).filter(([, item]) => item.decision === "issue").map(([id]) => id);
+      const undecidedIds = sampleIds.filter((id) => !items[id]);
+      const issueCount = issueIds.length;
+      const undecidedCount = undecidedIds.length;
       setText(elements.version, model.version);
       setText(elements.core, model.coreCount ?? 600);
       setText(elements.total, model.totalCount ?? model.phrases.length ?? 2000);
@@ -220,12 +229,18 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       setText(elements.pass, passCount);
       setText(elements.issue, issueCount);
       setText(elements.undecided, undecidedCount);
-      const reason = model.approvalMessage || (undecidedCount > 0
-        ? "还有 " + undecidedCount + " 条抽样句未决定。"
-        : issueCount > 0 ? "还有 " + issueCount + " 条问题需要解决。"
-        : model.canApprove === true ? "所有批准条件均已满足。" : "报告或门禁仍未通过。");
+      let reason;
+      if (model.approvedAt) reason = "当前候选已批准，等待独立发布命令。";
+      else {
+        const blockers = [];
+        if (issueCount > 0) blockers.push("问题 ID（" + issueCount + "）：" + boundedIds(issueIds));
+        if (undecidedCount > 0) blockers.push("未决定抽样 ID（" + undecidedCount + "）：" + boundedIds(undecidedIds));
+        reason = blockers.length > 0 ? blockers.join("；") + "。"
+          : model.canApprove === true ? "所有批准条件均已满足，可以批准当前版本。"
+          : "所有抽样均已审核，但报告或门禁仍未通过。";
+      }
       setText(elements.approvalHelp, reason);
-      elements.approve.disabled = approvalPending || model.canApprove !== true;
+      elements.approve.disabled = approvalPending || Boolean(model.approvedAt) || model.canApprove !== true;
     }
 
     function appendMeta(container, value) {
@@ -377,6 +392,11 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       elements.error.hidden = false;
     }
 
+    function clearError() {
+      elements.error.textContent = "";
+      elements.error.hidden = true;
+    }
+
     async function readJson(response) {
       if (!response.ok) throw new Error("请求失败（" + response.status + "）");
       return response.json();
@@ -386,11 +406,12 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       if (loading) return;
       loading = true;
       retryButton.hidden = true;
-      elements.error.hidden = true;
+      clearError();
       elements.loadStatus.textContent = "正在加载审核数据…";
       try {
         const payload = await readJson(await fetch("/api/review", { headers: { Accept: "application/json" }, credentials: "same-origin" }));
         applyPayload(payload);
+        clearError();
         elements.loadStatus.textContent = "审核数据已加载。";
       } catch (error) {
         const detail = error instanceof Error ? error.message : "未知错误";
@@ -404,6 +425,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
 
     async function submitDecision(id, decision, note, rowStatus) {
       if (!model || pendingIds.has(id)) return;
+      clearError();
       pendingIds.add(id);
       rowStatus.textContent = "正在保存…";
       rowStatus.setAttribute("role", "status");
@@ -415,6 +437,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
         }));
         pendingIds.delete(id);
         applyPayload(payload);
+        clearError();
       } catch (error) {
         pendingIds.delete(id);
         renderRows();
@@ -435,7 +458,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       approvalPending = true;
       elements.approve.disabled = true;
       elements.approvalStatus.textContent = "正在批准…";
-      elements.error.hidden = true;
+      clearError();
       try {
         const payload = await readJson(await fetch("/api/approve", {
           method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -443,6 +466,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
         }));
         approvalPending = false;
         applyPayload(payload);
+        clearError();
         elements.approvalStatus.textContent = "版本已批准。";
       } catch (error) {
         approvalPending = false;
