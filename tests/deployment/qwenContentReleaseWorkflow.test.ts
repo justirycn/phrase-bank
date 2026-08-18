@@ -6,6 +6,14 @@ import { describe, expect, it } from "vitest";
 const workflow = () => readFileSync(resolve(process.cwd(), ".github/workflows/qwen-content-release.yml"), "utf8");
 const deployWorkflow = () => readFileSync(resolve(process.cwd(), ".github/workflows/deploy.yml"), "utf8");
 const runbook = () => readFileSync(resolve(process.cwd(), "docs/runbooks/qwen-content-update.md"), "utf8");
+const localCommandSources = () => [
+  "scripts/import-qwen-checkpoint.ts",
+  "scripts/run-local-qwen-content-agent.ts",
+  "scripts/run-local-content-review.ts",
+  "scripts/release-approved-qwen-content.ts",
+  "scripts/content-agent/approvedRelease.ts",
+  "package.json",
+].map((path) => readFileSync(resolve(process.cwd(), path), "utf8")).join("\n");
 const normalizeContinuations = (source: string) => source.replace(/\\[ \t]*\r?\n[ \t]*/g, " ");
 const logicalCommands = (source: string) => normalizeContinuations(source)
   .split(/\r?\n/)
@@ -34,6 +42,40 @@ const patternPosition = (source: string, pattern: RegExp, description: string) =
 };
 
 describe("Qwen content release workflow", () => {
+  it("documents local checkpoint, review, and approved release as the default operator flow", () => {
+    const source = runbook();
+    expect(source).toContain("%USERPROFILE%\\.phrase-bank\\qwen-content.env");
+    expect(source).toContain("Export Qwen checkpoint");
+    expect(source).toContain("gh workflow run qwen-checkpoint-export.yml -f version=2026.08.3");
+    expect(source).toContain("gh run download $runId -n qwen-checkpoint-2026.08.3 -D .content-agent/download");
+    expect(source).toContain("--source .content-agent/download/qwen-checkpoint.json");
+    expect(source).not.toContain(".content-agent-download");
+    expect(source).toContain("content:checkpoint:import");
+    expect(source).toContain("content:qwen:local");
+    expect(source).toContain("content:review");
+    expect(source).toContain("http://127.0.0.1:43127");
+    expect(source).toContain("content:release:approved");
+    expect(source).toContain("页面批准不会直接提交");
+    expect(source).toContain("1,220");
+    expect(source).toContain("68 / 120");
+    expect(source).toContain("不会重复已完成的付费批次");
+    expect(source).toContain("只提交以下两个文件");
+    expect(source).toContain("public/content/system-content-2026.08.3.json");
+    expect(source).toContain("app/domain/bundledSystemContent.ts");
+    expect(source).toContain('approved_sha');
+    expect(source).not.toContain("推荐：一键运行 GitHub Actions");
+    expect(source).not.toContain("日常更新请优先使用 GitHub");
+  });
+
+  it("keeps server generation manual and recovery-only without local dispatches", () => {
+    const source = workflow();
+    expect(source).toContain("workflow_dispatch:");
+    expect(runbook()).toContain("qwen-content-release.yml");
+    expect(runbook()).toContain("仅用于灾难恢复");
+    expect(runbook()).toContain("不要用于本地审核流程");
+    expect(localCommandSources()).not.toContain("qwen-content-release.yml");
+  });
+
   it("checks a supplied approved SHA before checkout while preserving push-trigger deploys", () => {
     const source = deployWorkflow();
     expect(source).toContain("approved_sha:");
