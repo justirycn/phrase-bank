@@ -44,7 +44,9 @@ const PRIORITY_PACKAGING = 4;
 // Risk hints are mandatory additions, but capped so a badly generated family cannot turn sampling into a full review.
 const HINT_SUPPLEMENT_CAP = 30;
 const PLACEHOLDER = /\b(?:xxx|tbd|todo|placeholder)\b/iu;
+const CONTEXT_MARKER = /\b(?:regarding|during|before|after|when|while|context|as part of|for)\b/iu;
 const HINT_ORDER: QualityHintCode[] = ["empty", "placeholder", "language-mismatch", "repeated-opening", "missing-context"];
+const HINT_RISK_ORDER: QualityHintCode[] = ["empty", "placeholder", "language-mismatch", "missing-context", "repeated-opening"];
 
 export function candidateSha256(rawCandidate: string): string {
   return createHash("sha256").update(rawCandidate, "utf8").digest("hex");
@@ -73,10 +75,10 @@ function normalizedOpening(english: string): string {
 function repeatedOpeningIds(phrases: SystemContentPhrase[]): Set<string> {
   const groups = new Map<string, SystemContentPhrase[]>();
   for (const phrase of phrases) {
-    if (phrase.kind !== "core" || !phrase.english.trim()) continue;
+    if (!phrase.english.trim()) continue;
     const opening = normalizedOpening(phrase.english);
     if (!opening) continue;
-    const key = `${phrase.categoryId}\u0000${phrase.subcategory}\u0000${opening}`;
+    const key = `${phrase.categoryId}\u0000${phrase.subcategory}\u0000${phrase.kind}\u0000${opening}`;
     groups.set(key, [...(groups.get(key) ?? []), phrase]);
   }
   return new Set([...groups.values()].filter((group) => group.length >= 4).flatMap((group) => group.map(({ id }) => id)));
@@ -97,15 +99,14 @@ function buildHints(phrases: SystemContentPhrase[]): Record<string, QualityHint[
     if ((english && !/\p{Script=Latin}/u.test(english)) || (chinese && !/\p{Script=Han}/u.test(chinese))) {
       hints.set("language-mismatch", "英文或中文字段的语言可能填反，请核对双语内容。 ");
     }
-    if (repeated.has(phrase.id)) hints.set("repeated-opening", "同一主题中至少四条核心短语使用了机械重复的开头，建议改写句型。 ");
+    if (repeated.has(phrase.id)) hints.set("repeated-opening", "同一主题中至少四条短语使用了机械重复的开头，建议改写句型。 ");
 
-    if (phrase.kind === "core") {
-      const expectedContext = contextualZh.get(`${phrase.categoryId}:${phrase.subcategory}`);
-      const hanLength = (chinese.match(/\p{Script=Han}/gu) ?? []).length;
-      const englishWords = english.match(/[a-z]+(?:'[a-z]+)?/giu)?.length ?? 0;
-      if ((expectedContext && !chinese.includes(expectedContext)) || (englishWords >= 7 && hanLength <= 3)) {
-        hints.set("missing-context", "中文译文可能遗漏了英文中的场景或主题信息，请对照补全上下文。 ");
-      }
+    const expectedContext = phrase.kind === "core" ? contextualZh.get(`${phrase.categoryId}:${phrase.subcategory}`) : undefined;
+    const hanLength = (chinese.match(/\p{Script=Han}/gu) ?? []).length;
+    const englishWords = english.match(/\p{Script=Latin}+(?:'\p{Script=Latin}+)?/gu)?.length ?? 0;
+    const obviouslyMissingContext = englishWords >= 9 && hanLength <= 3 && CONTEXT_MARKER.test(english);
+    if ((expectedContext && !chinese.includes(expectedContext)) || obviouslyMissingContext) {
+      hints.set("missing-context", "中文译文可能遗漏了英文中的场景或主题信息，请对照补全上下文。 ");
     }
 
     result[phrase.id] = HINT_ORDER.flatMap((code) => {
@@ -144,7 +145,10 @@ export function buildReviewModel(options: { content: SystemContentPackage; candi
   addSelected(selected, ranked(allPhrases.filter(({ categoryId }) => categoryId === "work"), sampleSeed, "priority:work"), PRIORITY_WORK);
   addSelected(selected, ranked(allPhrases.filter(({ categoryId }) => categoryId === "supply-chain"), sampleSeed, "priority:supply"), PRIORITY_SUPPLY);
 
-  const hinted = allPhrases.filter(({ id }) => hintsById[id].length > 0).sort((left, right) => left.id.localeCompare(right.id));
+  const hinted = allPhrases.filter(({ id }) => hintsById[id].length > 0).sort((left, right) => {
+    const risk = (phrase: SystemContentPhrase) => Math.min(...hintsById[phrase.id].map(({ code }) => HINT_RISK_ORDER.indexOf(code)));
+    return risk(left) - risk(right) || left.id.localeCompare(right.id);
+  });
   addSelected(selected, hinted, HINT_SUPPLEMENT_CAP);
 
   const sample = [...selected.values()];

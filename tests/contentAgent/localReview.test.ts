@@ -144,6 +144,27 @@ describe("local phrase review", () => {
     }
   });
 
+  it("flags repeated openings and obviously missing context across example records", () => {
+    const base = candidate();
+    const examples = base.phrases
+      .filter(({ categoryId, subcategory, kind }) => categoryId === "supply-chain" && subcategory === "packaging review" && kind === "example")
+      .slice(0, 5);
+    const replacements = new Map<string, Partial<SystemContentPhrase>>(
+      examples.slice(0, 4).map((phrase, index) => [phrase.id, {
+        english: `Regarding packaging review, we need to inspect contextual item ${index} before shipment.`,
+        chinese: "查。",
+      }]),
+    );
+    replacements.set(examples[4].id, { english: "Check it.", chinese: "查。" });
+    const content = replacePhrases(base, replacements);
+    const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "example-hints" });
+
+    for (const phrase of examples.slice(0, 4)) {
+      expect(codes(model.hintsById[phrase.id])).toEqual(["repeated-opening", "missing-context"]);
+    }
+    expect(codes(model.hintsById[examples[4].id])).not.toContain("missing-context");
+  });
+
   it("recognizes non-ASCII Latin letters as English content", () => {
     const base = candidate();
     const content = replacePhrases(base, new Map([
