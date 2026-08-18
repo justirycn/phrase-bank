@@ -29,12 +29,14 @@ function parseJson<T>(value: string): T {
 
 const MAX_CORES_PER_REQUEST = 10;
 const MAX_VALIDATION_ATTEMPTS = 3;
+const PATCHES_PER_COLLECTION_ROUND = 10;
+const MAX_PATCH_COLLECTION_ROUNDS = 4;
 const TOTAL_REQUESTS = CATEGORY_QUOTAS.reduce((total, [, quota]) => total + Math.ceil(quota / MAX_CORES_PER_REQUEST) * 2, 0);
 
-function generationMessages(category: string, coreCount: number, exampleCount: number, chunkIndex: number, chunkCount: number, source: BatchResponse, options: PipelineOptions, feedback?: string): QwenMessage[] {
+function generationMessages(category: string, chunkIndex: number, chunkCount: number, source: BatchResponse, options: PipelineOptions): QwenMessage[] {
   return [
     { role: "system", content: "你是英语口语课程内容设计师。只返回 JSON，不要 Markdown。内容必须自然、实用、准确，适合中国成年学习者。" },
-    { role: "user", content: `优化 ${category} 类别第 ${chunkIndex + 1}/${chunkCount} 批：精确 ${coreCount} 个核心语言块，每个核心恰好 ${exampleCount} 个案例。只允许修改 english 和 chinese；英文必须是自然、多样的口语表达；不得整批使用同一种开头或机械重复模式。中文必须完整翻译子场景，包括英文中的引导上下文，并与英文含义完整对应。批次之间不得重复。使用版本 ${options.version} 和质检版本 ${options.qualityVersion}。返回紧凑补丁 JSON：'{"phrases":[{"id":"输入ID","english":"优化后的英文","chinese":"优化后的中文"}]}'。输入中的每个 ID 必须且只能返回一个补丁；每个补丁只允许 id、english、chinese 三个字段，不得包含任何其他字段。${feedback ? `上一轮补丁无效：${feedback}。请按上述 ID 集合重新完整返回。` : ""} 输入模板：${JSON.stringify(source)}` },
+    { role: "user", content: `优化 ${category} 类别第 ${chunkIndex + 1}/${chunkCount} 批。只允许修改 english 和 chinese；英文必须是自然、多样的口语表达；不得整批使用同一种开头或机械重复模式。中文必须完整翻译子场景，包括英文中的引导上下文，并与英文含义完整对应。批次之间不得重复。使用版本 ${options.version} 和质检版本 ${options.qualityVersion}。本次输入恰好包含 ${source.phrases.length} 条扁平短语记录，必须返回恰好 ${source.phrases.length} 条补丁，每个输入 ID 一条。返回紧凑补丁 JSON：'{"phrases":[{"id":"输入ID","english":"优化后的英文","chinese":"优化后的中文"}]}'。每个补丁只允许 id、english、chinese 三个字段，不得包含任何其他字段。输入模板：${JSON.stringify(source)}` },
   ];
 }
 
@@ -69,7 +71,10 @@ function stableMetadata(phrase: SystemContentPhrase) {
   return JSON.stringify(Object.fromEntries(Object.entries(metadata).sort(([left], [right]) => left.localeCompare(right))));
 }
 
-function patchValidationError(expectedIds: string[], patches: unknown[]) {
+function validatePartialPatches(value: unknown, requestedIds: string[], collectedIds: Set<string>): PhrasePatch[] {
+  if (!value || typeof value !== "object" || !Array.isArray((value as PatchResponse).phrases)) throw new Error("Qwen 补丁格式无效：phrases 必须是数组");
+  const patches = (value as { phrases: unknown[] }).phrases;
+  if (!patches.length) throw new Error("Qwen 补丁验证失败：补丁不能为空");
   const actualIds: string[] = [];
   const errors: string[] = [];
   for (const [index, patch] of patches.entries()) {
@@ -85,24 +90,19 @@ function patchValidationError(expectedIds: string[], patches: unknown[]) {
     if (typeof candidate.english !== "string" || !candidate.english.trim()) errors.push(`第 ${index + 1} 条英文无效`);
     if (typeof candidate.chinese !== "string" || !candidate.chinese.trim()) errors.push(`第 ${index + 1} 条中文无效`);
   }
-  const expected = new Set(expectedIds);
   const duplicateIds = [...new Set(actualIds.filter((id, index) => actualIds.indexOf(id) !== index))];
-  const missingIds = expectedIds.filter((id) => !actualIds.includes(id));
-  const extraIds = actualIds.filter((id) => !expected.has(id));
-  if (actualIds.length !== expectedIds.length) errors.push(`期望 ${expectedIds.length} 条，实际 ${actualIds.length} 条`);
-  if (missingIds.length) errors.push(`缺少 ID: ${missingIds.join(", ")}`);
-  if (extraIds.length) errors.push(`额外 ID: ${[...new Set(extraIds)].join(", ")}`);
+  const requested = new Set(requestedIds);
+  const unrequestedIds = [...new Set(actualIds.filter((id) => !requested.has(id)))];
+  const repeatedIds = unrequestedIds.filter((id) => collectedIds.has(id));
+  const unknownIds = unrequestedIds.filter((id) => !collectedIds.has(id));
   if (duplicateIds.length) errors.push(`重复 ID: ${duplicateIds.join(", ")}`);
-  return errors;
+  if (unknownIds.length) errors.push(`未知 ID: ${unknownIds.join(", ")}`);
+  if (repeatedIds.length) errors.push(`无进展：已收集 ID: ${repeatedIds.join(", ")}`);
+  if (errors.length) throw new Error(`Qwen 补丁验证失败：${errors.join("；")}`);
+  return patches as PhrasePatch[];
 }
 
-function mergePatches(value: unknown, source: BatchResponse): BatchResponse {
-  if (!value || typeof value !== "object" || !Array.isArray((value as PatchResponse).phrases)) throw new Error("Qwen 补丁格式无效：phrases 必须是数组");
-  const patches = (value as { phrases: unknown[] }).phrases;
-  const expectedIds = source.phrases.map(({ id }) => id);
-  const errors = patchValidationError(expectedIds, patches);
-  if (errors.length) throw new Error(`Qwen 补丁验证失败：${errors.join("；")}`);
-  const patchById = new Map((patches as PhrasePatch[]).map((patch) => [patch.id, patch]));
+function mergePatches(patchById: Map<string, PhrasePatch>, source: BatchResponse): BatchResponse {
   return { phrases: source.phrases.map((phrase) => {
     const patch = patchById.get(phrase.id)!;
     return { ...phrase, english: patch.english.trim(), chinese: patch.chinese.trim() };
@@ -126,22 +126,23 @@ function assertBatch(category: string, coreCount: number, batch: BatchResponse, 
   }
 }
 
-async function generateValidBatch(options: PipelineOptions, category: string, coreCount: number, exampleCount: number, chunkIndex: number, chunkCount: number, source: BatchResponse) {
-  const validationErrors: string[] = [];
-  let feedback: string | undefined;
-  for (let attempt = 1; attempt <= MAX_VALIDATION_ATTEMPTS; attempt += 1) {
-    const response = await options.client.complete(generationMessages(category, coreCount, exampleCount, chunkIndex, chunkCount, source, options, feedback));
-    try {
-      const generated = mergePatches(parseJson<unknown>(response), source);
+async function generateValidBatch(options: PipelineOptions, category: string, coreCount: number, chunkIndex: number, chunkCount: number, source: BatchResponse) {
+  const collected = new Map<string, PhrasePatch>();
+  // Source batches are at most 40 phrases; four ten-patch rounds bound collection cost.
+  const rounds = Math.min(MAX_PATCH_COLLECTION_ROUNDS, Math.max(1, Math.ceil(source.phrases.length / PATCHES_PER_COLLECTION_ROUND)));
+  for (let round = 1; round <= rounds; round += 1) {
+    const missingSource = { phrases: source.phrases.filter(({ id }) => !collected.has(id)) };
+    const response = await options.client.complete(generationMessages(category, chunkIndex, chunkCount, missingSource, options));
+    const patches = validatePartialPatches(parseJson<unknown>(response), missingSource.phrases.map(({ id }) => id), new Set(collected.keys()));
+    for (const patch of patches) collected.set(patch.id, patch);
+    if (collected.size === source.phrases.length) {
+      const generated = mergePatches(collected, source);
       assertBatch(category, coreCount, generated, source);
       return generated;
-    } catch (error) {
-      const summary = error instanceof Error ? error.message : "未知补丁验证错误";
-      validationErrors.push(`第 ${attempt} 次：${summary}`);
-      feedback = summary;
     }
   }
-  throw new Error(`${category} 生成补丁连续 ${MAX_VALIDATION_ATTEMPTS} 次无效：${validationErrors.join("；")}`);
+  const missingIds = source.phrases.filter(({ id }) => !collected.has(id)).map(({ id }) => id);
+  throw new Error(`${category} 补丁收集未完成（${rounds} 轮）：缺少 ID: ${missingIds.join(", ")}`);
 }
 
 async function reviewValidBatch(options: PipelineOptions, category: string, coreCount: number, generated: BatchResponse) {
@@ -203,7 +204,7 @@ export async function buildQwenCandidate(options: PipelineOptions): Promise<Syst
       }
       const exampleCount = source.phrases.filter(({ kind }) => kind === "example").length / coreCount;
       if (!Number.isInteger(exampleCount)) throw new Error(`${category} 输入模板案例数量不一致`);
-      const generated = await generateValidBatch(options, category, coreCount, exampleCount, chunkIndex, chunkCount, source);
+      const generated = await generateValidBatch(options, category, coreCount, chunkIndex, chunkCount, source);
       options.onProgress?.({ category, stage: "generate", completed: ++completedRequests, total: TOTAL_REQUESTS });
       const reviewed = await reviewValidBatch(options, category, coreCount, generated);
       assertBatch(category, coreCount, reviewed, source);
