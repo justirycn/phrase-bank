@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { mkdir, open, readFile, realpath, rename, unlink } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { ReviewItem, ReviewState } from "./localReview";
 
@@ -17,6 +17,8 @@ export interface SaveReviewDependencies {
   validIds?: readonly string[];
   writeTemp?: (path: string, contents: string) => Promise<void>;
   atomicReplace?: (temporaryPath: string, destinationPath: string) => Promise<void>;
+  syncDirectory?: (directoryPath: string) => Promise<void>;
+  platform?: NodeJS.Platform;
 }
 
 export interface LocalReviewStore {
@@ -30,6 +32,7 @@ const STATE_KEYS = new Set(["format", "version", "candidateSha256", "sampleSeed"
 const ITEM_KEYS = new Set(["decision", "note", "updatedAt"]);
 const VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
+const PATH_QUEUES = new Map<string, Promise<void>>();
 
 function record(value: unknown): value is Record<string, unknown> {
   // Persisted JSON records use the ordinary object prototype; null and custom prototypes are rejected.
@@ -122,6 +125,14 @@ function validateState(value: unknown): asserts value is ReviewState {
     if (!validIso(item.updatedAt)) throw new Error(`Review state item ${id} has an invalid timestamp`);
   }
   if (Object.hasOwn(value, "approvedAt") && !validIso(value.approvedAt)) throw new Error("Review state has an invalid approval timestamp");
+  const review = value as unknown as ReviewState;
+  if (typeof review.approvedAt === "string") {
+    const undecided = review.sampledIds.find((id) => review.items[id]?.decision !== "pass");
+    if (undecided) throw new Error(`Approved review has an undecided sampled ID: ${undecided}`);
+    if (Object.values(review.items).some((item) => item.decision === "issue")) {
+      throw new Error("Approved review contains an issue decision");
+    }
+  }
 }
 
 function initialState(seed: LocalReviewSeed): ReviewState {
@@ -151,6 +162,15 @@ async function defaultWriteTemp(path: string, contents: string): Promise<void> {
   const handle = await open(path, "wx");
   try {
     await handle.writeFile(contents, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function defaultSyncDirectory(path: string): Promise<void> {
+  const handle = await open(path, "r");
+  try {
     await handle.sync();
   } finally {
     await handle.close();
@@ -198,6 +218,10 @@ export async function saveReview(path: string, state: ReviewState, dependencies:
   try {
     await (dependencies.writeTemp ?? defaultWriteTemp)(temporaryPath, contents);
     await (dependencies.atomicReplace ?? rename)(temporaryPath, path);
+    if ((dependencies.platform ?? process.platform) !== "win32") {
+      // A sync failure after rename is reported without rollback: the new file may already be durable and is reloaded next time.
+      await (dependencies.syncDirectory ?? defaultSyncDirectory)(parent);
+    }
   } catch (error) {
     try {
       await removeOwnedTemp(temporaryPath);
@@ -259,30 +283,53 @@ function assertSameIdentity(state: ReviewState, seed: LocalReviewSeed): void {
   }
 }
 
+function platformCanonicalPath(path: string): string {
+  const absolute = resolve(path);
+  return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+}
+
+async function canonicalPath(path: string): Promise<string> {
+  try {
+    return platformCanonicalPath(await realpath(path));
+  } catch (error) {
+    if (!hasErrorCode(error, "ENOENT")) throw error;
+    return platformCanonicalPath(path);
+  }
+}
+
+function enqueuePathOperation<T>(path: string, operation: () => Promise<T>): Promise<T> {
+  const prior = PATH_QUEUES.get(path) ?? Promise.resolve();
+  const pending = prior.then(operation);
+  const settled = pending.then(() => undefined, () => undefined);
+  PATH_QUEUES.set(path, settled);
+  void settled.then(() => {
+    if (PATH_QUEUES.get(path) === settled) PATH_QUEUES.delete(path);
+  });
+  return pending;
+}
+
 export async function createLocalReviewStore(
   seed: LocalReviewSeed,
   dependencies: Omit<SaveReviewDependencies, "validIds"> = {},
 ): Promise<LocalReviewStore> {
   validateSeed(seed);
-  let current = await loadOrCreateReview(seed);
-  let queue: Promise<void> = Promise.resolve();
+  const initialPathKey = platformCanonicalPath(seed.path);
+  await enqueuePathOperation(initialPathKey, () => loadOrCreateReview(seed));
+  const pathKey = await canonicalPath(seed.path);
 
   return {
-    async read() {
-      await queue;
-      return structuredClone(current);
+    read() {
+      return enqueuePathOperation(pathKey, () => loadOrCreateReview(seed));
     },
     update(mutator) {
-      const operation = queue.then(async () => {
+      return enqueuePathOperation(pathKey, async () => {
+        const current = await loadOrCreateReview(seed);
         const next = await mutator(immutableClone(current));
         validateState(next);
         assertSameIdentity(next, seed);
         await saveReview(seed.path, next, { ...dependencies, validIds: seed.validIds });
-        current = structuredClone(next);
-        return structuredClone(current);
+        return structuredClone(next);
       });
-      queue = operation.then(() => undefined, () => undefined);
-      return operation;
     },
   };
 }

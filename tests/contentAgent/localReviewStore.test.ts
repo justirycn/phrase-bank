@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ReviewState } from "../../scripts/content-agent/localReview";
 import {
@@ -37,6 +37,7 @@ function decided(seed: LocalReviewSeed): ReviewState {
     sampledIds: [...seed.sampledIds],
     items: {
       "phrase-1": { decision: "pass", note: "checked", updatedAt: "2026-08-18T12:00:00.000Z" },
+      "phrase-2": { decision: "pass", note: "checked", updatedAt: "2026-08-18T12:00:00.000Z" },
     },
     approvedAt: "2026-08-18T12:01:00.000Z",
   };
@@ -89,7 +90,7 @@ describe("loadOrCreateReview", () => {
   it("safely resets when valid IDs shrink past a stored decision", async () => {
     const { seed } = await fixture();
     const state = decided(seed);
-    state.items = { "phrase-3": state.items["phrase-1"] };
+    state.items["phrase-3"] = state.items["phrase-1"];
     await saveReview(seed.path, state, { validIds: seed.validIds });
     const next = await loadOrCreateReview({ ...seed, validIds: ["phrase-1", "phrase-2"] });
     expect(next.items).toEqual({});
@@ -132,7 +133,7 @@ describe("loadOrCreateReview", () => {
   it("resets a fully valid unknown stored item ID only after validating it", async () => {
     const { seed } = await fixture();
     const state = decided(seed);
-    state.items = { unknown: state.items["phrase-1"] };
+    state.items.unknown = state.items["phrase-1"];
     await mkdir(join(seed.path, ".."), { recursive: true });
     await writeFile(seed.path, `${JSON.stringify(state)}\n`, "utf8");
     expect((await loadOrCreateReview(seed)).items).toEqual({});
@@ -236,6 +237,67 @@ describe("saveReview", () => {
     expect(await readFile(seed.path, "utf8")).toBe(priorBytes);
     expect(await readdir(parent)).toEqual(priorNames);
   });
+
+  it.each([
+    ["empty approved review", (state: ReviewState) => ({ ...state, items: {} })],
+    ["undecided sampled ID", (state: ReviewState) => ({ ...state, items: { "phrase-1": state.items["phrase-1"] } })],
+    ["issue anywhere", (state: ReviewState) => ({
+      ...state,
+      items: { ...state.items, "phrase-3": { decision: "issue" as const, note: "problem", updatedAt: "2026-08-18T12:00:00.000Z" } },
+    })],
+  ])("rejects an %s on save and load without changing persisted bytes", async (_label, invalidate) => {
+    const { seed } = await fixture();
+    const invalid = invalidate(decided(seed));
+    await expect(saveReview(seed.path, invalid, { validIds: seed.validIds })).rejects.toThrow(/approved review/i);
+
+    await mkdir(dirname(seed.path), { recursive: true });
+    const bytes = `${JSON.stringify(invalid)}\n`;
+    await writeFile(seed.path, bytes, "utf8");
+    await expect(loadOrCreateReview(seed)).rejects.toThrow(/approved review/i);
+    expect(await readFile(seed.path, "utf8")).toBe(bytes);
+  });
+
+  it("syncs the containing directory after replacement on POSIX", async () => {
+    const { seed } = await fixture();
+    const events: string[] = [];
+    await saveReview(seed.path, decided(seed), {
+      validIds: seed.validIds,
+      platform: "linux",
+      atomicReplace: async (temporaryPath, destinationPath) => {
+        events.push("replace");
+        await rename(temporaryPath, destinationPath);
+      },
+      syncDirectory: async (path) => {
+        events.push(`sync:${path}`);
+      },
+    });
+    expect(events).toEqual(["replace", `sync:${dirname(seed.path)}`]);
+  });
+
+  it("skips containing-directory sync on Windows", async () => {
+    const { seed } = await fixture();
+    let called = false;
+    await saveReview(seed.path, decided(seed), {
+      validIds: seed.validIds,
+      platform: "win32",
+      syncDirectory: async () => { called = true; },
+    });
+    expect(called).toBe(false);
+  });
+
+  it("reports a post-rename directory-sync failure without rolling back new bytes", async () => {
+    const { seed } = await fixture();
+    const prior = decided(seed);
+    await saveReview(seed.path, prior, { validIds: seed.validIds });
+    const next = { ...prior, approvedAt: "2026-08-18T12:02:00.000Z" };
+    await expect(saveReview(seed.path, next, {
+      validIds: seed.validIds,
+      platform: "linux",
+      syncDirectory: async () => { throw new Error("directory sync failed"); },
+    })).rejects.toThrow("directory sync failed");
+    expect(JSON.parse(await readFile(seed.path, "utf8"))).toEqual(next);
+    expect((await readdir(dirname(seed.path))).filter((name) => name.includes(".pending-"))).toEqual([]);
+  });
 });
 
 describe("createLocalReviewStore", () => {
@@ -336,5 +398,45 @@ describe("createLocalReviewStore", () => {
     const store = await createLocalReviewStore(seed);
     await expect(store.update((current) => ({ ...current, candidateSha256: HASH_B }))).rejects.toThrow(/identity/i);
     expect((await store.read()).candidateSha256).toBe(HASH_A);
+  });
+
+  it("serializes concurrent updates across stores using equivalent path spellings", async () => {
+    const { seed } = await fixture();
+    const equivalentPath = process.platform === "win32"
+      ? seed.path.toUpperCase()
+      : `${dirname(seed.path)}${sep}.${sep}${basename(seed.path)}`;
+    const first = await createLocalReviewStore(seed);
+    const second = await createLocalReviewStore({ ...seed, path: equivalentPath });
+
+    await Promise.all([
+      first.update((current) => ({ ...current, items: { ...current.items, "phrase-1": { decision: "pass", note: "one", updatedAt: "2026-08-18T12:00:00.000Z" } } })),
+      second.update((current) => ({ ...current, items: { ...current.items, "phrase-2": { decision: "pass", note: "two", updatedAt: "2026-08-18T12:00:00.000Z" } } })),
+    ]);
+
+    expect((await first.read()).items).toMatchObject({ "phrase-1": { note: "one" }, "phrase-2": { note: "two" } });
+    expect(JSON.parse(await readFile(seed.path, "utf8")).items).toMatchObject({ "phrase-1": { note: "one" }, "phrase-2": { note: "two" } });
+  });
+
+  it("does not lose 20 concurrent updates split across two stores", async () => {
+    const { seed } = await fixture();
+    seed.validIds = Array.from({ length: 20 }, (_, index) => `phrase-${index}`);
+    seed.sampledIds = ["phrase-0"];
+    const first = await createLocalReviewStore(seed);
+    const second = await createLocalReviewStore(seed);
+    await Promise.all(seed.validIds.map((id, index) => (index % 2 ? first : second).update((current) => ({
+      ...current,
+      items: { ...current.items, [id]: { decision: "pass", note: `${index}`, updatedAt: "2026-08-18T12:00:00.000Z" } },
+    }))));
+    expect(Object.keys((await first.read()).items)).toHaveLength(20);
+    expect(Object.keys(JSON.parse(await readFile(seed.path, "utf8")).items)).toHaveLength(20);
+  });
+
+  it("allows another store to update after a shared-queue failure", async () => {
+    const { seed } = await fixture();
+    const failing = await createLocalReviewStore(seed, { atomicReplace: async () => { throw new Error("replace failed"); } });
+    const healthy = await createLocalReviewStore(seed);
+    await expect(failing.update((current) => ({ ...current, items: { "phrase-1": { decision: "issue", note: "bad", updatedAt: "2026-08-18T12:00:00.000Z" } } }))).rejects.toThrow("replace failed");
+    const saved = await healthy.update((current) => ({ ...current, items: { "phrase-2": { decision: "pass", note: "good", updatedAt: "2026-08-18T12:00:00.000Z" } } }));
+    expect(saved.items).toEqual({ "phrase-2": expect.objectContaining({ note: "good" }) });
   });
 });
