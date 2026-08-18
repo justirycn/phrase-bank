@@ -9,6 +9,7 @@ interface LocalContentReviewDependencies {
   repositoryRoot?: string;
   startServer?: typeof startLocalReviewServer;
   writeOutput?: (value: string) => void;
+  writeError?: (value: string) => void;
   onSignal?: (signal: "SIGINT" | "SIGTERM", listener: () => void) => void;
   setExitCode?: (value: number) => void;
 }
@@ -49,7 +50,16 @@ export async function runLocalContentReview(args = process.argv.slice(2), depend
   const close = () => { closing ??= server.close(); return closing; };
   const onSignal = dependencies.onSignal ?? ((signal: "SIGINT" | "SIGTERM", listener: () => void) => process.once(signal, listener));
   const setExitCode = dependencies.setExitCode ?? ((value: number) => { process.exitCode = value; });
-  const handleSignal = () => { void close().then(() => setExitCode(0)); };
+  const writeError = dependencies.writeError ?? ((value: string) => process.stderr.write(value));
+  let handlingSignal = false;
+  const handleSignal = () => {
+    if (handlingSignal) return;
+    handlingSignal = true;
+    void close().then(
+      () => setExitCode(0),
+      () => { writeError("Local review server failed to close.\n"); setExitCode(1); },
+    );
+  };
   onSignal("SIGINT", handleSignal);
   onSignal("SIGTERM", handleSignal);
 }

@@ -313,4 +313,28 @@ describe("local review CLI", () => {
     await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
     expect(setExitCode).toHaveBeenCalledWith(0);
   });
+
+  it("handles a rejected close once without leaking its error across competing signals", async () => {
+    const runner = await import(`${pathToFileURL(resolve("scripts/run-local-content-review.ts")).href}?close-failure=${Date.now()}`);
+    const secret = "private-close-detail";
+    const close = vi.fn(async () => { throw new Error(secret); });
+    const signals = new Map<string, () => void>();
+    const errors: string[] = [];
+    const setExitCode = vi.fn();
+
+    await runner.runLocalContentReview(["--version", "2026.08.2"], {
+      startServer: vi.fn(async () => ({ host: "127.0.0.1", url: "http://127.0.0.1:43127", close })),
+      writeOutput: vi.fn(),
+      writeError: (value: string) => errors.push(value),
+      onSignal: (signal: string, listener: () => void) => signals.set(signal, listener),
+      setExitCode,
+    });
+
+    signals.get("SIGTERM")?.();
+    signals.get("SIGINT")?.();
+    await vi.waitFor(() => expect(setExitCode).toHaveBeenCalledWith(1));
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(errors).toEqual(["Local review server failed to close.\n"]);
+    expect(errors.join("")).not.toContain(secret);
+  });
 });
