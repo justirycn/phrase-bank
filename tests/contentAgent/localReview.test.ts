@@ -144,6 +144,25 @@ describe("local phrase review", () => {
     }
   });
 
+  it("combines core and example records in one family opening threshold", () => {
+    const base = candidate();
+    const family = base.phrases.filter(({ categoryId, subcategory }) =>
+      categoryId === "supply-chain" && subcategory === "packaging review");
+    const mixed = [
+      ...family.filter(({ kind }) => kind === "core").slice(0, 2),
+      ...family.filter(({ kind }) => kind === "example").slice(0, 2),
+    ];
+    const content = replacePhrases(base, new Map(mixed.map((phrase, index) => [phrase.id, {
+      english: `During packaging review, inspect valid item ${index} carefully.`,
+      chinese: `在包装审核时，请仔细检查有效项目${index}。`,
+    }])));
+    const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "mixed-family-opening" });
+
+    for (const phrase of mixed) {
+      expect(codes(model.hintsById[phrase.id])).toEqual(["repeated-opening"]);
+    }
+  });
+
   it("flags repeated openings and obviously missing context across example records", () => {
     const base = candidate();
     const examples = base.phrases

@@ -78,7 +78,7 @@ function repeatedOpeningIds(phrases: SystemContentPhrase[]): Set<string> {
     if (!phrase.english.trim()) continue;
     const opening = normalizedOpening(phrase.english);
     if (!opening) continue;
-    const key = `${phrase.categoryId}\u0000${phrase.subcategory}\u0000${phrase.kind}\u0000${opening}`;
+    const key = `${phrase.categoryId}\u0000${phrase.subcategory}\u0000${opening}`;
     groups.set(key, [...(groups.get(key) ?? []), phrase]);
   }
   return new Set([...groups.values()].filter((group) => group.length >= 4).flatMap((group) => group.map(({ id }) => id)));
