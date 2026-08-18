@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      approved_sha:
+        description: Exact approved commit SHA to deploy
+        required: true
+        type: string
 
 concurrency:
   group: phrase-bank-production
@@ -13,6 +18,13 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      - name: Verify approved dispatch SHA
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          APPROVED_SHA: ${{ inputs.approved_sha }}
+        run: |
+          test -n "$APPROVED_SHA"
+          test "$GITHUB_SHA" = "$APPROVED_SHA"
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:

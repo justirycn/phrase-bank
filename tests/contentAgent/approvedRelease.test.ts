@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile as nodeExecFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -23,7 +23,10 @@ const APPROVED_OUTPUTS: Record<string, string> = {
   [ALLOWED[0]]: "approved candidate bytes\n",
   [ALLOWED[1]]: `export const BUNDLED_SYSTEM_CONTENT_VERSION = "${VERSION}";\n`,
 };
-const approvedOutputHashes = () => Object.fromEntries(Object.entries(APPROVED_OUTPUTS).map(([path, raw]) => [path, createHash("sha256").update(raw).digest("hex")]));
+const blobOid = (raw: string) => createHash("sha1").update(Buffer.from(`blob ${Buffer.byteLength(raw)}\0`)).update(raw).digest("hex");
+const approvedOutputHashes = () => Object.fromEntries(Object.entries(APPROVED_OUTPUTS).map(([path, raw]) => [path, blobOid(raw)]));
+const execFile = promisify(nodeExecFile);
+const git = async (cwd: string, ...args: string[]) => (await execFile("git", args, { cwd, encoding: "utf8", windowsHide: true })).stdout;
 
 function approvedReview(overrides: Partial<ReviewState> = {}): ReviewState {
   return {
@@ -128,6 +131,9 @@ function releaseExecutor(options: { dirty?: string; driftAt?: number; pushHead?:
   let fetches = 0;
   let committed = false;
   let pushed = false;
+  let statusReads = 0;
+  let staged = false;
+  let afterReset = false;
   const base = "1".repeat(40);
   const commit = options.pushHead ?? "2".repeat(40);
   const execute = vi.fn(async (...command: string[]) => {
@@ -135,8 +141,10 @@ function releaseExecutor(options: { dirty?: string; driftAt?: number; pushHead?:
     const key = command.join(" ");
     if (key === "git status --porcelain=v1 -z --untracked-files=all") {
       if (options.dirty !== undefined) return options.dirty;
-      const count = calls.filter((value) => value.join(" ") === key).length;
-      return count % 3 === 1 ? "" : count % 3 === 2 ? ` M ${ALLOWED[1]}\0?? ${ALLOWED[0]}\0` : `M  ${ALLOWED[1]}\0A  ${ALLOWED[0]}\0`;
+      if (afterReset) { afterReset = false; statusReads = 0; return ` M ${ALLOWED[1]}\0?? ${ALLOWED[0]}\0`; }
+      const count = ++statusReads;
+      if (count === 1 || committed) return "";
+      return staged ? `M  ${ALLOWED[1]}\0A  ${ALLOWED[0]}\0` : ` M ${ALLOWED[1]}\0?? ${ALLOWED[0]}\0`;
     }
     if (key === "git rev-parse --show-toplevel") return `${resolve("release-root")}\n`;
     if (key === "git rev-parse --git-dir") return `${resolve("common/.git/worktrees/release")}\n`;
@@ -147,10 +155,13 @@ function releaseExecutor(options: { dirty?: string; driftAt?: number; pushHead?:
     if (key === "git rev-parse origin/main") return `${options.driftAt === fetches ? "9".repeat(40) : base}\n`;
     if (key === "git diff --cached --name-status -z") return `A\0${ALLOWED[0]}\0M\0${ALLOWED[1]}\0`;
     if (key === "git diff-tree --no-commit-id --name-status -r -z HEAD") return `A\0${ALLOWED[0]}\0M\0${ALLOWED[1]}\0`;
-    if (command[0] === "git" && command[1] === "show") return APPROVED_OUTPUTS[command[2].slice(command[2].indexOf(":") + 1)] ?? "";
-    if (command[0] === "git" && command.includes("commit")) { committed = true; return "created\n"; }
-    if (command[0] === "git" && command[1] === "push") { pushed = true; return ""; }
-    if (command[0] === "git" && command[1] === "update-ref") { committed = false; return ""; }
+    if (command[0] === "git" && command[1] === "rev-parse" && command[2]?.includes(":")) return `${approvedOutputHashes()[command[2].slice(command[2].indexOf(":") + 1)]}\n`;
+    if (key === `git add -- ${ALLOWED.join(" ")}`) { staged = true; return ""; }
+    if (command[0] === "git" && command.includes("commit")) { committed = true; staged = false; return "created\n"; }
+    if (command[0] === "git" && command.includes("push")) { pushed = true; return ""; }
+    if (command[0] === "git" && command.includes("update-ref")) { committed = false; staged = true; return ""; }
+    if (command[0] === "git" && command.includes("restore")) { staged = false; return ""; }
+    if (command[0] === "git" && command.includes("reset")) { staged = false; afterReset = true; return ""; }
     if (command[0] === "git" && command[1] === "rev-list") return "1\n";
     if (key === "git ls-remote --heads origin refs/heads/main") return `${pushed ? commit : base}\trefs/heads/main\n`;
     return "";
@@ -177,11 +188,11 @@ describe("approved release orchestration", () => {
     expect(calls).toContainEqual(["git", "add", "--", ...ALLOWED]);
     expect(flat).toContain("git diff --cached --check");
     expect(calls.filter((command) => command[0] === "git" && command.includes("commit"))).toHaveLength(1);
-    expect(calls).toContainEqual(["git", "push", "origin", `${"2".repeat(40)}:refs/heads/main`]);
-    expect(calls.flat().some((argument) => argument === "-f" || argument.startsWith("--force"))).toBe(false);
-    expect(calls.at(-1)).toEqual(["gh", "workflow", "run", "deploy.yml", "--ref", "main"]);
+    expect(calls).toContainEqual(["git", "-c", expect.stringMatching(/^core\.hooksPath=.+/u), "push", "origin", `${"2".repeat(40)}:refs/heads/main`]);
+    expect(calls.filter((command) => command.includes("push")).flat().some((argument) => argument === "-f" || argument.startsWith("--force"))).toBe(false);
+    expect(calls.at(-1)).toEqual(["gh", "workflow", "run", "deploy.yml", "--ref", "main", "-f", `approved_sha=${"2".repeat(40)}`]);
     expect(flat.filter((value) => value === "git fetch --no-tags origin main")).toHaveLength(3);
-    expect(flat.indexOf("git ls-remote --heads origin refs/heads/main")).toBeLessThan(flat.indexOf("gh workflow run deploy.yml --ref main"));
+    expect(flat.indexOf("git ls-remote --heads origin refs/heads/main")).toBeLessThan(flat.indexOf(`gh workflow run deploy.yml --ref main -f approved_sha=${"2".repeat(40)}`));
   });
 
   it("rejects dirt, a non-isolated worktree, and initial branch drift before validation or publishing", async () => {
@@ -193,7 +204,7 @@ describe("approved release orchestration", () => {
       await expect(runApprovedRelease({ version: VERSION, repositoryRoot: resolve("release-root"), execute: setup.execute, validate, publish, rollback: vi.fn() })).rejects.toThrow();
       expect(validate).not.toHaveBeenCalled();
       expect(publish).not.toHaveBeenCalled();
-      expect(setup.calls.some(([program, action]) => program === "git" && (action === "commit" || action === "push"))).toBe(false);
+      expect(setup.calls.some((command) => command[0] === "git" && (command.includes("commit") || command.includes("push")))).toBe(false);
       expect(setup.calls.some(([program]) => program === "gh")).toBe(false);
     }
   });
@@ -214,11 +225,11 @@ describe("approved release orchestration", () => {
     });
     await expect(runApprovedRelease({ version: VERSION, repositoryRoot: resolve("release-root"), execute, validate: vi.fn(), publish: async () => approvedOutputHashes(), rollback })).rejects.toThrow(/lint failed/);
     expect(rollback).toHaveBeenCalledTimes(1);
-    expect(calls.some(([program, action]) => program === "git" && (action === "commit" || action === "push"))).toBe(false);
+    expect(calls.some((command) => command[0] === "git" && (command.includes("commit") || command.includes("push")))).toBe(false);
     expect(calls.some(([program]) => program === "gh")).toBe(false);
   });
 
-  it("rolls back a partially failing publisher and unstages exact outputs after a cached gate failure", async () => {
+  it("does not guess ownership after a partially failing publisher and unstages exact outputs after a cached gate failure", async () => {
     const partial = releaseExecutor();
     const partialRollback = vi.fn(async () => undefined);
     await expect(runApprovedRelease({
@@ -229,8 +240,8 @@ describe("approved release orchestration", () => {
       publish: async () => { throw new Error("partial publish"); },
       rollback: partialRollback,
     })).rejects.toThrow(/partial publish/);
-    expect(partialRollback).toHaveBeenCalledTimes(1);
-    expect(partial.calls.some(([program, action]) => program === "git" && (action === "commit" || action === "push"))).toBe(false);
+    expect(partialRollback).not.toHaveBeenCalled();
+    expect(partial.calls.some((command) => command[0] === "git" && (command.includes("commit") || command.includes("push")))).toBe(false);
 
     const staged = releaseExecutor();
     const original = staged.execute.getMockImplementation()!;
@@ -250,8 +261,8 @@ describe("approved release orchestration", () => {
       const { execute, calls } = releaseExecutor({ driftAt });
       await expect(runApprovedRelease({ version: VERSION, repositoryRoot: resolve("release-root"), execute, validate: vi.fn(), publish: async () => approvedOutputHashes(), rollback: vi.fn() })).rejects.toThrow(/main.*changed|drift/i);
       expect(calls.some(([program]) => program === "gh")).toBe(false);
-      if (driftAt === 2) expect(calls.some(([program, action]) => program === "git" && action === "commit")).toBe(false);
-      if (driftAt === 3) expect(calls.some(([program, action]) => program === "git" && action === "push")).toBe(false);
+      if (driftAt === 2) expect(calls.some((command) => command[0] === "git" && command.includes("commit"))).toBe(false);
+      if (driftAt === 3) expect(calls.some((command) => command[0] === "git" && command.includes("push"))).toBe(false);
     }
   });
 
@@ -292,7 +303,7 @@ describe("approved release orchestration", () => {
       return unstagedOriginal(...command);
     });
     await expect(runApprovedRelease({ version: VERSION, repositoryRoot: resolve("release-root"), execute: unstaged.execute, validate: vi.fn(), publish: async () => approvedOutputHashes(), rollback: vi.fn() })).rejects.toThrow(/staging|worktree/i);
-    expect(unstaged.calls.some(([program, action]) => program === "git" && action === "commit")).toBe(false);
+    expect(unstaged.calls.some((command) => command[0] === "git" && command.includes("commit"))).toBe(false);
 
     const hooked = releaseExecutor();
     const hookedOriginal = hooked.execute.getMockImplementation()!;
@@ -301,7 +312,7 @@ describe("approved release orchestration", () => {
       return hookedOriginal(...command);
     });
     await expect(runApprovedRelease({ version: VERSION, repositoryRoot: resolve("release-root"), execute: hooked.execute, validate: vi.fn(), publish: async () => approvedOutputHashes(), rollback: vi.fn() })).rejects.toThrow(/commit/i);
-    expect(hooked.calls.some(([program, action]) => program === "git" && action === "push")).toBe(false);
+    expect(hooked.calls.some((command) => command[0] === "git" && command.includes("push"))).toBe(false);
     expect(hooked.calls.some(([program]) => program === "gh")).toBe(false);
   });
 
@@ -310,22 +321,22 @@ describe("approved release orchestration", () => {
     await runApprovedRelease({ version: VERSION, repositoryRoot: resolve("release-root"), execute: base.execute, validate: vi.fn(), publish: async () => approvedOutputHashes(), rollback: vi.fn() });
     const commit = base.calls.find((command) => command.includes("commit"));
     expect(commit).toEqual(["git", "-c", expect.stringMatching(/^core\.hooksPath=.+/u), "commit", "-m", `content: publish Qwen phrase library ${VERSION}`]);
-    expect(base.calls).toContainEqual(["git", "show", `${"2".repeat(40)}:${ALLOWED[0]}`]);
-    expect(base.calls).toContainEqual(["git", "show", `${"2".repeat(40)}:${ALLOWED[1]}`]);
-    expect(base.calls).toContainEqual(["git", "push", "origin", `${"2".repeat(40)}:refs/heads/main`]);
-    expect(base.calls.flat().some((argument) => argument === "-f" || argument.startsWith("--force"))).toBe(false);
-    expect(base.calls).not.toContainEqual(["git", "push", "origin", "HEAD:main"]);
+    expect(base.calls).toContainEqual(["git", "rev-parse", `${"2".repeat(40)}:${ALLOWED[0]}`]);
+    expect(base.calls).toContainEqual(["git", "rev-parse", `${"2".repeat(40)}:${ALLOWED[1]}`]);
+    expect(base.calls).toContainEqual(["git", "-c", expect.stringMatching(/^core\.hooksPath=.+/u), "push", "origin", `${"2".repeat(40)}:refs/heads/main`]);
+    expect(base.calls.filter((command) => command.includes("push")).flat().some((argument) => argument === "-f" || argument.startsWith("--force"))).toBe(false);
+    expect(base.calls.flat()).not.toContain("HEAD:main");
   });
 
   it("rejects a committed allowed file whose bytes differ from the approved publish snapshot", async () => {
     const base = releaseExecutor();
     const original = base.execute.getMockImplementation()!;
     base.execute.mockImplementation(async (...command: string[]) => {
-      if (command[0] === "git" && command[1] === "show" && command[2].endsWith(`:${ALLOWED[0]}`)) return "hook-mutated bytes\n";
+      if (command[0] === "git" && command[1] === "rev-parse" && command[2].endsWith(`:${ALLOWED[0]}`)) return `${"f".repeat(40)}\n`;
       return original(...command);
     });
     await expect(runApprovedRelease({ version: VERSION, repositoryRoot: resolve("release-root"), execute: base.execute, validate: vi.fn(), publish: async () => approvedOutputHashes(), rollback: vi.fn() })).rejects.toThrow(/approved|bytes|hash/i);
-    expect(base.calls.some(([program, action]) => program === "git" && action === "push")).toBe(false);
+    expect(base.calls.some((command) => command[0] === "git" && command.includes("push"))).toBe(false);
     expect(base.calls.some(([program]) => program === "gh")).toBe(false);
   });
 
@@ -333,7 +344,7 @@ describe("approved release orchestration", () => {
     const base = releaseExecutor();
     const original = base.execute.getMockImplementation()!;
     base.execute.mockImplementation(async (...command: string[]) => {
-      if (command[0] === "git" && command[1] === "push") { base.calls.push(command); throw new Error("pre-push transport failure"); }
+      if (command[0] === "git" && command.includes("push")) { base.calls.push(command); throw new Error("pre-push transport failure"); }
       return original(...command);
     });
     const rollback = vi.fn(async () => undefined);
@@ -344,7 +355,7 @@ describe("approved release orchestration", () => {
     expect(rollback).toHaveBeenCalledTimes(1);
     expect(base.calls.some(([program]) => program === "gh")).toBe(false);
     await expect(runApprovedRelease({ version: VERSION, repositoryRoot: resolve("release-root"), execute: base.execute, validate: vi.fn(), publish: async () => approvedOutputHashes(), rollback })).rejects.toThrow(/transport failure/i);
-    expect(base.calls.filter(([program, action]) => program === "git" && action === "push")).toHaveLength(2);
+    expect(base.calls.filter((command) => command[0] === "git" && command.includes("push"))).toHaveLength(2);
     expect(base.calls.filter(([program, action]) => program === "git" && action === "reset")).toHaveLength(2);
     expect(rollback).toHaveBeenCalledTimes(2);
   });
@@ -394,8 +405,6 @@ describe("approved release orchestration", () => {
     const repository = join(root, "repository");
     const origin = join(root, "origin.git");
     const worktree = join(root, "release");
-    const execFile = promisify(nodeExecFile);
-    const git = async (cwd: string, ...args: string[]) => (await execFile("git", args, { cwd, encoding: "utf8", windowsHide: true })).stdout;
     try {
       await mkdir(join(repository, "app/domain"), { recursive: true });
       await mkdir(join(repository, "public/content"), { recursive: true });
@@ -414,6 +423,7 @@ describe("approved release orchestration", () => {
       const baseHead = (await git(worktree, "rev-parse", "HEAD")).trim();
       const hook = join(repository, ".git/hooks/pre-commit");
       await writeFile(hook, "#!/bin/sh\nprintf 'hook-mutated\\n' > app/domain/bundledSystemContent.ts\ngit add app/domain/bundledSystemContent.ts\nprintf 'ran\\n' > hook-ran.txt\nexit 91\n");
+      await writeFile(join(repository, ".git/hooks/pre-push"), "#!/bin/sh\nprintf 'push-hook-mutated\\n' > app/domain/bundledSystemContent.ts\ngit add app/domain/bundledSystemContent.ts\nprintf 'ran\\n' > push-hook-ran.txt\nexit 92\n");
       const hooksPath = join(worktree, ".content-agent/disabled-hooks");
       await mkdir(hooksPath, { recursive: true });
       const calls: string[][] = [];
@@ -421,7 +431,12 @@ describe("approved release orchestration", () => {
         calls.push(command);
         if (command[0] === "npm") return "";
         if (command[0] === "gh") throw new Error("dispatch must not run");
-        if (command[0] === "git" && command[1] === "push") throw new Error("simulated pre-push transport failure");
+        if (command[0] === "git" && command.includes("push")) {
+          const arguments_ = command.slice(1);
+          arguments_.splice(arguments_.indexOf("push") + 1, 0, "--dry-run");
+          await git(worktree, ...arguments_);
+          throw new Error("simulated pre-push transport failure");
+        }
         if (command[0] !== "git") throw new Error("unexpected program");
         return git(worktree, ...command.slice(1));
       };
@@ -447,6 +462,7 @@ describe("approved release orchestration", () => {
       expect(calls.some((command) => command[0] === "git" && command[1] === "-c" && command[2] === `core.hooksPath=${hooksPath}`)).toBe(true);
       expect(await readFile(modulePath, "utf8")).toBe("baseline module\n");
       await expect(readFile(join(worktree, "hook-ran.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(join(worktree, "push-hook-ran.txt"))).rejects.toMatchObject({ code: "ENOENT" });
       expect((await git(worktree, "rev-parse", "HEAD")).trim()).toBe(baseHead);
       expect(await git(worktree, "status", "--porcelain", "--untracked-files=all")).toBe("");
       expect(rollback).toHaveBeenCalledTimes(1);
@@ -455,6 +471,86 @@ describe("approved release orchestration", () => {
       await rm(root, { recursive: true, force: true });
     }
   }, 20_000);
+
+  it("refuses real cleanup when staged, unstaged, or symlink output state drifts before push", async () => {
+    const root = await mkdtemp(join(tmpdir(), "approved-release-drift-"));
+    const repository = join(root, "repository");
+    const origin = join(root, "origin.git");
+    const outside = join(root, "outside.txt");
+    try {
+      await mkdir(join(repository, "app/domain"), { recursive: true });
+      await mkdir(join(repository, "public/content"), { recursive: true });
+      await git(repository, "init", "-b", "main");
+      await git(repository, "config", "user.email", "release@example.test");
+      await git(repository, "config", "user.name", "Release Test");
+      await writeFile(join(repository, ".gitignore"), ".content-agent/\n");
+      await writeFile(join(repository, ALLOWED[1]), "baseline module\n");
+      await writeFile(join(repository, "public/content/.gitkeep"), "");
+      await git(repository, "add", ".");
+      await git(repository, "commit", "-m", "base");
+      await git(root, "clone", "--bare", repository, origin);
+      await git(repository, "remote", "add", "origin", origin);
+      await git(repository, "fetch", "origin", "main");
+      await writeFile(outside, "outside-owned\n");
+
+      for (const mode of ["staged", "unstaged", "symlink"] as const) {
+        const worktree = join(root, `worktree-${mode}`);
+        await git(repository, "worktree", "add", "-b", `release-${mode}`, worktree, "main");
+        const baseHead = (await git(worktree, "rev-parse", "HEAD")).trim();
+        const hooksPath = join(worktree, ".content-agent/disabled-hooks");
+        await mkdir(hooksPath, { recursive: true });
+        const publicPath = join(worktree, ALLOWED[0]);
+        const modulePath = join(worktree, ALLOWED[1]);
+        const calls: string[][] = [];
+        const execute = async (...command: string[]) => {
+          calls.push(command);
+          if (command[0] === "npm") return "";
+          if (command[0] === "gh") throw new Error("dispatch must not run");
+          if (command[0] === "git" && command.includes("push")) {
+            if (mode === "staged") { await writeFile(modulePath, "concurrent staged\n"); await git(worktree, "add", ALLOWED[1]); }
+            if (mode === "unstaged") await writeFile(modulePath, "concurrent unstaged\n");
+            if (mode === "symlink") { await rm(publicPath); await symlink(outside, publicPath, "file"); }
+            throw new Error(`simulated ${mode} push failure`);
+          }
+          if (command[0] !== "git") throw new Error("unexpected program");
+          return git(worktree, ...command.slice(1));
+        };
+        const rollback = vi.fn(async () => {
+          await writeFile(modulePath, "baseline module\n");
+          await rm(publicPath, { force: true });
+        });
+        const validateRollback = async () => {
+          for (const [path, raw] of [[publicPath, APPROVED_OUTPUTS[ALLOWED[0]]], [modulePath, APPROVED_OUTPUTS[ALLOWED[1]]]] as const) {
+            const metadata = await lstat(path);
+            if (!metadata.isFile() || metadata.isSymbolicLink() || await readFile(path, "utf8") !== raw) throw new Error("owned output drifted");
+          }
+        };
+        await expect(runApprovedRelease({
+          version: VERSION,
+          repositoryRoot: worktree,
+          hooksPath,
+          execute,
+          validate: vi.fn(),
+          publish: async () => {
+            await writeFile(publicPath, APPROVED_OUTPUTS[ALLOWED[0]]);
+            await writeFile(modulePath, APPROVED_OUTPUTS[ALLOWED[1]]);
+            return approvedOutputHashes();
+          },
+          validateRollback,
+          rollback,
+        })).rejects.toThrow(/cleanup|failed/i);
+        expect(rollback).not.toHaveBeenCalled();
+        expect((await git(worktree, "rev-parse", "HEAD")).trim()).not.toBe(baseHead);
+        if (mode === "staged") expect(await readFile(modulePath, "utf8")).toBe("concurrent staged\n");
+        if (mode === "unstaged") expect(await readFile(modulePath, "utf8")).toBe("concurrent unstaged\n");
+        if (mode === "symlink") expect((await lstat(publicPath)).isSymbolicLink()).toBe(true);
+        expect(calls.some(([program]) => program === "gh")).toBe(false);
+      }
+      expect(await readFile(outside, "utf8")).toBe("outside-owned\n");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe("approved release CLI", () => {

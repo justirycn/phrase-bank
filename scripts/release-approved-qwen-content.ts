@@ -1,6 +1,6 @@
 import { execFile as nodeExecFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, unlink, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -83,15 +83,47 @@ async function snapshotOutputs(paths: readonly string[]): Promise<OutputSnapshot
   }));
 }
 
-async function restoreOutputs(snapshots: readonly OutputSnapshot[]): Promise<void> {
+function sha256(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function gitBlobOid(bytes: Buffer): string {
+  return createHash("sha1").update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest("hex");
+}
+
+async function validateOwnedOutputs(repositoryRoot: string, owned: ReadonlyMap<string, string>): Promise<void> {
+  await assertSafeReleasePaths(repositoryRoot, [...owned.keys()].map((path) => ({ path, kind: "output" as const })));
+  for (const [path, expectedHash] of owned) {
+    const metadata = await lstat(path);
+    if (!metadata.isFile() || metadata.isSymbolicLink()) throw new Error("Refusing cleanup of a non-regular release output");
+    if (sha256(await readFile(path)) !== expectedHash) throw new Error("Refusing cleanup because a release output drifted");
+  }
+}
+
+async function restoreOutputs(repositoryRoot: string, snapshots: readonly OutputSnapshot[], owned: Map<string, string>): Promise<void> {
+  await validateOwnedOutputs(repositoryRoot, owned);
   for (const snapshot of snapshots) {
+    await validateOwnedOutputs(repositoryRoot, owned);
     if (snapshot.existed) {
-      await mkdir(dirname(snapshot.path), { recursive: true });
-      await writeFile(snapshot.path, snapshot.contents!);
+      const temporary = join(dirname(snapshot.path), `.approved-release-restore-${randomUUID()}.tmp`);
+      let handle: Awaited<ReturnType<typeof open>> | undefined;
+      try {
+        handle = await open(temporary, "wx", 0o600);
+        await handle.writeFile(snapshot.contents!);
+        await handle.sync();
+        await handle.close();
+        handle = undefined;
+        await validateOwnedOutputs(repositoryRoot, owned);
+        await rename(temporary, snapshot.path);
+      } finally {
+        await handle?.close().catch(() => undefined);
+        await rm(temporary, { force: true });
+      }
     } else {
-      try { await unlink(snapshot.path); }
-      catch (error) { if (!(typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")) throw error; }
+      await validateOwnedOutputs(repositoryRoot, owned);
+      await unlink(snapshot.path);
     }
+    owned.delete(snapshot.path);
   }
 }
 
@@ -115,6 +147,7 @@ export async function runApprovedReleaseCli(
     { path: versionModulePath, kind: "output" },
   ]);
   const snapshots = await snapshotOutputs([destination, versionModulePath]);
+  const ownedOutputs = new Map<string, string>();
   let loaded: Awaited<ReturnType<typeof loadApprovedRelease>> | undefined;
   let approvedSnapshot: ApprovedPublishSnapshot | undefined;
   try {
@@ -130,12 +163,17 @@ export async function runApprovedReleaseCli(
         if (!loaded || !approvedSnapshot) throw new Error("Approval validation must complete before publishing");
         await assertSafeReleasePaths(repositoryRoot, [{ path: destination, kind: "output" }, { path: versionModulePath, kind: "output" }]);
         await publishCandidate({ version, candidatePath: approvedSnapshot.candidatePath, reportPath: approvedSnapshot.reportPath, publicDir, versionModulePath });
+        const candidateBytes = Buffer.from(loaded.candidateRaw, "utf8");
+        const moduleBytes = Buffer.from(`export const BUNDLED_SYSTEM_CONTENT_VERSION = "${version}";\n`, "utf8");
+        ownedOutputs.set(destination, sha256(candidateBytes));
+        ownedOutputs.set(versionModulePath, sha256(moduleBytes));
         return {
-          [`public/content/system-content-${version}.json`]: createHash("sha256").update(loaded.candidateRaw, "utf8").digest("hex"),
-          "app/domain/bundledSystemContent.ts": createHash("sha256").update(`export const BUNDLED_SYSTEM_CONTENT_VERSION = "${version}";\n`, "utf8").digest("hex"),
+          [`public/content/system-content-${version}.json`]: gitBlobOid(candidateBytes),
+          "app/domain/bundledSystemContent.ts": gitBlobOid(moduleBytes),
         };
       },
-      rollback: () => restoreOutputs(snapshots),
+      validateRollback: () => validateOwnedOutputs(repositoryRoot, ownedOutputs),
+      rollback: () => restoreOutputs(repositoryRoot, snapshots, ownedOutputs),
       hooksPath: () => {
         if (!approvedSnapshot) throw new Error("Approved publish snapshot is unavailable for hook isolation");
         return approvedSnapshot.hooksPath;

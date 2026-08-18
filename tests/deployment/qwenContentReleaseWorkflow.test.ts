@@ -34,6 +34,17 @@ const patternPosition = (source: string, pattern: RegExp, description: string) =
 };
 
 describe("Qwen content release workflow", () => {
+  it("checks a supplied approved SHA before checkout while preserving push-trigger deploys", () => {
+    const source = deployWorkflow();
+    expect(source).toContain("approved_sha:");
+    expect(source).toContain("github.event_name == 'workflow_dispatch'");
+    expect(source).toContain('test -n "$APPROVED_SHA"');
+    expect(source).toContain('test "$GITHUB_SHA" = "$APPROVED_SHA"');
+    const guard = source.indexOf("name: Verify approved dispatch SHA");
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(source.indexOf("actions/checkout@v4"));
+    expect(source).toMatch(/push:\r?\n\s+branches: \[main\]/);
+  });
   it("is manual, serialized, and reads Qwen credentials only on the server", () => {
     const source = workflow();
     expect(source).toContain("workflow_dispatch:");

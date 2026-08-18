@@ -35,13 +35,13 @@ interface RunApprovedReleaseOptions {
   execute: ReleaseCommandExecutor;
   validate: () => Promise<void>;
   publish: () => Promise<Record<string, string>>;
+  validateRollback?: () => Promise<void>;
   rollback?: () => Promise<void>;
   hooksPath?: string | (() => string);
   platform?: NodeJS.Platform;
 }
 
 const SHA = /^[0-9a-f]{40}$/u;
-const SHA256 = /^[0-9a-f]{64}$/u;
 const REPORT_KEYS = new Set(["status", "version", "coreCount", "totalCount", "coreByCategory", "errors"]);
 
 function plainRecord(value: unknown): value is Record<string, unknown> {
@@ -256,6 +256,12 @@ function exactAllowedChanges(entries: readonly GitStatusEntry[], allowed: readon
     && entries.every(({ status, originalPath }) => !originalPath && !/[DRCU]/u.test(status));
 }
 
+function exactPublishedWorktree(entries: readonly GitStatusEntry[], allowed: readonly string[], staged: boolean): boolean {
+  return exactAllowedChanges(entries, allowed) && entries.every(({ status }) => staged
+    ? status[0] !== " " && status[1] === " " && status !== "??"
+    : status === "??" || (status[0] === " " && status[1] !== " "));
+}
+
 function checkedSha(value: string, label: string): string {
   const sha = value.trim();
   if (!SHA.test(sha)) throw new Error(`${label} did not return a full Git SHA`);
@@ -314,11 +320,11 @@ export async function runApprovedRelease(options: RunApprovedReleaseOptions): Pr
   let pushConfirmed = false;
   try {
     await options.validate();
+    const expectedOutputBlobOids = await options.publish();
     published = true;
-    const expectedOutputSha256 = await options.publish();
-    if (!plainRecord(expectedOutputSha256) || Object.keys(expectedOutputSha256).length !== allowed.length
-      || allowed.some((path) => !SHA256.test(expectedOutputSha256[path] ?? ""))) {
-      throw new Error("Publisher must return exact SHA-256 hashes for both approved outputs");
+    if (!plainRecord(expectedOutputBlobOids) || Object.keys(expectedOutputBlobOids).length !== allowed.length
+      || allowed.some((path) => !SHA.test(expectedOutputBlobOids[path] ?? ""))) {
+      throw new Error("Publisher must return exact Git blob IDs for both approved outputs");
     }
     await options.execute("npm", "test");
     await options.execute("npm", "run", "lint");
@@ -351,35 +357,54 @@ export async function runApprovedRelease(options: RunApprovedReleaseOptions): Pr
     const committedChanges = parseCachedNameStatus(await options.execute("git", "diff-tree", "--no-commit-id", "--name-status", "-r", "-z", "HEAD"));
     if (!exactAllowedChanges(committedChanges, allowed)) throw new Error("Release commit does not contain exactly the two approved outputs");
     for (const path of allowed) {
-      const committedRaw = await options.execute("git", "show", `${releaseHead}:${path}`);
-      if (createHash("sha256").update(committedRaw, "utf8").digest("hex") !== expectedOutputSha256[path]) {
+      const committedBlob = checkedSha(await options.execute("git", "rev-parse", `${releaseHead}:${path}`), `release blob ${path}`);
+      if (committedBlob !== expectedOutputBlobOids[path]) {
         throw new Error(`Release commit bytes do not match the approved output: ${path}`);
       }
     }
     await options.execute("git", "fetch", "--no-tags", "origin", "main");
     if (checkedSha(await options.execute("git", "rev-parse", "origin/main"), "origin/main") !== baseHead) throw new Error("origin/main changed immediately before push");
-    await options.execute("git", "push", "origin", `${releaseHead}:refs/heads/main`);
+    await options.execute("git", "-c", `core.hooksPath=${hooksPath}`, "push", "origin", `${releaseHead}:refs/heads/main`);
     const remote = remoteMainSha(await options.execute("git", "ls-remote", "--heads", "origin", "refs/heads/main"));
     if (remote !== releaseHead) throw new Error("Push could not be confirmed on origin/main");
     pushConfirmed = true;
-    await options.execute("gh", "workflow", "run", "deploy.yml", "--ref", "main");
+    await options.execute("gh", "workflow", "run", "deploy.yml", "--ref", "main", "-f", `approved_sha=${releaseHead}`);
   } catch (error) {
     const cleanupErrors: unknown[] = [];
     if (staged && !committed) {
-      try { await options.execute("git", "restore", "--staged", "--", ...allowed); }
+      try {
+        const state = parseGitStatusPorcelain(await options.execute("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"));
+        if (!exactPublishedWorktree(state, allowed, true)) throw new Error("Refusing cleanup because the staged release state drifted");
+        await options.validateRollback?.();
+        await options.execute("git", "restore", "--staged", "--", ...allowed);
+      }
       catch (unstageError) { cleanupErrors.push(unstageError); }
     }
     if (published && !committed && options.rollback) {
-      try { await options.rollback(); }
+      try {
+        const state = parseGitStatusPorcelain(await options.execute("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"));
+        if (!exactPublishedWorktree(state, allowed, false)) throw new Error("Refusing cleanup because the published release state drifted");
+        await options.validateRollback?.();
+        await options.rollback();
+      }
       catch (rollbackError) { cleanupErrors.push(rollbackError); }
     }
     if (committed && !pushConfirmed && releaseHead && options.rollback) {
       try {
+        const state = parseGitStatusPorcelain(await options.execute("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"));
+        if (state.length) throw new Error("Refusing cleanup because the committed worktree or index drifted");
+        await options.validateRollback?.();
         const currentHead = checkedSha(await options.execute("git", "rev-parse", "HEAD"), "rollback HEAD");
         const currentRemote = remoteMainSha(await options.execute("git", "ls-remote", "--heads", "origin", "refs/heads/main"));
         if (currentHead === releaseHead && currentRemote === baseHead) {
           await options.execute("git", "update-ref", "HEAD", baseHead, releaseHead);
+          const resetCandidate = parseGitStatusPorcelain(await options.execute("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"));
+          if (!exactPublishedWorktree(resetCandidate, allowed, true)) throw new Error("Refusing cleanup because the index or worktree drifted after HEAD rollback");
+          await options.validateRollback?.();
           await options.execute("git", "reset", "--mixed", baseHead, "--", ...allowed);
+          const rollbackCandidate = parseGitStatusPorcelain(await options.execute("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"));
+          if (!exactPublishedWorktree(rollbackCandidate, allowed, false)) throw new Error("Refusing cleanup because the worktree drifted after index rollback");
+          await options.validateRollback?.();
           await options.rollback();
         }
       } catch (rollbackError) { cleanupErrors.push(rollbackError); }
