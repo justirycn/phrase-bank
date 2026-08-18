@@ -41,7 +41,7 @@ describe("Qwen secret boundary", () => {
   it("keeps the local Qwen key outside the repository without a username-specific path", () => {
     const runbook = readFileSync(resolve(root, "docs/runbooks/qwen-content-update.md"), "utf8");
     expect(runbook).toContain("%USERPROFILE%\\.phrase-bank\\qwen-content.env");
-    expect(runbook).not.toContain("C:\\Users\\Administrator\\.phrase-bank");
+    expect(runbook).not.toMatch(/[A-Za-z]:\\Users\\[^\\\r\n`]+\\\.phrase-bank\\qwen-content\.env/i);
     expect(runbook).toContain("不要把 Key 粘贴到聊天");
     expect(runbook).toContain("不要在终端中粘贴或输出 Key");
     expect(runbook).toContain("不得提交到仓库");

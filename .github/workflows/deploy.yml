@@ -67,6 +67,24 @@ jobs:
           test "${#DEPLOY_SHA}" = 40
           exec 9>$HOME/.phrase-bank-operation.lock
           flock 9
+          deployment_marker="$HOME/.phrase-bank-deployed-sha"
+          deployment_is_healthy() {
+            local local_status public_status
+            local_status=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --resolve phrase.archdemy.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://phrase.archdemy.com/ || true)
+            public_status=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --location -o /dev/null -w '%{http_code}' https://phrase.archdemy.com/ || true)
+            [ "$local_status" = 200 ] && [ "$public_status" = 200 ]
+          }
+          if [ -L "$deployment_marker" ]; then
+            echo "Refusing symbolic-link deployment marker"
+            exit 1
+          fi
+          if [ -f "$deployment_marker" ] && test "$(cat "$deployment_marker")" = "$DEPLOY_SHA"; then
+            if deployment_is_healthy; then
+              echo "Exact deployment is already healthy"
+              exit 0
+            fi
+            echo "Exact deployment marker exists but health failed; rebuilding"
+          fi
           if [ -e /opt/phrase-bank ] && [ ! -d /opt/phrase-bank/.git ]; then
             echo "Refusing non-repository deploy directory"
             exit 1
@@ -85,9 +103,14 @@ jobs:
           docker compose build
           docker compose up -d
           for attempt in $(seq 1 24); do
-            local_status=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --resolve phrase.archdemy.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://phrase.archdemy.com/ || true)
-            public_status=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --location -o /dev/null -w '%{http_code}' https://phrase.archdemy.com/ || true)
-            if [ "$local_status" = 200 ] && [ "$public_status" = 200 ]; then
+            if deployment_is_healthy; then
+              deployment_marker_pending="$(mktemp "$HOME/.phrase-bank-deployed-sha.XXXXXX")"
+              trap 'rm -f -- "${deployment_marker_pending:-}"' EXIT
+              printf '%s\n' "$DEPLOY_SHA" > "$deployment_marker_pending"
+              chmod 600 "$deployment_marker_pending"
+              mv -f -- "$deployment_marker_pending" "$deployment_marker"
+              deployment_marker_pending=
+              trap - EXIT
               exit 0
             fi
             if [ "$attempt" -lt 24 ]; then

@@ -46,8 +46,9 @@ describe("Qwen content release workflow", () => {
     const source = runbook();
     expect(source).toContain("%USERPROFILE%\\.phrase-bank\\qwen-content.env");
     expect(source).toContain("Export Qwen checkpoint");
-    expect(source).toContain("gh workflow run qwen-checkpoint-export.yml -f version=2026.08.3");
-    expect(source).toContain("gh run download $runId -n qwen-checkpoint-2026.08.3 -D .content-agent/download");
+    expect(source).toContain('$requestId = [guid]::NewGuid().ToString("N")');
+    expect(source).toContain("gh workflow run qwen-checkpoint-export.yml --ref main -f version=2026.08.3 -f request_id=$requestId");
+    expect(source).toContain("gh run download $runId -n qwen-checkpoint-2026.08.3-$requestId -D .content-agent/download");
     expect(source).toContain("--source .content-agent/download/qwen-checkpoint.json");
     expect(source).not.toContain(".content-agent-download");
     expect(source).toContain("content:checkpoint:import");
@@ -65,6 +66,40 @@ describe("Qwen content release workflow", () => {
     expect(source).toContain('approved_sha');
     expect(source).not.toContain("推荐：一键运行 GitHub Actions");
     expect(source).not.toContain("日常更新请优先使用 GitHub");
+  });
+
+  it("correlates the checkpoint run and keeps every local artifact in one exact-main linked worktree", () => {
+    const source = runbook();
+    const fetch = source.indexOf("git fetch --no-tags origin main");
+    const sha = source.indexOf("$releaseSha = (git rev-parse origin/main).Trim()");
+    const add = source.indexOf("git worktree add --detach $worktreePath $releaseSha");
+    const enter = source.indexOf("Set-Location $worktreePath");
+    const exactHead = source.indexOf('if ((git rev-parse HEAD).Trim() -ne $releaseSha)');
+    const cleanStatus = source.indexOf('if (git status --porcelain=v1 --untracked-files=all)');
+    const dispatch = source.indexOf("gh workflow run qwen-checkpoint-export.yml");
+    const identityVerification = source.indexOf("$verifiedRun = gh run view $runId");
+    const download = source.indexOf("gh run download $runId");
+    const generate = source.indexOf("npm run content:qwen:local");
+    const review = source.indexOf("npm run content:review");
+    const release = source.indexOf("npm run content:release:approved");
+    expect([fetch, sha, add, enter, exactHead, cleanStatus, dispatch, identityVerification, download, generate, review, release].every((position) => position >= 0)).toBe(true);
+    [sha, add, enter, exactHead, cleanStatus, dispatch, identityVerification, download, generate, review, release]
+      .forEach((position, index) => expect([fetch, sha, add, enter, exactHead, cleanStatus, dispatch, identityVerification, download, generate, review][index]).toBeLessThan(position));
+    expect(source.slice(enter + "Set-Location $worktreePath".length, release)).not.toContain("Set-Location");
+    expect(source).toMatch(/Where-Object \{\s*\$_\.displayTitle -eq \$expectedTitle -and\s*\$_\.headSha -eq \$releaseSha -and\s*\$_\.event -eq "workflow_dispatch" -and\s*\$_\.workflowName -eq "Export Qwen checkpoint"\s*\}/u);
+    expect(source).toContain("gh run view $runId --json databaseId,displayTitle,event,headSha,workflowName,conclusion");
+    expect(source).toMatch(/if \(\$verifiedRun\.databaseId -ne \$runId -or\s*\$verifiedRun\.displayTitle -ne \$expectedTitle -or\s*\$verifiedRun\.headSha -ne \$releaseSha -or\s*\$verifiedRun\.event -ne "workflow_dispatch" -or\s*\$verifiedRun\.workflowName -ne "Export Qwen checkpoint" -or\s*\$verifiedRun\.conclusion -ne "success"\)/u);
+    expect(source).not.toContain("gh run list --workflow qwen-checkpoint-export.yml --limit 1");
+    expect(source).toContain("git worktree remove $worktreePath");
+  });
+
+  it("requires explicit shutdown and renewed authorization for non-resumable paid work", () => {
+    const source = runbook();
+    expect(source).toContain("Ctrl+C");
+    expect(source).toContain("等待终端重新出现 PowerShell 提示符");
+    expect(source).toContain("只补齐缺失批次");
+    expect(source).toContain("重新获得明确的费用授权");
+    expect(source).toContain("重新审核并批准");
   });
 
   it("keeps server generation manual and recovery-only without local dispatches", () => {
@@ -115,6 +150,30 @@ describe("Qwen content release workflow", () => {
     ];
     expect(order.every((position) => position >= 0)).toBe(true);
     order.slice(1).forEach((position, index) => expect(order[index]).toBeLessThan(position));
+  });
+  it("makes duplicate push and dispatch deploys idempotent for the exact SHA", () => {
+    const source = deployWorkflow();
+    const lock = source.indexOf("flock 9");
+    const markerCheck = source.indexOf('test "$(cat "$deployment_marker")" = "$DEPLOY_SHA"');
+    const earlyHealth = source.indexOf("if deployment_is_healthy; then", markerCheck);
+    const earlyExit = source.indexOf("exit 0", earlyHealth);
+    const dockerBuild = source.indexOf("docker compose build");
+    const dockerUp = source.indexOf("docker compose up -d");
+    const finalHealth = source.lastIndexOf("if deployment_is_healthy; then");
+    const markerWrite = source.indexOf('printf \'%s\\n\' "$DEPLOY_SHA" > "$deployment_marker_pending"');
+    const markerMove = source.indexOf('mv -f -- "$deployment_marker_pending" "$deployment_marker"');
+    expect(source).toContain('deployment_marker="$HOME/.phrase-bank-deployed-sha"');
+    expect(source).toContain("deployment_is_healthy() {");
+    expect([lock, markerCheck, earlyHealth, earlyExit, dockerBuild, dockerUp, finalHealth, markerWrite, markerMove]
+      .every((position) => position >= 0)).toBe(true);
+    expect(lock).toBeLessThan(markerCheck);
+    expect(markerCheck).toBeLessThan(earlyHealth);
+    expect(earlyHealth).toBeLessThan(earlyExit);
+    expect(earlyExit).toBeLessThan(dockerBuild);
+    expect(dockerBuild).toBeLessThan(dockerUp);
+    expect(dockerUp).toBeLessThan(finalHealth);
+    expect(finalHealth).toBeLessThan(markerWrite);
+    expect(markerWrite).toBeLessThan(markerMove);
   });
   it("is manual, serialized, and reads Qwen credentials only on the server", () => {
     const source = workflow();

@@ -32,17 +32,20 @@ describe("HTTPS reverse proxy", () => {
     const retryLoop = remoteScript.match(
       /for attempt in \$\(seq 1 24\); do\r?\n([\s\S]*?)\r?\n\s+done/,
     )?.[1] ?? "";
+    const healthCheck = remoteScript.match(
+      /deployment_is_healthy\(\) \{\r?\n([\s\S]*?)\r?\n\s+\}/,
+    )?.[1] ?? "";
 
     expect(remoteScript).not.toBe("");
-    expect(retryLoop).toMatch(
+    expect(healthCheck).toMatch(
       /curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --resolve phrase\.archdemy\.com:443:127\.0\.0\.1 -o \/dev\/null -w '%\{http_code\}' https:\/\/phrase\.archdemy\.com\//,
     );
-    expect(retryLoop).toMatch(
+    expect(healthCheck).toMatch(
       /curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --location -o \/dev\/null -w '%\{http_code\}' https:\/\/phrase\.archdemy\.com\//,
     );
-    expect(retryLoop).toMatch(
-      /if \[ "\$local_status" = 200 \] && \[ "\$public_status" = 200 \]; then\r?\n\s+exit 0/,
-    );
+    expect(healthCheck).toContain('[ "$local_status" = 200 ] && [ "$public_status" = 200 ]');
+    expect(remoteScript.match(/if deployment_is_healthy; then/g)).toHaveLength(2);
+    expect(retryLoop).toMatch(/if deployment_is_healthy; then[\s\S]*?exit 0/);
     expect(remoteScript).toContain("docker compose logs --tail=100 phrase-bank caddy");
     expect(remoteScript).not.toContain("http://127.0.0.1/");
   });

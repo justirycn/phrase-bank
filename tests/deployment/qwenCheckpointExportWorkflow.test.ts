@@ -10,8 +10,10 @@ describe("Qwen checkpoint export workflow", () => {
     const source = workflow();
     expect(source).toContain("workflow_dispatch:");
     expect(source).toMatch(/version:\s*\r?\n\s+description:.*\r?\n\s+required: true\r?\n\s+default: 2026\.08\.3/);
+    expect(source).toMatch(/request_id:\s*\r?\n\s+description:.*\r?\n\s+required: true\r?\n\s+type: string/);
     expect(source).toMatch(/permissions:\r?\n\s+contents: read/);
-    expect(source).toContain("qwen-checkpoint-${{ inputs.version }}");
+    expect(source).toContain("run-name: Export Qwen checkpoint ${{ inputs.version }} (${{ inputs.request_id }})");
+    expect(source).toContain("qwen-checkpoint-${{ inputs.version }}-${{ inputs.request_id }}");
     expect(source).toContain("retention-days: 1");
     expect(source).toContain("if-no-files-found: error");
 
@@ -29,19 +31,22 @@ describe("Qwen checkpoint export workflow", () => {
     expect(source).toMatch(/name: Remove SSH key\r?\n\s+if: always\(\)\r?\n\s+run: rm -f ~\/\.ssh\/tencent_qwen/);
   });
 
-  it("validates hostile version input before SSH setup and never interpolates it into a shell body", () => {
+  it("validates hostile version and correlation input before SSH setup without shell interpolation", () => {
     const source = workflow();
     const validationPosition = source.indexOf("name: Validate content version");
     const sshPosition = source.indexOf("name: Configure SSH");
     expect(validationPosition).toBeGreaterThan(-1);
     expect(validationPosition).toBeLessThan(sshPosition);
     expect(source).toContain("REQUESTED_VERSION: ${{ inputs.version }}");
+    expect(source).toContain("REQUEST_ID: ${{ inputs.request_id }}");
     expect(source).toContain("^([0-9]{4})\\.([0-9]{2})\\.([0-9]+)$");
+    expect(source).toContain("^[0-9a-f]{32}$");
     expect(source).toContain("CONTENT_VERSION=$REQUESTED_VERSION");
 
     const runBodies = [...source.matchAll(/run:\s*\|\r?\n((?:\s{10}.*(?:\r?\n|$))*)/g)].map((match) => match[1]);
     expect(runBodies.length).toBeGreaterThan(0);
     expect(runBodies.every((body) => !body.includes("${{ inputs.version }}"))).toBe(true);
-    expect(source.match(/\$\{\{ inputs\.version \}\}/g)).toHaveLength(2);
+    expect(source.match(/\$\{\{ inputs\.version \}\}/g)).toHaveLength(3);
+    expect(source.match(/\$\{\{ inputs\.request_id \}\}/g)).toHaveLength(3);
   });
 });
