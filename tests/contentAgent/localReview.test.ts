@@ -148,21 +148,37 @@ describe("local phrase review", () => {
     const base = candidate();
     const examples = base.phrases
       .filter(({ categoryId, subcategory, kind }) => categoryId === "supply-chain" && subcategory === "packaging review" && kind === "example")
-      .slice(0, 5);
+      .slice(0, 4);
+    const shortId = "sys-daily-01-1-1-e1";
     const replacements = new Map<string, Partial<SystemContentPhrase>>(
       examples.slice(0, 4).map((phrase, index) => [phrase.id, {
         english: `Regarding packaging review, we need to inspect contextual item ${index} before shipment.`,
         chinese: "查。",
       }]),
     );
-    replacements.set(examples[4].id, { english: "Check it.", chinese: "查。" });
+    replacements.set(shortId, { english: "Check it.", chinese: "查。" });
     const content = replacePhrases(base, replacements);
     const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "example-hints" });
 
     for (const phrase of examples.slice(0, 4)) {
       expect(codes(model.hintsById[phrase.id])).toEqual(["repeated-opening", "missing-context"]);
     }
-    expect(codes(model.hintsById[examples[4].id])).not.toContain("missing-context");
+    expect(codes(model.hintsById[shortId])).not.toContain("missing-context");
+  });
+
+  it("checks catalog translated context across example records", () => {
+    const base = candidate();
+    const missingId = "sys-supply-chain-02-1-1-e1";
+    const translatedId = "sys-supply-chain-02-1-1-e2";
+    const contextualEnglish = "Regarding packaging review, please carefully inspect the material specification.";
+    const content = replacePhrases(base, new Map([
+      [missingId, { english: contextualEnglish, chinese: "请仔细检查材料规格。" }],
+      [translatedId, { english: contextualEnglish, chinese: "请在包装审核时仔细检查材料规格。" }],
+    ]));
+    const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "example-catalog-context" });
+
+    expect(codes(model.hintsById[missingId])).toContain("missing-context");
+    expect(codes(model.hintsById[translatedId])).not.toContain("missing-context");
   });
 
   it("recognizes non-ASCII Latin letters as English content", () => {

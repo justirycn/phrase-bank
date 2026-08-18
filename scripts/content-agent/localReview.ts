@@ -101,7 +101,7 @@ function buildHints(phrases: SystemContentPhrase[]): Record<string, QualityHint[
     }
     if (repeated.has(phrase.id)) hints.set("repeated-opening", "同一主题中至少四条短语使用了机械重复的开头，建议改写句型。 ");
 
-    const expectedContext = phrase.kind === "core" ? contextualZh.get(`${phrase.categoryId}:${phrase.subcategory}`) : undefined;
+    const expectedContext = contextualZh.get(`${phrase.categoryId}:${phrase.subcategory}`);
     const hanLength = (chinese.match(/\p{Script=Han}/gu) ?? []).length;
     const englishWords = english.match(/\p{Script=Latin}+(?:'\p{Script=Latin}+)?/gu)?.length ?? 0;
     const obviouslyMissingContext = englishWords >= 9 && hanLength <= 3 && CONTEXT_MARKER.test(english);
