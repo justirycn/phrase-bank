@@ -5,6 +5,14 @@ import { startLocalReviewServer } from "./content-agent/localReviewServer";
 
 export interface LocalContentReviewArguments { version: string; port: number }
 
+interface LocalContentReviewDependencies {
+  repositoryRoot?: string;
+  startServer?: typeof startLocalReviewServer;
+  writeOutput?: (value: string) => void;
+  onSignal?: (signal: "SIGINT" | "SIGTERM", listener: () => void) => void;
+  setExitCode?: (value: number) => void;
+}
+
 export function parseLocalContentReviewArguments(args: string[]): LocalContentReviewArguments {
   const values = new Map<string, string>();
   for (let index = 0; index < args.length; index += 1) {
@@ -25,21 +33,25 @@ export function parseLocalContentReviewArguments(args: string[]): LocalContentRe
   return { version: assertContentVersion(version), port };
 }
 
-export async function runLocalContentReview(args = process.argv.slice(2)): Promise<void> {
+export async function runLocalContentReview(args = process.argv.slice(2), dependencies: LocalContentReviewDependencies = {}): Promise<void> {
   const { version, port } = parseLocalContentReviewArguments(args);
-  const server = await startLocalReviewServer({
-    candidatePath: resolve(`.content-agent/candidate-${version}.json`),
-    reportPath: resolve(`.content-agent/report-${version}.json`),
-    reviewPath: resolve(`.content-agent/review-${version}.json`),
+  const root = dependencies.repositoryRoot ?? process.cwd();
+  const server = await (dependencies.startServer ?? startLocalReviewServer)({
+    candidatePath: resolve(root, `.content-agent/candidate-${version}.json`),
+    reportPath: resolve(root, `.content-agent/report-${version}.json`),
+    reviewPath: resolve(root, `.content-agent/review-${version}.json`),
     host: "127.0.0.1",
     port,
     sampleSeed: `${version}:manual-review-v1`,
   });
-  process.stdout.write(`${server.url}\nPress Ctrl+C to stop.\n`);
+  (dependencies.writeOutput ?? ((value: string) => process.stdout.write(value)))(`${server.url}\nPress Ctrl+C to stop.\n`);
   let closing: Promise<void> | undefined;
   const close = () => { closing ??= server.close(); return closing; };
-  process.once("SIGINT", () => { void close().then(() => { process.exitCode = 0; }); });
-  process.once("SIGTERM", () => { void close().then(() => { process.exitCode = 0; }); });
+  const onSignal = dependencies.onSignal ?? ((signal: "SIGINT" | "SIGTERM", listener: () => void) => process.once(signal, listener));
+  const setExitCode = dependencies.setExitCode ?? ((value: number) => { process.exitCode = value; });
+  const handleSignal = () => { void close().then(() => setExitCode(0)); };
+  onSignal("SIGINT", handleSignal);
+  onSignal("SIGTERM", handleSignal);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) await runLocalContentReview();

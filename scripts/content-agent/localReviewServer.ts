@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { isDeepStrictEqual } from "node:util";
@@ -79,16 +79,59 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
 }
 
 function duplicateJsonKeys(raw: string): boolean {
-  const keys = new Set<string>();
-  const property = /"(?:\\[\s\S]|[^"\\])*"\s*:/gu;
-  for (const match of raw.matchAll(property)) {
-    const token = match[0].slice(0, match[0].lastIndexOf(":"));
-    let key: string;
-    try { key = JSON.parse(token.trim()) as string; } catch { continue; }
-    if (keys.has(key)) return true;
-    keys.add(key);
-  }
-  return false;
+  class DuplicateKey extends Error {}
+  let index = 0;
+  const whitespace = () => { while (/\s/u.test(raw[index] ?? "")) index += 1; };
+  const string = (): string => {
+    const start = index++;
+    while (index < raw.length) {
+      if (raw[index] === "\\") { index += 2; continue; }
+      if (raw[index++] === "\"") return JSON.parse(raw.slice(start, index)) as string;
+    }
+    throw new SyntaxError("Unterminated JSON string");
+  };
+  const value = (): void => {
+    whitespace();
+    if (raw[index] === "{") { object(); return; }
+    if (raw[index] === "[") { array(); return; }
+    if (raw[index] === "\"") { string(); return; }
+    const start = index;
+    while (index < raw.length && !/[\s,\]}]/u.test(raw[index])) index += 1;
+    if (index === start) throw new SyntaxError("Invalid JSON value");
+  };
+  const object = (): void => {
+    index += 1;
+    whitespace();
+    if (raw[index] === "}") { index += 1; return; }
+    const keys = new Set<string>();
+    while (index < raw.length) {
+      whitespace();
+      if (raw[index] !== "\"") throw new SyntaxError("Invalid JSON object key");
+      const key = string();
+      if (keys.has(key)) throw new DuplicateKey();
+      keys.add(key);
+      whitespace();
+      if (raw[index++] !== ":") throw new SyntaxError("Invalid JSON object separator");
+      value();
+      whitespace();
+      if (raw[index] === "}") { index += 1; return; }
+      if (raw[index++] !== ",") throw new SyntaxError("Invalid JSON object delimiter");
+    }
+    throw new SyntaxError("Unterminated JSON object");
+  };
+  const array = (): void => {
+    index += 1;
+    whitespace();
+    if (raw[index] === "]") { index += 1; return; }
+    while (index < raw.length) {
+      value();
+      whitespace();
+      if (raw[index] === "]") { index += 1; return; }
+      if (raw[index++] !== ",") throw new SyntaxError("Invalid JSON array delimiter");
+    }
+    throw new SyntaxError("Unterminated JSON array");
+  };
+  try { value(); return false; } catch (error) { return error instanceof DuplicateKey; }
 }
 
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
@@ -149,10 +192,16 @@ function canApprove(review: ReviewState, sampledIds: readonly string[]): boolean
 export async function startLocalReviewServer(options: StartLocalReviewServerOptions): Promise<LocalReviewServer> {
   if (options.host !== LOOPBACK_HOST) throw new Error(`Local review host must be exactly ${LOOPBACK_HOST}`);
   if (!Number.isInteger(options.port) || options.port < 0 || options.port > 65_535) throw new Error("Local review port is invalid");
-  const [candidateRaw, reportRaw] = await Promise.all([readFile(options.candidatePath, "utf8"), readFile(options.reportPath, "utf8")]);
+  const [candidateBytes, reportRaw] = await Promise.all([readFile(options.candidatePath), readFile(options.reportPath, "utf8")]);
+  let candidateRaw: string;
+  try { candidateRaw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(candidateBytes); }
+  catch { throw new Error("Candidate must be valid UTF-8"); }
+  if (duplicateJsonKeys(candidateRaw)) throw new Error("Candidate contains duplicate JSON keys");
   let parsedCandidate: unknown;
   try { parsedCandidate = JSON.parse(candidateRaw); } catch { throw new Error("Candidate is not valid JSON"); }
   const model = buildReviewModel({ content: parsedCandidate as SystemContentPackage, candidateRaw, sampleSeed: options.sampleSeed });
+  const rawByteSha256 = createHash("sha256").update(candidateBytes).digest("hex");
+  if (model.candidateSha256 !== rawByteSha256) throw new Error("Candidate raw-byte hash binding failed");
   const report = parseReport(reportRaw, parsedCandidate as SystemContentPackage);
   const store = await createLocalReviewStore({
     path: options.reviewPath,

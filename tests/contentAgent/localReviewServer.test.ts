@@ -45,11 +45,11 @@ async function start(files: Awaited<ReturnType<typeof fixture>>, overrides: Reco
   return server;
 }
 
-function raw(url: string, options: { method?: string; path?: string; headers?: Record<string, string>; body?: Buffer | string } = {}) {
+function raw(url: string, options: { method?: string; path?: string; headers?: Record<string, string>; body?: Buffer | string; chunked?: boolean } = {}) {
   const endpoint = new URL(options.path ?? "/", url);
   const body = typeof options.body === "string" ? Buffer.from(options.body) : options.body;
   return new Promise<{ status: number; headers: Record<string, string | string[] | undefined>; body: string }>((resolveResult, reject) => {
-    const req = request(endpoint, { method: options.method, headers: { ...(body ? { "Content-Length": String(body.length) } : {}), ...options.headers } }, (response) => {
+    const req = request(endpoint, { method: options.method, headers: { ...(body && !options.chunked ? { "Content-Length": String(body.length) } : {}), ...options.headers } }, (response) => {
       const chunks: Buffer[] = [];
       response.on("data", (chunk) => chunks.push(chunk));
       response.on("end", () => resolveResult({ status: response.statusCode!, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }));
@@ -88,6 +88,17 @@ describe("local review HTTP server", () => {
     await expect(start(files)).rejects.toThrow(/quality|report/i);
   });
 
+  it("rejects duplicate candidate keys and invalid candidate UTF-8 before listening", async () => {
+    const files = await fixture();
+    const firstId = files.content.phrases[0].id;
+    const duplicate = files.candidateRaw.replace(`"id": "${firstId}"`, `"id": "${firstId}",\n      "id": "${firstId}"`);
+    await writeFile(files.candidatePath, duplicate, "utf8");
+    await expect(start(files)).rejects.toThrow(/candidate.*duplicate/i);
+
+    await writeFile(files.candidatePath, Buffer.concat([Buffer.from(files.candidateRaw.slice(0, 20)), Buffer.from([0xc3, 0x28]), Buffer.from(files.candidateRaw.slice(20))]));
+    await expect(start(files)).rejects.toThrow(/candidate.*utf-8/i);
+  });
+
   it("serves a nonce-bound static page with locked-down headers", async () => {
     const files = await fixture();
     const server = await start(files);
@@ -108,6 +119,8 @@ describe("local review HTTP server", () => {
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("base-uri 'none'");
     expect(csp).toContain("form-action 'none'");
+    expect(csp).not.toContain("*");
+    expect(csp).not.toMatch(/https?:|data:|blob:/u);
     expect(response.body).toContain(`nonce="${nonce}"`);
     expect(response.body).not.toMatch(/https?:\/\//);
   });
@@ -153,8 +166,25 @@ describe("local review HTTP server", () => {
     expect((await raw(server.url, { method: "POST", path: "/api/decision", body: "{}", headers: { "Content-Type": "text/plain" } })).status).toBe(400);
     expect((await raw(server.url, { method: "POST", path: "/api/decision", body: Buffer.from([0xc3, 0x28]), headers: { "Content-Type": "application/json" } })).status).toBe(400);
     expect((await raw(server.url, { method: "POST", path: "/api/decision", body: "x".repeat(32769), headers: { "Content-Type": "application/json" } })).status).toBe(400);
+    expect((await raw(server.url, { method: "POST", path: "/api/decision", body: "x".repeat(32769), chunked: true, headers: { "Content-Type": "application/json" } })).status).toBe(400);
     expect((await raw(server.url, { path: "/api/review", headers: { Host: "evil.invalid" } })).status).toBe(403);
+    expect((await raw(server.url, { path: "/api/review", headers: { Host: "127.0.0.1" } })).status).toBe(403);
+    const actualPort = Number(new URL(server.url).port);
+    expect((await raw(server.url, { path: "/api/review", headers: { Host: `127.0.0.1:${actualPort + 1}` } })).status).toBe(403);
     expect((await post(server.url, "/api/decision", {}, { Origin: "http://evil.invalid" })).status).toBe(403);
+  });
+
+  it("accepts an exact 32,768-byte JSON body and an exact same-Origin mutation", async () => {
+    const files = await fixture();
+    const server = await start(files);
+    const payload = JSON.parse((await raw(server.url, { path: "/api/review" })).body);
+    const value = { id: payload.review.sampledIds[0], decision: "pass", note: "boundary", candidateSha256: files.hash };
+    const json = JSON.stringify(value);
+    const body = `${json}${" ".repeat(32_768 - Buffer.byteLength(json))}`;
+    expect(Buffer.byteLength(body)).toBe(32_768);
+    const response = await raw(server.url, { method: "POST", path: "/api/decision", body, headers: { "Content-Type": "application/json", Origin: server.url } });
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body).review.items[value.id]).toMatchObject({ decision: "pass", note: "boundary" });
   });
 
   it("does not mutate state when a JSON request is aborted mid-body", async () => {
@@ -171,8 +201,11 @@ describe("local review HTTP server", () => {
       });
       req.on("error", () => resolveAbort());
       req.on("close", () => resolveAbort());
-      req.write(body.slice(0, 12));
-      setImmediate(() => { req.destroy(); resolveAbort(); });
+      req.on("socket", (socket) => {
+        const sendPartialBody = () => req.write(body.slice(0, 12), () => setImmediate(() => req.destroy()));
+        if (socket.connecting) socket.once("connect", sendPartialBody);
+        else sendPartialBody();
+      });
     });
 
     expect((await raw(server.url, { path: "/api/review" })).status).toBe(200);
@@ -183,6 +216,13 @@ describe("local review HTTP server", () => {
     const files = await fixture();
     const server = await start(files);
     let payload = JSON.parse((await raw(server.url, { path: "/api/review" })).body);
+    const approvalBefore = await readFile(files.reviewPath, "utf8");
+    for (const invalid of [
+      JSON.stringify({ version: files.content.version, candidateSha256: files.hash, extra: true }),
+      JSON.stringify({ version: 1, candidateSha256: files.hash }),
+      `{"version":"${files.content.version}","version":"${files.content.version}","candidateSha256":"${files.hash}"}`,
+    ]) expect((await raw(server.url, { method: "POST", path: "/api/approve", body: invalid, headers: { "Content-Type": "application/json" } })).status).toBe(400);
+    expect(await readFile(files.reviewPath, "utf8")).toBe(approvalBefore);
     expect((await post(server.url, "/api/approve", { version: files.content.version, candidateSha256: files.hash })).status).toBe(409);
     const outside = files.content.phrases.find(({ id }) => !payload.review.sampledIds.includes(id))!.id;
     await post(server.url, "/api/decision", { id: outside, decision: "issue", note: "fix", candidateSha256: files.hash });
@@ -196,6 +236,7 @@ describe("local review HTTP server", () => {
     const approvedPayload = JSON.parse(approved.body);
     expect(approvedPayload.review.approvedAt).toBeTruthy();
     expect(approvedPayload.canApprove).toBe(false);
+    expect(JSON.parse(await readFile(files.reviewPath, "utf8")).approvedAt).toBe(approvedPayload.review.approvedAt);
   });
 
   it("serializes concurrent decisions without loss and recovers after a failed persisted update", async () => {
@@ -239,5 +280,37 @@ describe("local review CLI", () => {
       expect(runner.parseLocalContentReviewArguments(["--port", "54321", "--version", "2026.08.2"])).toEqual({ version: "2026.08.2", port: 54321 });
       for (const args of [[], ["--version"], ["--version", "2026.08.2", "--port", "0"], ["--version", "2026.08.2", "--port", "65536"], ["--version", "2026.08.2", "--port", "x"], ["--version", "2026.08.2", "--port", "1", "--port", "2"], ["--version", "2026.08.2", "--wat", "x"]]) expect(() => runner.parseLocalContentReviewArguments(args)).toThrow();
     } finally { stdout.mockRestore(); }
+  });
+
+  it("derives fixed local paths and seed and closes once across graceful termination signals", async () => {
+    const runner = await import(`${pathToFileURL(resolve("scripts/run-local-content-review.ts")).href}?run=${Date.now()}`);
+    const close = vi.fn(async () => undefined);
+    const startServer = vi.fn(async () => ({ host: "127.0.0.1", url: "http://127.0.0.1:54321", close }));
+    const signals = new Map<string, () => void>();
+    const output: string[] = [];
+    const setExitCode = vi.fn();
+    const repositoryRoot = resolve("test-review-root");
+
+    await runner.runLocalContentReview(["--version", "2026.08.2", "--port", "54321"], {
+      repositoryRoot,
+      startServer,
+      writeOutput: (value: string) => output.push(value),
+      onSignal: (signal: string, listener: () => void) => signals.set(signal, listener),
+      setExitCode,
+    });
+
+    expect(startServer).toHaveBeenCalledWith({
+      candidatePath: resolve(repositoryRoot, ".content-agent/candidate-2026.08.2.json"),
+      reportPath: resolve(repositoryRoot, ".content-agent/report-2026.08.2.json"),
+      reviewPath: resolve(repositoryRoot, ".content-agent/review-2026.08.2.json"),
+      host: "127.0.0.1",
+      port: 54321,
+      sampleSeed: "2026.08.2:manual-review-v1",
+    });
+    expect(output.join("")).toBe("http://127.0.0.1:54321\nPress Ctrl+C to stop.\n");
+    signals.get("SIGINT")?.();
+    signals.get("SIGTERM")?.();
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+    expect(setExitCode).toHaveBeenCalledWith(0);
   });
 });
