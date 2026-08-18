@@ -24,6 +24,7 @@ export interface LocalReviewStore {
 }
 
 const FORMAT = "phrase-bank-local-review";
+const SEED_KEYS = new Set(["path", "version", "candidateSha256", "sampleSeed", "sampledIds", "validIds"]);
 const STATE_KEYS = new Set(["format", "version", "candidateSha256", "sampleSeed", "sampledIds", "items", "approvedAt"]);
 const ITEM_KEYS = new Set(["decision", "note", "updatedAt"]);
 const VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
@@ -37,10 +38,18 @@ function exactKeys(value: Record<string, unknown>, allowed: Set<string>, require
   return Object.keys(value).every((key) => allowed.has(key)) && required.every((key) => Object.hasOwn(value, key));
 }
 
-function unsafeControl(value: string): boolean {
+function unsafeNoteControl(value: string): boolean {
   return [...value].some((character) => {
     const code = character.codePointAt(0)!;
     return (code < 32 && code !== 9 && code !== 10) || (code >= 127 && code <= 159);
+  });
+}
+
+function validId(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return false;
+  return ![...value].some((character) => {
+    const code = character.codePointAt(0)!;
+    return code <= 31 || (code >= 127 && code <= 159);
   });
 }
 
@@ -55,17 +64,20 @@ function validIso(value: unknown): value is string {
 
 function assertUniqueNonemptyIds(value: unknown, label: string, allowEmpty: boolean): asserts value is string[] {
   if (!Array.isArray(value) || (!allowEmpty && value.length === 0)
-    || value.some((id) => typeof id !== "string" || id.length === 0 || unsafeControl(id))
+    || value.some((id) => !validId(id))
     || new Set(value).size !== value.length) {
     throw new Error(`${label} must contain ${allowEmpty ? "unique" : "nonempty unique"} IDs`);
   }
 }
 
 function validateSeed(seed: LocalReviewSeed): void {
-  if (!record(seed) || typeof seed.path !== "string" || seed.path.length === 0) throw new Error("Review path must be nonempty");
+  if (!record(seed) || !exactKeys(seed, SEED_KEYS, ["path", "version", "candidateSha256", "sampleSeed", "sampledIds", "validIds"])) {
+    throw new Error("Review seed has an invalid shape");
+  }
+  if (typeof seed.path !== "string" || seed.path.length === 0) throw new Error("Review path must be nonempty");
   if (typeof seed.version !== "string" || !VERSION.test(seed.version)) throw new Error("Review version has an invalid format");
   if (typeof seed.candidateSha256 !== "string" || !SHA256.test(seed.candidateSha256)) throw new Error("Candidate hash must be lowercase SHA-256");
-  if (typeof seed.sampleSeed !== "string" || seed.sampleSeed.length === 0 || unsafeControl(seed.sampleSeed)) throw new Error("Sample seed must be nonempty and safe");
+  if (typeof seed.sampleSeed !== "string" || seed.sampleSeed.length === 0 || unsafeNoteControl(seed.sampleSeed)) throw new Error("Sample seed must be nonempty and safe");
   assertUniqueNonemptyIds(seed.validIds, "Valid IDs", false);
   assertUniqueNonemptyIds(seed.sampledIds, "Sample IDs", false);
   const validIds = new Set(seed.validIds);
@@ -75,13 +87,13 @@ function validateSeed(seed: LocalReviewSeed): void {
 function validateIdentityFields(value: Record<string, unknown>): void {
   if (typeof value.version !== "string" || !VERSION.test(value.version)
     || typeof value.candidateSha256 !== "string" || !SHA256.test(value.candidateSha256)
-    || typeof value.sampleSeed !== "string" || value.sampleSeed.length === 0 || unsafeControl(value.sampleSeed)) {
+    || typeof value.sampleSeed !== "string" || value.sampleSeed.length === 0 || unsafeNoteControl(value.sampleSeed)) {
     throw new Error("Persisted review state has malformed identity fields");
   }
   assertUniqueNonemptyIds(value.sampledIds, "Persisted review state sample", false);
 }
 
-function validateState(value: unknown, validIds?: ReadonlySet<string>): asserts value is ReviewState {
+function validateState(value: unknown): asserts value is ReviewState {
   if (!record(value) || !exactKeys(value, STATE_KEYS, ["format", "version", "candidateSha256", "sampleSeed", "sampledIds", "items"])) {
     throw new Error("Review state has an invalid top-level shape");
   }
@@ -89,12 +101,12 @@ function validateState(value: unknown, validIds?: ReadonlySet<string>): asserts 
   validateIdentityFields(value);
   if (!record(value.items)) throw new Error("Review state items must be a record");
   for (const [id, item] of Object.entries(value.items)) {
-    if (!id || unsafeControl(id) || (validIds && !validIds.has(id))) throw new Error(`Review state contains an invalid item ID: ${id}`);
+    if (!validId(id)) throw new Error("Review state contains an invalid item ID");
     if (!record(item) || !exactKeys(item, ITEM_KEYS, ["decision", "note", "updatedAt"])) {
       throw new Error(`Review state item ${id} has an invalid shape`);
     }
     if (item.decision !== "pass" && item.decision !== "issue") throw new Error(`Review state item ${id} has an invalid decision`);
-    if (typeof item.note !== "string" || item.note.length > 1000 || unsafeControl(item.note)) {
+    if (typeof item.note !== "string" || item.note.length > 1000 || unsafeNoteControl(item.note)) {
       throw new Error(`Review state item ${id} has an invalid note`);
     }
     if (!validIso(item.updatedAt)) throw new Error(`Review state item ${id} has an invalid timestamp`);
@@ -146,7 +158,10 @@ async function removeOwnedTemp(path: string): Promise<void> {
 export async function saveReview(path: string, state: ReviewState, dependencies: SaveReviewDependencies = {}): Promise<void> {
   const validIds = dependencies.validIds ? new Set(dependencies.validIds) : undefined;
   if (dependencies.validIds) assertUniqueNonemptyIds(dependencies.validIds, "Valid IDs", false);
-  validateState(state, validIds);
+  validateState(state);
+  if (validIds && Object.keys(state.items).some((id) => !validIds.has(id))) {
+    throw new Error("Review state contains an item outside the valid IDs");
+  }
 
   const parent = dirname(path);
   await mkdir(parent, { recursive: true });
@@ -184,7 +199,7 @@ export async function loadOrCreateReview(seed: LocalReviewSeed): Promise<ReviewS
     throw new Error("Persisted review state is not valid JSON", { cause: error });
   }
   if (!record(parsed)) throw new Error("Persisted review state has an invalid top-level shape");
-  validateIdentityFields(parsed);
+  validateState(parsed);
   if (!sameIdentity(parsed, seed)) {
     const reset = initialState(seed);
     await saveReview(seed.path, reset, { validIds: seed.validIds });
@@ -198,7 +213,6 @@ export async function loadOrCreateReview(seed: LocalReviewSeed): Promise<ReviewS
     await saveReview(seed.path, reset, { validIds: seed.validIds });
     return structuredClone(reset);
   }
-  validateState(parsed, validIds);
   return structuredClone(parsed);
 }
 
@@ -227,12 +241,13 @@ export async function createLocalReviewStore(
 
   return {
     async read() {
+      await queue;
       return structuredClone(current);
     },
     update(mutator) {
       const operation = queue.then(async () => {
         const next = await mutator(immutableClone(current));
-        validateState(next, new Set(seed.validIds));
+        validateState(next);
         assertSameIdentity(next, seed);
         await saveReview(seed.path, next, { ...dependencies, validIds: seed.validIds });
         current = structuredClone(next);

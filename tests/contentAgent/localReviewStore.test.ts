@@ -114,13 +114,60 @@ describe("loadOrCreateReview", () => {
   });
 
   it.each([
-    [{ ...({} as LocalReviewSeed), path: "x", version: "bad version", candidateSha256: HASH_A, sampleSeed: "s", sampledIds: ["a"], validIds: ["a"] }, /version/i],
-    [{ ...({} as LocalReviewSeed), path: "x", version: "v1", candidateSha256: "abc", sampleSeed: "s", sampledIds: ["a"], validIds: ["a"] }, /hash/i],
-    [{ ...({} as LocalReviewSeed), path: "x", version: "v1", candidateSha256: HASH_A, sampleSeed: "s", sampledIds: ["a", "a"], validIds: ["a"] }, /sample/i],
-    [{ ...({} as LocalReviewSeed), path: "x", version: "v1", candidateSha256: HASH_A, sampleSeed: "s", sampledIds: ["a"], validIds: ["b"] }, /sample/i],
-    [{ ...({} as LocalReviewSeed), path: "x", version: "v1", candidateSha256: HASH_A, sampleSeed: "s", sampledIds: ["a"], validIds: ["a", "a"] }, /valid/i],
-  ])("rejects an invalid seed", async (seed, message) => {
-    await expect(loadOrCreateReview(seed)).rejects.toThrow(message);
+    ["hash drift with an invalid decision", () => ({ candidateSha256: HASH_B, items: { "phrase-1": { decision: "maybe", note: "", updatedAt: "2026-08-18T12:00:00.000Z" } } })],
+    ["version drift with an unsafe note", () => ({ version: "2026.08.19", items: { "phrase-1": { decision: "pass", note: "bad\u0000", updatedAt: "2026-08-18T12:00:00.000Z" } } })],
+    ["seed drift with an invalid timestamp", () => ({ sampleSeed: "new-seed", items: { "phrase-1": { decision: "pass", note: "", updatedAt: "yesterday" } } })],
+    ["sample drift with an unknown field", () => ({ sampledIds: ["phrase-2", "phrase-1"], extra: true })],
+  ])("rejects and preserves malformed persisted bytes despite %s", async (_label, mutation) => {
+    const { seed } = await fixture();
+    const malformed = { ...decided(seed), ...mutation() };
+    const bytes = `${JSON.stringify(malformed)}\n`;
+    await mkdir(join(seed.path, ".."), { recursive: true });
+    await writeFile(seed.path, bytes, "utf8");
+
+    await expect(loadOrCreateReview(seed)).rejects.toThrow(/review state/i);
+    expect(await readFile(seed.path, "utf8")).toBe(bytes);
+  });
+
+  it("resets a fully valid unknown stored item ID only after validating it", async () => {
+    const { seed } = await fixture();
+    const state = decided(seed);
+    state.items = { unknown: state.items["phrase-1"] };
+    await mkdir(join(seed.path, ".."), { recursive: true });
+    await writeFile(seed.path, `${JSON.stringify(state)}\n`, "utf8");
+    expect((await loadOrCreateReview(seed)).items).toEqual({});
+  });
+
+  it.each([
+    [(seed: LocalReviewSeed) => ({ ...seed, version: "bad version" }), /version/i],
+    [(seed: LocalReviewSeed) => ({ ...seed, candidateSha256: "abc" }), /hash/i],
+    [(seed: LocalReviewSeed) => ({ ...seed, sampledIds: ["a", "a"], validIds: ["a"] }), /sample/i],
+    [(seed: LocalReviewSeed) => ({ ...seed, sampledIds: ["a"], validIds: ["b"] }), /sample/i],
+    [(seed: LocalReviewSeed) => ({ ...seed, sampledIds: ["a"], validIds: ["a", "a"] }), /valid/i],
+    [(seed: LocalReviewSeed) => ({ ...seed, extra: true }) as LocalReviewSeed, /seed/i],
+  ])("rejects an invalid seed", async (mutation, message) => {
+    const { seed } = await fixture();
+    await expect(loadOrCreateReview(mutation(seed))).rejects.toThrow(message);
+  });
+
+  it.each([
+    ["valid ID padded with whitespace", { validIds: [" phrase-1", "phrase-2"] }],
+    ["valid ID containing a tab", { validIds: ["phrase-1\t", "phrase-2"] }],
+    ["sample ID containing a newline", { sampledIds: ["phrase-1\n", "phrase-2"], validIds: ["phrase-1\n", "phrase-2"] }],
+  ])("rejects a %s", async (_label, mutation) => {
+    const { seed } = await fixture();
+    await expect(loadOrCreateReview({ ...seed, ...mutation })).rejects.toThrow(/IDs/i);
+  });
+
+  it("rejects an unsafe persisted item key before considering valid-ID shrink", async () => {
+    const { seed } = await fixture();
+    const state = decided(seed);
+    state.items = { "phrase-3\n": state.items["phrase-1"] };
+    const bytes = `${JSON.stringify(state)}\n`;
+    await mkdir(join(seed.path, ".."), { recursive: true });
+    await writeFile(seed.path, bytes, "utf8");
+    await expect(loadOrCreateReview(seed)).rejects.toThrow(/item ID/i);
+    expect(await readFile(seed.path, "utf8")).toBe(bytes);
   });
 });
 
@@ -210,6 +257,46 @@ describe("createLocalReviewStore", () => {
     read.items["phrase-1"] = { decision: "issue", note: "mutated", updatedAt: "2026-08-18T12:00:00.000Z" };
     read.sampledIds.push("phrase-3");
     expect(await store.read()).toMatchObject({ sampledIds: ["phrase-1", "phrase-2"], items: {} });
+  });
+
+  it("makes reads wait for an in-flight update and return its committed state", async () => {
+    const { seed } = await fixture();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const store = await createLocalReviewStore(seed);
+    const update = store.update(async (current) => {
+      await blocked;
+      return {
+        ...current,
+        items: { "phrase-1": { decision: "pass", note: "latest", updatedAt: "2026-08-18T12:00:00.000Z" } },
+      };
+    });
+    let readSettled = false;
+    const read = store.read().then((state) => { readSettled = true; return state; });
+    await Promise.resolve();
+    expect(readSettled).toBe(false);
+    release();
+    await update;
+    expect((await read).items["phrase-1"].note).toBe("latest");
+  });
+
+  it("returns the last committed state after an in-flight update fails", async () => {
+    const { seed } = await fixture();
+    let rejectReplace!: () => void;
+    let replaceEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { replaceEntered = resolve; });
+    const blockedFailure = new Promise<void>((_resolve, reject) => { rejectReplace = () => reject(new Error("replace failed")); });
+    const store = await createLocalReviewStore(seed, { atomicReplace: async () => { replaceEntered(); await blockedFailure; } });
+    const failedUpdate = store.update((current) => ({
+      ...current,
+      items: { "phrase-1": { decision: "issue", note: "uncommitted", updatedAt: "2026-08-18T12:00:00.000Z" } },
+    }));
+    const failedAssertion = expect(failedUpdate).rejects.toThrow("replace failed");
+    const read = store.read();
+    await entered;
+    rejectReplace();
+    await failedAssertion;
+    expect((await read).items).toEqual({});
   });
 
   it("rejects identity changes from a mutator", async () => {
