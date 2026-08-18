@@ -1,9 +1,10 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { SystemContentPackage, SystemContentPhrase } from "../../app/domain/types";
 import { inspectSystemContent } from "./qualityGate";
 import type { QwenClient, QwenMessage } from "./qwenClient";
 import { generateSystemContent } from "./generator";
+import { loadQwenCheckpoint, sourceSha256 } from "./qwenCheckpoint";
 
 const CATEGORY_QUOTAS = [
   ["daily", 180], ["travel", 100], ["work", 120], ["business", 100], ["supply-chain", 70], ["social", 30],
@@ -252,19 +253,37 @@ export async function buildQwenCandidate(options: PipelineOptions): Promise<Syst
 export async function runQwenAgent(options: AgentOptions) {
   await mkdir(options.outputDir, { recursive: true });
   const checkpointPath = join(options.outputDir, `checkpoint-${options.version}.json`);
+  const sourceContent = options.sourceContent ?? generateSystemContent();
   let resumePhrases: SystemContentPhrase[] = [];
   try {
-    const checkpoint = JSON.parse(await readFile(checkpointPath, "utf8")) as { version?: string; phrases?: SystemContentPhrase[] };
-    if (checkpoint.version !== options.version || !Array.isArray(checkpoint.phrases)) throw new Error("Qwen 断点文件无效");
+    const checkpoint = await loadQwenCheckpoint({ path: checkpointPath, version: options.version, sourceContent });
     resumePhrases = checkpoint.phrases;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const content = await buildQwenCandidate({
     ...options,
+    sourceContent,
     resumePhrases,
     onBatchCompleted: async (phrases) => {
-      await writeFile(checkpointPath, `${JSON.stringify({ version: options.version, phrases })}\n`, "utf8");
+      const pendingPath = `${checkpointPath}.pending`;
+      let pendingCreated = false;
+      let pendingFile: Awaited<ReturnType<typeof open>> | undefined;
+      try {
+        pendingFile = await open(pendingPath, "wx");
+        pendingCreated = true;
+        await pendingFile.writeFile(`${JSON.stringify({ version: options.version, sourceSha256: sourceSha256(sourceContent), phrases })}\n`, "utf8");
+        await pendingFile.close();
+        pendingFile = undefined;
+        await rename(pendingPath, checkpointPath);
+        pendingCreated = false;
+      } finally {
+        try {
+          await pendingFile?.close();
+        } finally {
+          if (pendingCreated) await rm(pendingPath, { force: true });
+        }
+      }
       await options.onBatchCompleted?.(phrases);
     },
   });

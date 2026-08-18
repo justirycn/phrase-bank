@@ -1,0 +1,44 @@
+name: Export Qwen checkpoint
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Qwen content version
+        required: true
+        default: 2026.08.3
+
+permissions:
+  contents: read
+
+jobs:
+  export-checkpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        env:
+          TENCENT_HOST: ${{ secrets.TENCENT_HOST }}
+          TENCENT_SSH_KEY: ${{ secrets.TENCENT_SSH_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$TENCENT_SSH_KEY" > ~/.ssh/tencent_qwen
+          chmod 600 ~/.ssh/tencent_qwen
+          ssh-keyscan -H "$TENCENT_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+      - name: Retrieve checkpoint
+        env:
+          TENCENT_HOST: ${{ secrets.TENCENT_HOST }}
+          TENCENT_USER: ${{ secrets.TENCENT_USER }}
+        run: |
+          mkdir -p .content-agent
+          scp -i ~/.ssh/tencent_qwen -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$TENCENT_USER@$TENCENT_HOST:/opt/phrase-bank/.content-agent/checkpoint-${{ inputs.version }}.json" ".content-agent/checkpoint-${{ inputs.version }}.json"
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/tencent_qwen
+      - name: Upload checkpoint
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen-checkpoint-${{ inputs.version }}
+          path: .content-agent/checkpoint-${{ inputs.version }}.json
+          retention-days: 1
+          if-no-files-found: error

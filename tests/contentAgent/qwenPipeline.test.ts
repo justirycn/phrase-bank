@@ -1,9 +1,10 @@
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { generateSystemContent } from "../../scripts/content-agent/generator";
 import { buildQwenCandidate, runQwenAgent } from "../../scripts/content-agent/qwenPipeline";
+import { sourceSha256 } from "../../scripts/content-agent/qwenCheckpoint";
 import { createQwenClient, type QwenClient } from "../../scripts/content-agent/qwenClient";
 import type { SystemContentPhrase } from "../../app/domain/types";
 
@@ -189,6 +190,10 @@ describe("Qwen content pipeline", () => {
     firstRun[failedReviewIndex] = JSON.stringify({ status: "fail", issues: ["retry later"], corrections: [] });
     await expect(runQwenAgent({ client: fakeClient(firstRun), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir })).rejects.toThrow("审校未通过");
     expect(await readdir(outputDir)).toContain("checkpoint-2026.08.3.json");
+    const checkpointPath = join(outputDir, "checkpoint-2026.08.3.json");
+    const legacyCheckpoint = JSON.parse(await readFile(checkpointPath, "utf8"));
+    delete legacyCheckpoint.sourceSha256;
+    await writeFile(checkpointPath, `${JSON.stringify(legacyCheckpoint)}\n`, "utf8");
 
     const remaining = responseQueue("2026.08.3").slice(reviewIndexes[0] + 1);
     const expectedRemainingCalls = remaining.length;
@@ -196,6 +201,42 @@ describe("Qwen content pipeline", () => {
     await expect(runQwenAgent({ client: resumedClient, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir })).resolves.toBeTruthy();
     expect(resumedClient.complete).toHaveBeenCalledTimes(expectedRemainingCalls);
     expect(await readdir(outputDir)).not.toContain("checkpoint-2026.08.3.json");
+  });
+
+  it("writes a current fingerprinted checkpoint after each independently reviewed full batch", async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-current-checkpoint-"));
+    const outputs = responseQueue("2026.08.3");
+    const reviewIndexes = outputs.flatMap((output, index) => JSON.parse(output).status === "pass" ? [index] : []);
+    outputs[reviewIndexes[1]] = JSON.stringify({ status: "fail", issues: ["retry later"], corrections: [] });
+
+    await expect(runQwenAgent({ client: fakeClient(outputs), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir })).rejects.toThrow("审校未通过");
+    const checkpoint = JSON.parse(await readFile(join(outputDir, "checkpoint-2026.08.3.json"), "utf8"));
+
+    expect(checkpoint).toMatchObject({ version: "2026.08.3", sourceSha256: sourceSha256(generateSystemContent()) });
+    expect(checkpoint.phrases).toHaveLength(40);
+    expect(checkpoint.phrases.map(({ id }: { id: string }) => id)).toEqual(generateSystemContent().phrases.slice(0, 40).map(({ id }) => id));
+  });
+
+  it("keeps the prior valid checkpoint when an atomic checkpoint write fails", async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-atomic-checkpoint-"));
+    const checkpointPath = join(outputDir, "checkpoint-2026.08.3.json");
+    const prior = { version: "2026.08.3", sourceSha256: sourceSha256(generateSystemContent()), phrases: [] };
+    const priorSerialized = `${JSON.stringify(prior)}\n`;
+    await writeFile(checkpointPath, priorSerialized, "utf8");
+    await mkdir(`${checkpointPath}.pending`);
+
+    await expect(runQwenAgent({ client: fakeClient(responseQueue("2026.08.3")), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir })).rejects.toThrow();
+
+    expect(await readFile(checkpointPath, "utf8")).toBe(priorSerialized);
+  });
+
+  it("retains the checkpoint until both final output files have succeeded", async () => {
+    const outputDir = await mkdtemp(join(tmpdir(), "phrase-bank-qwen-final-output-"));
+    await mkdir(join(outputDir, "report-2026.08.3.json"));
+
+    await expect(runQwenAgent({ client: fakeClient(responseQueue("2026.08.3")), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir })).rejects.toThrow();
+
+    expect(await readdir(outputDir)).toContain("checkpoint-2026.08.3.json");
   });
 
   it.each(["subcategory", "cefrLevel", "intent", "parentPhraseId", "unlockOrder"])("rejects a generated patch that includes immutable %s metadata", async (field) => {
