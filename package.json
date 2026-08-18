@@ -20,6 +20,7 @@
     "content:qwen:local": "tsx scripts/run-local-qwen-content-agent.ts",
     "content:checkpoint:import": "tsx scripts/import-qwen-checkpoint.ts",
     "content:publish": "tsx scripts/publish-qwen-content.ts",
+    "content:review": "tsx scripts/run-local-content-review.ts",
     "db:generate": "drizzle-kit generate"
     ,"account:create": "tsx scripts/manage-account.ts create"
     ,"account:reset": "tsx scripts/manage-account.ts reset"
