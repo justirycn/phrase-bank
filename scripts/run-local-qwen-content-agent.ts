@@ -48,7 +48,7 @@ export async function runLocalQwenContentAgent(args = process.argv.slice(2), dep
     repositoryRoot: dependencies.repositoryRoot ?? process.cwd(),
   });
   const writeOutput = dependencies.writeOutput ?? ((value: string) => process.stdout.write(value));
-  writeOutput("Qwen 本地配置已验证\n");
+  writeOutput("Qwen 配置已读取；请确认配置文件仅当前 Windows 用户可读。\n");
 
   const client = (dependencies.createClient ?? createQwenClient)({ ...config, timeoutMs: 120_000 });
   const generatedAt = (dependencies.now ?? (() => new Date()))().toISOString();

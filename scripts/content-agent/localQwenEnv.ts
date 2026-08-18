@@ -36,7 +36,9 @@ export async function loadLocalQwenEnv(options: LoadLocalQwenEnvOptions): Promis
   } catch {
     throw new Error(`Qwen configuration file is unavailable: ${requestedPath}`);
   }
-  if (!stats.isFile() || stats.isSymbolicLink()) throw new Error(`Qwen configuration must be an ordinary file (non-symlink): ${requestedPath}`);
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1) {
+    throw new Error(`Qwen configuration must be an ordinary file with a single link (non-symlink): ${requestedPath}`);
+  }
 
   const canonicalPath = await realpath(requestedPath);
   if (isWithin(repositoryRoot, canonicalPath)) throw new Error(`Qwen configuration path must resolve outside the repository: ${requestedPath}`);
@@ -71,15 +73,24 @@ export async function loadLocalQwenEnv(options: LoadLocalQwenEnvOptions): Promis
   try {
     parsedBaseUrl = new URL(baseUrl);
   } catch {
-    throw new Error(`DASHSCOPE_BASE_URL must be an HTTP(S) URL in ${requestedPath}`);
+    throw new Error(`DASHSCOPE_BASE_URL must be an HTTPS URL in ${requestedPath}`);
   }
-  if (parsedBaseUrl.protocol !== "http:" && parsedBaseUrl.protocol !== "https:") {
-    throw new Error(`DASHSCOPE_BASE_URL must be an HTTP(S) URL in ${requestedPath}`);
+  if (
+    parsedBaseUrl.protocol !== "https:"
+    || parsedBaseUrl.username !== ""
+    || parsedBaseUrl.password !== ""
+    || parsedBaseUrl.search !== ""
+    || parsedBaseUrl.hash !== ""
+    || baseUrl.includes("?")
+    || baseUrl.includes("#")
+  ) {
+    throw new Error(`DASHSCOPE_BASE_URL must be an HTTPS URL without credentials, query, or fragment in ${requestedPath}`);
   }
+  const normalizedBaseUrl = parsedBaseUrl.href.replace(/\/+$/, "");
 
   return {
     apiKey: values.get("DASHSCOPE_API_KEY")!,
-    baseUrl,
+    baseUrl: normalizedBaseUrl,
     model: values.get("DASHSCOPE_MODEL")!,
   };
 }

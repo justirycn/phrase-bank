@@ -69,7 +69,8 @@ describe("local Qwen content agent runner", () => {
       return { candidatePath: "candidate.json", reportPath: "report.json" };
     });
 
-    await runner.runLocalQwenContentAgent(["--version", "2026.08.3"], {
+    const fixturePath = "C:/external/private-qwen.env";
+    await runner.runLocalQwenContentAgent(["--version", "2026.08.3", "--env-file", fixturePath], {
       repositoryRoot: process.cwd(),
       loadConfig: vi.fn(async () => {
         calls.push("load");
@@ -82,10 +83,11 @@ describe("local Qwen content agent runner", () => {
     });
 
     expect(calls).toEqual(["load", "client", "agent"]);
-    expect(output.join("")).toContain("配置已验证");
+    expect(output[0]).toBe("Qwen 配置已读取；请确认配置文件仅当前 Windows 用户可读。\n");
     expect(output.join("")).toContain("candidate.json");
     expect(output.join("")).toContain("report.json");
     expect(output.join("")).not.toContain(SECRET);
+    expect(output.join("")).not.toContain(fixturePath);
   });
 
   it("fails on a missing or invalid secret file before client or network creation without leaking contents", async () => {

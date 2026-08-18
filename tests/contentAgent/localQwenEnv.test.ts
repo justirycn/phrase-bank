@@ -1,4 +1,4 @@
-import { lstat, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -79,6 +79,31 @@ describe("local Qwen environment loader", () => {
     }
   });
 
+  it("rejects an external hard-link alias to a repository file when hard links are supported", async (context) => {
+    const external = await mkdtemp(join(tmpdir(), "phrase-bank-local-qwen-hardlink-"));
+    temporaryPaths.push(external);
+    const inside = resolve(process.cwd(), ".local-qwen-hardlink-target.env");
+    const alias = join(external, "qwen-content.env");
+    await writeFile(inside, validEnv, "utf8");
+    try {
+      try {
+        await link(inside, alias);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP") {
+          context.skip();
+          return;
+        }
+        throw error;
+      }
+      expect((await lstat(alias)).nlink).toBeGreaterThan(1);
+      await expect(loadLocalQwenEnv({ path: alias, repositoryRoot: process.cwd() })).rejects.toThrow(/ordinary|hard.?link|link count/i);
+    } finally {
+      const { rm } = await import("node:fs/promises");
+      await rm(inside, { force: true });
+    }
+  });
+
   it.each([
     ["missing key", "DASHSCOPE_BASE_URL=https://example.invalid\nDASHSCOPE_MODEL=qwen-test\n"],
     ["duplicate key", `${validEnv}DASHSCOPE_MODEL=again\n`],
@@ -91,7 +116,14 @@ describe("local Qwen environment loader", () => {
     ["empty model", validEnv.replace("qwen-test", "")],
     ["blank model", validEnv.replace("qwen-test", "   ")],
     ["non-URL base", validEnv.replace("https://example.invalid/v1", "not-a-url")],
-    ["non-http base", validEnv.replace("https://example.invalid/v1", "file:///tmp/qwen")],
+    ["non-HTTPS base", validEnv.replace("https://example.invalid/v1", "http://example.invalid/v1")],
+    ["non-HTTP base", validEnv.replace("https://example.invalid/v1", "file:///tmp/qwen")],
+    ["base URL username", validEnv.replace("https://example.invalid/v1", "https://user@example.invalid/v1")],
+    ["base URL password", validEnv.replace("https://example.invalid/v1", "https://user:password@example.invalid/v1")],
+    ["base URL query", validEnv.replace("https://example.invalid/v1", "https://example.invalid/v1?secret=value")],
+    ["base URL empty query", validEnv.replace("https://example.invalid/v1", "https://example.invalid/v1?")],
+    ["base URL fragment", validEnv.replace("https://example.invalid/v1", "https://example.invalid/v1#fragment")],
+    ["base URL empty fragment", validEnv.replace("https://example.invalid/v1", "https://example.invalid/v1#")],
   ])("rejects %s without exposing file contents", async (_name, contents) => {
     const { path } = await fixture(contents);
     let message = "";
@@ -112,6 +144,13 @@ describe("local Qwen environment loader", () => {
       const invalid = await fixture(`${invalidLine}\nDASHSCOPE_BASE_URL=https://example.invalid\nDASHSCOPE_MODEL=qwen-test\n`);
       await expect(loadLocalQwenEnv({ path: invalid.path, repositoryRoot: process.cwd() })).rejects.toThrow();
     }
+  });
+
+  it("normalizes the HTTPS base URL without losing its path", async () => {
+    const normalized = await fixture(validEnv.replace("https://example.invalid/v1", "HTTPS://EXAMPLE.INVALID/v1/"));
+    await expect(loadLocalQwenEnv({ path: normalized.path, repositoryRoot: process.cwd() })).resolves.toMatchObject({
+      baseUrl: "https://example.invalid/v1",
+    });
   });
 
   it("rejects malformed UTF-8 without exposing bytes, contents, or keys", async () => {
