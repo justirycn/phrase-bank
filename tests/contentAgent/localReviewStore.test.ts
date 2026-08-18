@@ -259,6 +259,7 @@ describe("saveReview", () => {
 
   it("syncs the containing directory after replacement on POSIX", async () => {
     const { seed } = await fixture();
+    await mkdir(dirname(seed.path), { recursive: true });
     const events: string[] = [];
     await saveReview(seed.path, decided(seed), {
       validIds: seed.validIds,
@@ -283,6 +284,51 @@ describe("saveReview", () => {
       syncDirectory: async () => { called = true; },
     });
     expect(called).toBe(false);
+  });
+
+  it("syncs the committed destination after replacement on Windows", async () => {
+    const { seed } = await fixture();
+    const events: string[] = [];
+    await saveReview(seed.path, decided(seed), {
+      validIds: seed.validIds,
+      platform: "win32",
+      atomicReplace: async (temporaryPath, destinationPath) => {
+        events.push("replace");
+        await rename(temporaryPath, destinationPath);
+      },
+      syncCommittedDestination: async (path) => { events.push(`sync-file:${path}`); },
+    });
+    expect(events).toEqual(["replace", `sync-file:${seed.path}`]);
+  });
+
+  it("reports committed-destination sync failure after Windows replacement", async () => {
+    const { seed } = await fixture();
+    const next = decided(seed);
+    await expect(saveReview(seed.path, next, {
+      validIds: seed.validIds,
+      platform: "win32",
+      syncCommittedDestination: async () => { throw new Error("committed file sync failed"); },
+    })).rejects.toThrow("committed file sync failed");
+    expect(JSON.parse(await readFile(seed.path, "utf8"))).toEqual(next);
+  });
+
+  it("persists a newly created review directory entry before commit and the commit afterward on POSIX", async () => {
+    const { directory, seed } = await fixture();
+    const events: string[] = [];
+    await saveReview(seed.path, decided(seed), {
+      validIds: seed.validIds,
+      platform: "linux",
+      atomicReplace: async (temporaryPath, destinationPath) => {
+        events.push("replace");
+        await rename(temporaryPath, destinationPath);
+      },
+      syncDirectory: async (path) => { events.push(`sync-dir:${path}`); },
+    });
+    expect(events).toEqual([
+      `sync-dir:${directory}`,
+      "replace",
+      `sync-dir:${dirname(seed.path)}`,
+    ]);
   });
 
   it("reports a post-rename directory-sync failure without rolling back new bytes", async () => {
@@ -438,5 +484,25 @@ describe("createLocalReviewStore", () => {
     await expect(failing.update((current) => ({ ...current, items: { "phrase-1": { decision: "issue", note: "bad", updatedAt: "2026-08-18T12:00:00.000Z" } } }))).rejects.toThrow("replace failed");
     const saved = await healthy.update((current) => ({ ...current, items: { "phrase-2": { decision: "pass", note: "good", updatedAt: "2026-08-18T12:00:00.000Z" } } }));
     expect(saved.items).toEqual({ "phrase-2": expect.objectContaining({ note: "good" }) });
+  });
+
+  it("reloads disk truth after post-rename sync failure and keeps the shared queue usable", async () => {
+    const { seed } = await fixture();
+    const uncertain = await createLocalReviewStore(seed, {
+      platform: "win32",
+      syncCommittedDestination: async () => { throw new Error("committed file sync failed"); },
+    });
+    const healthy = await createLocalReviewStore(seed);
+    await expect(uncertain.update((current) => ({
+      ...current,
+      items: { ...current.items, "phrase-1": { decision: "pass", note: "committed", updatedAt: "2026-08-18T12:00:00.000Z" } },
+    }))).rejects.toThrow("committed file sync failed");
+
+    const recovered = await healthy.update((current) => ({
+      ...current,
+      items: { ...current.items, "phrase-2": { decision: "pass", note: "next", updatedAt: "2026-08-18T12:00:00.000Z" } },
+    }));
+    expect(recovered.items).toMatchObject({ "phrase-1": { note: "committed" }, "phrase-2": { note: "next" } });
+    expect(JSON.parse(await readFile(seed.path, "utf8")).items).toMatchObject(recovered.items);
   });
 });

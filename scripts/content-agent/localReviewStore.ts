@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, realpath, rename, unlink } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { ReviewItem, ReviewState } from "./localReview";
 
@@ -18,6 +18,7 @@ export interface SaveReviewDependencies {
   writeTemp?: (path: string, contents: string) => Promise<void>;
   atomicReplace?: (temporaryPath: string, destinationPath: string) => Promise<void>;
   syncDirectory?: (directoryPath: string) => Promise<void>;
+  syncCommittedDestination?: (destinationPath: string) => Promise<void>;
   platform?: NodeJS.Platform;
 }
 
@@ -177,6 +178,37 @@ async function defaultSyncDirectory(path: string): Promise<void> {
   }
 }
 
+async function defaultSyncCommittedDestination(path: string): Promise<void> {
+  // Node cannot request MOVEFILE_WRITE_THROUGH for rename. Reopening read/write and syncing invokes
+  // FlushFileBuffers on Windows, the strongest low-latency committed-file primitive Node exposes.
+  const handle = await open(path, "r+");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+function parentDirectoriesForCreatedPath(firstCreated: string, targetDirectory: string): string[] {
+  const nativeFirst = process.platform === "win32" && firstCreated.startsWith("\\\\?\\UNC\\")
+    ? `\\\\${firstCreated.slice(8)}`
+    : process.platform === "win32" && firstCreated.startsWith("\\\\?\\")
+      ? firstCreated.slice(4)
+      : firstCreated;
+  const first = resolve(nativeFirst);
+  const target = resolve(targetDirectory);
+  const remainder = relative(first, target);
+  if (remainder.startsWith("..") || resolve(first, remainder) !== target) return [dirname(first)];
+  const segments = remainder ? remainder.split(/[\\/]/u) : [];
+  const parents = [dirname(first)];
+  let directory = first;
+  for (const segment of segments) {
+    parents.push(directory);
+    directory = join(directory, segment);
+  }
+  return parents;
+}
+
 async function removeOwnedTemp(path: string): Promise<void> {
   try {
     await unlink(path);
@@ -213,12 +245,20 @@ export async function saveReview(path: string, state: ReviewState, dependencies:
   const contents = serializeCanonicalState(state);
 
   const parent = dirname(path);
-  await mkdir(parent, { recursive: true });
+  const createdDirectory = await mkdir(parent, { recursive: true });
   const temporaryPath = join(parent, `.${basename(path)}.pending-${process.pid}-${randomUUID()}`);
   try {
     await (dependencies.writeTemp ?? defaultWriteTemp)(temporaryPath, contents);
+    const platform = dependencies.platform ?? process.platform;
+    if (platform !== "win32" && createdDirectory) {
+      for (const directory of parentDirectoriesForCreatedPath(createdDirectory, parent)) {
+        await (dependencies.syncDirectory ?? defaultSyncDirectory)(directory);
+      }
+    }
     await (dependencies.atomicReplace ?? rename)(temporaryPath, path);
-    if ((dependencies.platform ?? process.platform) !== "win32") {
+    if (platform === "win32") {
+      await (dependencies.syncCommittedDestination ?? defaultSyncCommittedDestination)(path);
+    } else {
       // A sync failure after rename is reported without rollback: the new file may already be durable and is reloaded next time.
       await (dependencies.syncDirectory ?? defaultSyncDirectory)(parent);
     }
