@@ -88,18 +88,9 @@ export async function importQwenCheckpoint(options: ImportOptions): Promise<{ co
   const checkpoint = await loadQwenCheckpoint({ path: options.source, version: options.version, sourceContent: options.sourceContent });
   const serialized = `${JSON.stringify(checkpoint)}\n`;
   await mkdir(dirname(options.destination), { recursive: true });
-  const lock = await acquireImportLock(options.destination);
-  const pending = `${options.destination}.pending.${process.pid}.${lock.token}`;
+  const pending = `${options.destination}.pending.${process.pid}.${randomUUID()}`;
   let pendingCreated = false;
   try {
-    try {
-      const existing = await loadQwenCheckpoint({ path: options.destination, version: options.version, sourceContent: options.sourceContent });
-      if (canonical(existing) === canonical(checkpoint)) return { count: checkpoint.phrases.length, destination: options.destination };
-      throw new Error(`Checkpoint conflict: destination already exists at ${options.destination}`);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-
     const pendingFile = await open(pending, "wx");
     pendingCreated = true;
     try {
@@ -111,92 +102,25 @@ export async function importQwenCheckpoint(options: ImportOptions): Promise<{ co
       await link(pending, options.destination);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const existing = await loadQwenCheckpoint({ path: options.destination, version: options.version, sourceContent: options.sourceContent });
+      const existing = await loadCommittedDestination(options);
       if (canonical(existing) !== canonical(checkpoint)) throw new Error(`Checkpoint conflict: destination already exists at ${options.destination}`);
     }
     return { count: checkpoint.phrases.length, destination: options.destination };
   } finally {
+    if (pendingCreated) await rm(pending, { force: true });
+  }
+}
+
+async function loadCommittedDestination(options: ImportOptions): Promise<QwenCheckpoint> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      if (pendingCreated) await rm(pending, { force: true });
-    } finally {
-      await releaseImportLock(lock);
-    }
-  }
-}
-
-interface ImportLock {
-  path: string;
-  claimPath: string;
-  token: string;
-}
-
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-async function reclaimDeadLock(path: string): Promise<boolean> {
-  let raw: string;
-  try {
-    raw = await readFile(path, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
-    throw error;
-  }
-  let owner: { pid?: unknown };
-  try {
-    owner = JSON.parse(raw) as { pid?: unknown };
-  } catch {
-    await rm(path, { force: true });
-    return true;
-  }
-  if (typeof owner.pid === "number" && Number.isInteger(owner.pid) && owner.pid > 0 && processIsAlive(owner.pid)) return false;
-  await rm(path, { force: true });
-  return true;
-}
-
-async function acquireImportLock(destination: string): Promise<ImportLock> {
-  const token = randomUUID();
-  const path = `${destination}.lock`;
-  const claimPath = `${path}.${process.pid}.${token}.claim`;
-  const claim = await open(claimPath, "wx");
-  try {
-    try {
-      await claim.writeFile(JSON.stringify({ pid: process.pid, token }), "utf8");
-    } finally {
-      await claim.close();
-    }
-    const deadline = Date.now() + 10_000;
-    while (true) {
-      try {
-        await link(claimPath, path);
-        return { path, claimPath, token };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        if (await reclaimDeadLock(path)) continue;
-        if (Date.now() >= deadline) throw new Error(`Checkpoint import lock is active at ${path}`);
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-    }
-  } catch (error) {
-    await rm(claimPath, { force: true });
-    throw error;
-  }
-}
-
-async function releaseImportLock(lock: ImportLock) {
-  try {
-    try {
-      const owner = JSON.parse(await readFile(lock.path, "utf8")) as { token?: unknown };
-      if (owner.token === lock.token) await rm(lock.path, { force: true });
+      return await loadQwenCheckpoint({ path: options.destination, version: options.version, sourceContent: options.sourceContent });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      lastError = error;
+      if (!new Set(["ENOENT", "EACCES", "EPERM"]).has((error as NodeJS.ErrnoException).code ?? "") || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 5));
     }
-  } finally {
-    await rm(lock.claimPath, { force: true });
   }
+  throw lastError;
 }
