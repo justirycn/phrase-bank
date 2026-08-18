@@ -190,11 +190,7 @@ async function defaultSyncCommittedDestination(path: string): Promise<void> {
 }
 
 function parentDirectoriesForCreatedPath(firstCreated: string, targetDirectory: string): string[] {
-  const nativeFirst = process.platform === "win32" && firstCreated.startsWith("\\\\?\\UNC\\")
-    ? `\\\\${firstCreated.slice(8)}`
-    : process.platform === "win32" && firstCreated.startsWith("\\\\?\\")
-      ? firstCreated.slice(4)
-      : firstCreated;
+  const nativeFirst = nativeWindowsPath(firstCreated);
   const first = resolve(nativeFirst);
   const target = resolve(targetDirectory);
   const remainder = relative(first, target);
@@ -324,16 +320,31 @@ function assertSameIdentity(state: ReviewState, seed: LocalReviewSeed): void {
 }
 
 function platformCanonicalPath(path: string): string {
-  const absolute = resolve(path);
+  const absolute = resolve(nativeWindowsPath(path));
   return process.platform === "win32" ? absolute.toLowerCase() : absolute;
 }
 
-async function canonicalPath(path: string): Promise<string> {
-  try {
-    return platformCanonicalPath(await realpath(path));
-  } catch (error) {
-    if (!hasErrorCode(error, "ENOENT")) throw error;
-    return platformCanonicalPath(path);
+function nativeWindowsPath(path: string): string {
+  if (process.platform !== "win32") return path;
+  if (path.startsWith("\\\\?\\UNC\\")) return `\\\\${path.slice(8)}`;
+  if (path.startsWith("\\\\?\\")) return path.slice(4);
+  return path;
+}
+
+export async function canonicalLocalReviewPath(path: string): Promise<string> {
+  let cursor = resolve(path);
+  const missingSegments: string[] = [];
+  while (true) {
+    try {
+      const existingAncestor = await realpath(cursor);
+      return platformCanonicalPath(resolve(nativeWindowsPath(existingAncestor), ...missingSegments));
+    } catch (error) {
+      if (!hasErrorCode(error, "ENOENT")) throw error;
+      const parent = dirname(cursor);
+      if (parent === cursor) throw new Error("Review path has no existing filesystem ancestor", { cause: error });
+      missingSegments.unshift(basename(cursor));
+      cursor = parent;
+    }
   }
 }
 
@@ -353,21 +364,21 @@ export async function createLocalReviewStore(
   dependencies: Omit<SaveReviewDependencies, "validIds"> = {},
 ): Promise<LocalReviewStore> {
   validateSeed(seed);
-  const initialPathKey = platformCanonicalPath(seed.path);
-  await enqueuePathOperation(initialPathKey, () => loadOrCreateReview(seed));
-  const pathKey = await canonicalPath(seed.path);
+  const pathKey = await canonicalLocalReviewPath(seed.path);
+  const storageSeed = { ...seed, path: pathKey };
+  await enqueuePathOperation(pathKey, () => loadOrCreateReview(storageSeed));
 
   return {
     read() {
-      return enqueuePathOperation(pathKey, () => loadOrCreateReview(seed));
+      return enqueuePathOperation(pathKey, () => loadOrCreateReview(storageSeed));
     },
     update(mutator) {
       return enqueuePathOperation(pathKey, async () => {
-        const current = await loadOrCreateReview(seed);
+        const current = await loadOrCreateReview(storageSeed);
         const next = await mutator(immutableClone(current));
         validateState(next);
-        assertSameIdentity(next, seed);
-        await saveReview(seed.path, next, { ...dependencies, validIds: seed.validIds });
+        assertSameIdentity(next, storageSeed);
+        await saveReview(storageSeed.path, next, { ...dependencies, validIds: storageSeed.validIds });
         return structuredClone(next);
       });
     },

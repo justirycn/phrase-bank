@@ -1,9 +1,10 @@
-import { mkdir, mkdtemp, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ReviewState } from "../../scripts/content-agent/localReview";
 import {
+  canonicalLocalReviewPath,
   createLocalReviewStore,
   loadOrCreateReview,
   saveReview,
@@ -26,6 +27,13 @@ async function fixture(): Promise<{ directory: string; seed: LocalReviewSeed }> 
       validIds: ["phrase-1", "phrase-2", "phrase-3"],
     },
   };
+}
+
+async function directoryAlias(directory: string): Promise<string> {
+  const aliasRoot = await mkdtemp(join(tmpdir(), "local-review-alias-"));
+  const alias = join(aliasRoot, "linked-review-root");
+  await symlink(directory, alias, process.platform === "win32" ? "junction" : "dir");
+  return alias;
 }
 
 function decided(seed: LocalReviewSeed): ReviewState {
@@ -504,5 +512,56 @@ describe("createLocalReviewStore", () => {
     }));
     expect(recovered.items).toMatchObject({ "phrase-1": { note: "committed" }, "phrase-2": { note: "next" } });
     expect(JSON.parse(await readFile(seed.path, "utf8")).items).toMatchObject(recovered.items);
+  });
+
+  it("canonicalizes missing nested destinations identically through a directory alias", async () => {
+    const { directory } = await fixture();
+    const alias = await directoryAlias(directory);
+    const realTarget = join(directory, "missing", "nested", "review.json");
+    const aliasTarget = join(alias, "missing", "nested", "review.json");
+
+    expect(await canonicalLocalReviewPath(realTarget)).toBe(await canonicalLocalReviewPath(aliasTarget));
+    await expect(readdir(join(directory, "missing"))).rejects.toThrow();
+  });
+
+  it("serializes initialization through an alias before any missing review directory is created", async () => {
+    const { directory, seed } = await fixture();
+    const alias = await directoryAlias(directory);
+    const first = await createLocalReviewStore(seed);
+    let release!: () => void;
+    let mutatorEntered!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const entered = new Promise<void>((resolve) => { mutatorEntered = resolve; });
+    const firstUpdate = first.update(async (current) => {
+      mutatorEntered();
+      await blocked;
+      return {
+        ...current,
+        items: { "phrase-1": { decision: "pass", note: "old identity", updatedAt: "2026-08-18T12:00:00.000Z" } },
+      };
+    });
+    await entered;
+
+    let aliasInitializationSettled = false;
+    const aliasSeed = {
+      ...seed,
+      path: join(alias, ".content-agent", basename(seed.path)),
+      candidateSha256: HASH_B,
+    };
+    let aliasInitializationError: unknown;
+    const aliasInitialization = createLocalReviewStore(aliasSeed).then(
+      (store) => { aliasInitializationSettled = true; return store; },
+      (error: unknown) => { aliasInitializationSettled = true; aliasInitializationError = error; return undefined; },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(aliasInitializationSettled).toBe(false);
+
+    release();
+    await firstUpdate;
+    const second = await aliasInitialization;
+    if (!second) throw aliasInitializationError;
+    const final = await second.read();
+    expect(final).toMatchObject({ candidateSha256: HASH_B, items: {} });
+    expect(JSON.parse(await readFile(seed.path, "utf8"))).toMatchObject({ candidateSha256: HASH_B, items: {} });
   });
 });
