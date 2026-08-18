@@ -1,14 +1,14 @@
 import { lstat, mkdtemp, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getDefaultLocalQwenEnvPath, loadLocalQwenEnv } from "../../scripts/content-agent/localQwenEnv";
 
 const SECRET = "sk-fixture=value-never-log";
 const validEnv = `DASHSCOPE_API_KEY=${SECRET}\nDASHSCOPE_BASE_URL=https://example.invalid/v1\nDASHSCOPE_MODEL=qwen-test\n`;
 const temporaryPaths: string[] = [];
 
-async function fixture(contents = validEnv) {
+async function fixture(contents: string | Uint8Array = validEnv) {
   const directory = await mkdtemp(join(tmpdir(), "phrase-bank-local-qwen-"));
   temporaryPaths.push(directory);
   const path = join(directory, "qwen-content.env");
@@ -105,12 +105,39 @@ describe("local Qwen environment loader", () => {
   });
 
   it("accepts blank lines and comments but requires exact untrimmed KEY=value syntax", async () => {
-    const accepted = await fixture(`# local only\n\n${validEnv}`);
+    const accepted = await fixture(`# local only\n\n \t \n   # indented local comment\n${validEnv}`);
     await expect(loadLocalQwenEnv({ path: accepted.path, repositoryRoot: process.cwd() })).resolves.toMatchObject({ apiKey: SECRET });
 
     for (const invalidLine of [" DASHSCOPE_API_KEY=value", "DASHSCOPE_API_KEY =value", "export DASHSCOPE_API_KEY=value"]) {
       const invalid = await fixture(`${invalidLine}\nDASHSCOPE_BASE_URL=https://example.invalid\nDASHSCOPE_MODEL=qwen-test\n`);
       await expect(loadLocalQwenEnv({ path: invalid.path, repositoryRoot: process.cwd() })).rejects.toThrow();
+    }
+  });
+
+  it("rejects malformed UTF-8 without exposing bytes, contents, or keys", async () => {
+    const invalidBytes = Buffer.concat([
+      Buffer.from(`DASHSCOPE_API_KEY=${SECRET}\n`, "utf8"),
+      Buffer.from([0xc3, 0x28]),
+    ]);
+    const { path } = await fixture(invalidBytes);
+    const stdout = vi.spyOn(process.stdout, "write");
+    const stderr = vi.spyOn(process.stderr, "write");
+    try {
+      let failure = "";
+      try {
+        await loadLocalQwenEnv({ path, repositoryRoot: process.cwd() });
+      } catch (error) {
+        failure = String(error);
+      }
+      const captured = `${stdout.mock.calls.flat().join("")}${stderr.mock.calls.flat().join("")}`;
+      expect(failure).toBe("Error: Qwen 配置文件不是有效 UTF-8");
+      expect(failure).not.toContain("DASHSCOPE_API_KEY");
+      expect(failure).not.toContain(SECRET);
+      expect(captured).toBe("");
+      expect(captured).not.toContain(SECRET);
+    } finally {
+      stdout.mockRestore();
+      stderr.mockRestore();
     }
   });
 });

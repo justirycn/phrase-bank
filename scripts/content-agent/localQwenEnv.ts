@@ -41,10 +41,17 @@ export async function loadLocalQwenEnv(options: LoadLocalQwenEnvOptions): Promis
   const canonicalPath = await realpath(requestedPath);
   if (isWithin(repositoryRoot, canonicalPath)) throw new Error(`Qwen configuration path must resolve outside the repository: ${requestedPath}`);
 
-  const contents = await readFile(canonicalPath, "utf8");
+  const bytes = await readFile(canonicalPath);
+  let contents: string;
+  try {
+    contents = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("Qwen 配置文件不是有效 UTF-8");
+  }
   const values = new Map<string, string>();
   for (const line of contents.split(/\r?\n/)) {
-    if (line === "" || line.startsWith("#")) continue;
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
     const equals = line.indexOf("=");
     if (equals <= 0) throw new Error(`Malformed Qwen configuration line in ${requestedPath}`);
     const key = line.slice(0, equals);
