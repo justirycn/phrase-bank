@@ -57,6 +57,7 @@ describe("Qwen checkpoint validation", () => {
   it("accepts a current checkpoint with a deterministic immutable-source fingerprint", async () => {
     const { sourceContent, phrases } = fixture();
     const fingerprint = sourceSha256(sourceContent);
+    const generatedAt = "2026-08-10T00:00:00.000Z";
     const mutableCopy = structuredClone(sourceContent);
     mutableCopy.version = "different-version";
     mutableCopy.generatedAt = "2099-01-01T00:00:00.000Z";
@@ -65,10 +66,10 @@ describe("Qwen checkpoint validation", () => {
     mutableCopy.phrases[0].chinese = "不同的可变中文。";
     mutableCopy.phrases[0].contentVersion = "different-version";
     mutableCopy.phrases[0].qualityVersion = "different-quality";
-    const { path } = await checkpointFile({ version: VERSION, sourceSha256: fingerprint, phrases });
+    const { path } = await checkpointFile({ version: VERSION, sourceSha256: fingerprint, generatedAt, phrases });
 
     expect(sourceSha256(mutableCopy)).toBe(fingerprint);
-    await expect(loadQwenCheckpoint({ path, version: VERSION, sourceContent })).resolves.toMatchObject({ sourceSha256: fingerprint, phrases });
+    await expect(loadQwenCheckpoint({ path, version: VERSION, sourceContent })).resolves.toMatchObject({ sourceSha256: fingerprint, generatedAt, phrases });
     const immutableCopy = structuredClone(sourceContent);
     immutableCopy.phrases[0].intent = "changed-intent";
     expect(sourceSha256(immutableCopy)).not.toBe(fingerprint);
@@ -79,6 +80,7 @@ describe("Qwen checkpoint validation", () => {
     const cases: Array<[string, unknown, RegExp]> = [
       ["wrong-version", { version: "2026.08.4", phrases }, /version/i],
       ["not-an-array", { version: VERSION, phrases: {} }, /phrases/i],
+      ["malformed-generated-at", { version: VERSION, generatedAt: "not-an-instant", phrases }, /generatedAt/i],
       ["malformed-phrase", { version: VERSION, phrases: [{ ...phrases[0], english: "" }] }, /phrase/i],
       ["malformed-version-fields", { version: VERSION, phrases: [{ ...phrases[0], contentVersion: 3, qualityVersion: "" }] }, /phrase/i],
       ["duplicate", { version: VERSION, phrases: [phrases[0], phrases[0]] }, /duplicate/i],

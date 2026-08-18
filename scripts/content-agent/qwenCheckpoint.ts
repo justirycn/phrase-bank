@@ -6,6 +6,7 @@ import type { SystemContentPackage, SystemContentPhrase } from "../../app/domain
 export interface QwenCheckpoint {
   version: string;
   sourceSha256: string;
+  generatedAt?: string;
   phrases: SystemContentPhrase[];
 }
 
@@ -69,6 +70,13 @@ export function validateQwenCheckpoint(value: unknown, options: ValidateOptions)
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Checkpoint is malformed");
   if (parsed.version !== options.version) throw new Error(`Checkpoint version does not match ${options.version}`);
   if (!Array.isArray(parsed.phrases)) throw new Error("Checkpoint phrases must be an array");
+  let generatedAt: string | undefined;
+  if (parsed.generatedAt !== undefined) {
+    if (typeof parsed.generatedAt !== "string" || !parsed.generatedAt.trim()) throw new Error("Checkpoint generatedAt is malformed");
+    const parsedDate = new Date(parsed.generatedAt);
+    if (Number.isNaN(parsedDate.valueOf()) || parsedDate.toISOString() !== parsed.generatedAt) throw new Error("Checkpoint generatedAt is malformed");
+    generatedAt = parsed.generatedAt;
+  }
 
   const expectedFingerprint = sourceSha256(options.sourceContent);
   if (parsed.sourceSha256 !== undefined && parsed.sourceSha256 !== expectedFingerprint) throw new Error("Checkpoint source fingerprint does not match");
@@ -87,7 +95,9 @@ export function validateQwenCheckpoint(value: unknown, options: ValidateOptions)
     if (actualMetadata !== expectedMetadata) throw new Error(`Checkpoint immutable metadata drift for ID: ${value.id}`);
     phrases.push(value);
   }
-  return { version: options.version, sourceSha256: expectedFingerprint, phrases };
+  return generatedAt === undefined
+    ? { version: options.version, sourceSha256: expectedFingerprint, phrases }
+    : { version: options.version, sourceSha256: expectedFingerprint, generatedAt, phrases };
 }
 
 export async function loadQwenCheckpoint(options: LoadOptions): Promise<QwenCheckpoint> {

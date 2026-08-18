@@ -149,6 +149,42 @@ describe("Qwen content pipeline", () => {
     const paths = await runQwenAgent({ client: fakeClient(responseQueue("2026.08.3")), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir, checkpointDependencies: noOpCheckpointDurability });
     expect(JSON.parse(await readFile(paths.reportPath, "utf8"))).toMatchObject({ status: "pass", coreCount: 600, totalCount: 2000 });
     expect(JSON.parse(await readFile(paths.candidatePath, "utf8"))).toMatchObject({ version: "2026.08.3" });
+    const originalCandidateRaw = await readFile(paths.candidatePath, "utf8");
+    const originalReportRaw = await readFile(paths.reportPath, "utf8");
+    const checkpointPath = join(outputDir, "checkpoint-2026.08.3.json");
+    const durableCheckpointRaw = await readFile(checkpointPath, "utf8");
+    const durableCheckpoint = JSON.parse(durableCheckpointRaw);
+    expect(durableCheckpoint.phrases).toHaveLength(2000);
+    expect(durableCheckpoint.phrases.map(({ id }: { id: string }) => id)).toEqual(generateSystemContent().phrases.map(({ id }) => id));
+
+    const damageOutputs = [
+      async () => rm(paths.candidatePath),
+      async () => writeFile(paths.candidatePath, "corrupt candidate\n", "utf8"),
+      async () => rm(paths.reportPath),
+      async () => writeFile(paths.reportPath, "corrupt report\n", "utf8"),
+      async () => { await rm(paths.candidatePath); await rm(paths.reportPath); },
+    ];
+    for (const damage of damageOutputs) {
+      await damage();
+      const recoveryClient = fakeClient([]);
+      await expect(runQwenAgent({ client: recoveryClient, version: "2026.08.3", generatedAt: "2099-01-01T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir, checkpointDependencies: noOpCheckpointDurability })).resolves.toEqual(paths);
+      expect(recoveryClient.complete).not.toHaveBeenCalled();
+      const recoveredCandidate = JSON.parse(await readFile(paths.candidatePath, "utf8"));
+      expect(recoveredCandidate).toMatchObject({ version: "2026.08.3" });
+      expect(recoveredCandidate.phrases).toHaveLength(2000);
+      expect(JSON.parse(await readFile(paths.reportPath, "utf8"))).toMatchObject({ status: "pass", coreCount: 600, totalCount: 2000 });
+      expect(await readFile(paths.candidatePath, "utf8")).toBe(originalCandidateRaw);
+      expect(await readFile(paths.reportPath, "utf8")).toBe(originalReportRaw);
+      expect(await readFile(checkpointPath, "utf8")).toBe(durableCheckpointRaw);
+    }
+    const candidateRaw = await readFile(paths.candidatePath, "utf8");
+    const reportRaw = await readFile(paths.reportPath, "utf8");
+    const repeatClient = fakeClient([]);
+    await expect(runQwenAgent({ client: repeatClient, version: "2026.08.3", generatedAt: "2100-01-01T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir, checkpointDependencies: noOpCheckpointDurability })).resolves.toEqual(paths);
+    expect(repeatClient.complete).not.toHaveBeenCalled();
+    expect(await readFile(paths.candidatePath, "utf8")).toBe(candidateRaw);
+    expect(await readFile(paths.reportPath, "utf8")).toBe(reportRaw);
+    expect(await readFile(checkpointPath, "utf8")).toBe(durableCheckpointRaw);
 
     const failedDir = await tempRoots.create("phrase-bank-qwen-failed-");
     await expect(runQwenAgent({ client: fakeClient(responseQueue("2026.08.3", "fail")), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir: failedDir })).rejects.toThrow();
@@ -207,7 +243,7 @@ describe("Qwen content pipeline", () => {
     const resumedClient = fakeClient(remaining);
     await expect(runQwenAgent({ client: resumedClient, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir, checkpointDependencies: noOpCheckpointDurability })).resolves.toBeTruthy();
     expect(resumedClient.complete).toHaveBeenCalledTimes(expectedRemainingCalls);
-    expect(await readdir(outputDir)).not.toContain("checkpoint-2026.08.3.json");
+    expect(JSON.parse(await readFile(join(outputDir, "checkpoint-2026.08.3.json"), "utf8")).phrases).toHaveLength(2000);
   }, 20_000);
 
   it("writes a current fingerprinted checkpoint after each independently reviewed full batch", async () => {

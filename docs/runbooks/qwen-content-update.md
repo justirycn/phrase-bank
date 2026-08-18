@@ -154,8 +154,11 @@ npm run content:qwen:local -- --version 2026.08.3
 
 成功时会在当前 worktree 写入以下忽略文件，仍不会改动线上内容：
 
+- `.content-agent/checkpoint-2026.08.3.json`（完整的 2,000 条耐久检查点）
 - `.content-agent/candidate-2026.08.3.json`
 - `.content-agent/report-2026.08.3.json`
+
+完整检查点会一直保留到第 6 步显式清理 worktree，不会在候选和报告写入后自动删除。候选或报告缺失、损坏时，用相同版本重新运行上述命令会从完整检查点重建文件，不会再次调用 Qwen；不要把它当作过期临时文件提前删除。
 
 ### 4. 在 localhost 页面审核并明确停止服务
 

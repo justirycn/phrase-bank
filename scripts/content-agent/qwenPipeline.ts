@@ -462,20 +462,23 @@ export async function runQwenAgent(options: AgentOptions) {
   const checkpointPath = join(options.outputDir, `checkpoint-${options.version}.json`);
   const sourceContent = options.sourceContent ?? generateSystemContent();
   let resumePhrases: SystemContentPhrase[] = [];
+  let checkpointGeneratedAt: string | undefined;
   try {
     const checkpoint = await loadQwenCheckpoint({ path: checkpointPath, version: options.version, sourceContent });
     resumePhrases = checkpoint.phrases;
+    checkpointGeneratedAt = checkpoint.generatedAt;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   const content = await buildQwenCandidate({
     ...options,
+    generatedAt: checkpointGeneratedAt ?? options.generatedAt,
     sourceContent,
     resumePhrases,
     onBatchCompleted: async (phrases) => {
       await writeCheckpointAtomically({
         checkpointPath,
-        serialized: `${JSON.stringify({ version: options.version, sourceSha256: sourceSha256(sourceContent), phrases })}\n`,
+        serialized: `${JSON.stringify({ version: options.version, sourceSha256: sourceSha256(sourceContent), generatedAt: checkpointGeneratedAt ?? options.generatedAt, phrases })}\n`,
         version: options.version,
         sourceContent,
         phraseCount: phrases.length,
@@ -491,6 +494,5 @@ export async function runQwenAgent(options: AgentOptions) {
   const reportPath = join(options.outputDir, `report-${options.version}.json`);
   await writeFile(candidatePath, `${JSON.stringify(content, null, 2)}\n`, "utf8");
   await writeFile(reportPath, `${JSON.stringify({ status: "pass", version: options.version, ...report }, null, 2)}\n`, "utf8");
-  await rm(checkpointPath, { force: true });
   return { candidatePath, reportPath };
 }
