@@ -260,7 +260,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       button.type = "button";
       button.textContent = label;
       button.setAttribute("aria-pressed", String(item && item.decision === decision));
-      button.disabled = pendingIds.has(phrase.id);
+      button.disabled = approvalPending || pendingIds.size > 0;
       button.addEventListener("click", () => submitDecision(phrase.id, decision, note, rowStatus));
       return button;
     }
@@ -323,7 +323,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       note.setAttribute("aria-label", "审核备注：" + phrase.id);
       const serverNote = item && typeof item.note === "string" ? item.note : "";
       note.value = pendingNotes.has(phrase.id) ? pendingNotes.get(phrase.id) : serverNote;
-      note.disabled = pendingIds.has(phrase.id);
+      note.disabled = approvalPending || pendingIds.size > 0;
       note.addEventListener("input", () => pendingNotes.set(phrase.id, note.value));
       noteField.append(noteLabel, note);
 
@@ -431,7 +431,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
     }
 
     async function submitDecision(id, decision, note, rowStatus) {
-      if (!model || pendingIds.has(id)) return;
+      if (!model || approvalPending || pendingIds.size > 0) return;
       clearError();
       const submittedNote = note.value;
       pendingNotes.set(id, submittedNote);
@@ -471,6 +471,8 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       elements.approve.disabled = true;
       elements.approvalStatus.textContent = "正在批准…";
       clearError();
+      updateSummary();
+      renderRows();
       try {
         const payload = await readJson(await fetch("/api/approve", {
           method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -483,14 +485,15 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       } catch (error) {
         approvalPending = false;
         updateSummary();
+        renderRows();
         const detail = error instanceof Error ? error.message : "未知错误";
         elements.approvalStatus.textContent = "批准失败，可以重试。";
         showError("批准失败：" + detail);
       }
     }
 
-    for (const control of [elements.search, elements.subcategory, elements.kind, elements.sampleOnly, elements.issueOnly, elements.hintOnly]) {
-      control.addEventListener("input", renderRows);
+    elements.search.addEventListener("input", renderRows);
+    for (const control of [elements.subcategory, elements.kind, elements.sampleOnly, elements.issueOnly, elements.hintOnly]) {
       control.addEventListener("change", renderRows);
     }
     elements.category.addEventListener("change", () => { updateSubcategoryOptions(); renderRows(); });

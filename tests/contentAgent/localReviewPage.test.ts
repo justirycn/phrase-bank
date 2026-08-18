@@ -138,7 +138,7 @@ describe("renderLocalReviewPage", () => {
     expect(html).toContain("加载失败");
     expect(html).toContain('retryButton.hidden = false');
     expect(html).toContain('retryButton.addEventListener("click", loadReview)');
-    expect(html).toContain("pendingIds.has(id)");
+    expect(html).toContain("if (!model || approvalPending || pendingIds.size > 0) return");
     expect(html).toContain("pendingIds.add(id)");
     expect(html).toContain("pendingIds.delete(id)");
     expect(html).toContain("pendingNotes.set(id, submittedNote)");
@@ -257,6 +257,21 @@ describe("local review page runtime", () => {
     expect(rowIds(dom)).toEqual(["daily-core", "daily-example", "travel-example"]);
   });
 
+  it("renders once for one checkbox activation", async () => {
+    const dom = boot(vi.fn().mockResolvedValue(response(payload())));
+    await vi.waitFor(() => expect(rowIds(dom)).toHaveLength(3));
+    const list = dom.window.document.getElementById("review-list") as HTMLDivElement;
+    const replaceChildren = list.replaceChildren.bind(list);
+    let renders = 0;
+    list.replaceChildren = (...nodes: (Node | string)[]) => {
+      renders += 1;
+      replaceChildren(...nodes);
+    };
+
+    (dom.window.document.getElementById("sample-only") as HTMLInputElement).click();
+    expect(renders).toBe(1);
+  });
+
   it("posts the current note once while pending and clears a failed-decision alert after retry succeeds", async () => {
     const firstSave = deferred<ReturnType<typeof response>>();
     const secondSave = deferred<ReturnType<typeof response>>();
@@ -272,6 +287,9 @@ describe("local review page runtime", () => {
 
     const note = dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement;
     note.value = "当前备注";
+    const otherNote = dom.window.document.getElementById("note-travel-example") as HTMLTextAreaElement;
+    otherNote.value = "其他草稿";
+    otherNote.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
     const pass = [...dom.window.document.querySelectorAll("#phrase-daily-example button")]
       .find((button) => button.textContent === "通过") as HTMLButtonElement;
     pass.click();
@@ -282,6 +300,13 @@ describe("local review page runtime", () => {
     });
     expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).disabled).toBe(true);
     expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).value).toBe("当前备注");
+    expect((dom.window.document.getElementById("note-travel-example") as HTMLTextAreaElement).value).toBe("其他草稿");
+    expect((dom.window.document.getElementById("note-travel-example") as HTMLTextAreaElement).disabled).toBe(true);
+    const otherPass = [...dom.window.document.querySelectorAll("#phrase-travel-example button")]
+      .find((button) => button.textContent === "通过") as HTMLButtonElement;
+    otherPass.disabled = false;
+    otherPass.click();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     change(dom, "search", "daily-example");
     expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).value).toBe("当前备注");
     expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).disabled).toBe(true);
@@ -289,6 +314,8 @@ describe("local review page runtime", () => {
     firstSave.resolve(response(updated));
     await vi.waitFor(() => expect(dom.window.document.getElementById("pass-count")?.textContent).toBe("3"));
     expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).value).toBe("服务器备注");
+    expect((dom.window.document.getElementById("note-travel-example") as HTMLTextAreaElement).value).toBe("其他草稿");
+    expect((dom.window.document.getElementById("note-travel-example") as HTMLTextAreaElement).disabled).toBe(false);
 
     const current = dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement;
     current.value = "失败后保留";
@@ -298,6 +325,7 @@ describe("local review page runtime", () => {
     await vi.waitFor(() => expect(dom.window.document.getElementById("page-error")?.textContent).toContain("保存 daily-example 失败"));
     expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).value).toBe("失败后保留");
     expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).disabled).toBe(false);
+    expect((dom.window.document.getElementById("note-travel-example") as HTMLTextAreaElement).disabled).toBe(false);
 
     const retry = [...dom.window.document.querySelectorAll("#phrase-daily-example button")]
       .find((button) => button.textContent === "通过") as HTMLButtonElement;
@@ -323,7 +351,10 @@ describe("local review page runtime", () => {
     (approved.review as typeof approved.review & { approvedAt?: string }).approvedAt = "2026-08-18T02:00:00.000Z";
     approved.canApprove = false;
     const approval = deferred<ReturnType<typeof response>>();
-    const fetchMock = vi.fn().mockResolvedValueOnce(response(ready)).mockReturnValueOnce(approval.promise);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(ready))
+      .mockReturnValueOnce(approval.promise)
+      .mockReturnValue(new Promise(() => undefined));
     const dom = boot(fetchMock);
     await vi.waitFor(() => expect((dom.window.document.getElementById("approve") as HTMLButtonElement).disabled).toBe(false));
     const prompt = dom.window.prompt as ReturnType<typeof vi.fn>;
@@ -337,12 +368,20 @@ describe("local review page runtime", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ version: "2026.08.18", candidateSha256: HASH });
     expect(button.disabled).toBe(true);
+    const pendingNote = dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement;
+    expect(pendingNote.disabled).toBe(true);
+    const forcedDecision = [...dom.window.document.querySelectorAll("#phrase-daily-example button")]
+      .find((control) => control.textContent === "标记问题") as HTMLButtonElement;
+    forcedDecision.disabled = false;
+    forcedDecision.click();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     approval.resolve(response(approved));
     await vi.waitFor(() => expect(dom.window.document.getElementById("approval-help")?.textContent)
       .toBe("当前候选已批准，等待独立发布命令。"));
     expect(dom.window.document.getElementById("approved-value")?.textContent).toBe("已批准");
     expect(dom.window.document.getElementById("approval-status")?.textContent).toBe("版本已批准。");
     expect((dom.window.document.getElementById("approve") as HTMLButtonElement).disabled).toBe(true);
+    expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).disabled).toBe(false);
   });
 
   it("refuses approval when derived blockers contradict canApprove", async () => {
