@@ -105,6 +105,46 @@ describe("local phrase review", () => {
     expect(whitespace.candidateSha256).not.toBe(standard.candidateSha256);
   });
 
+  it("accepts empty bilingual text for local review and emits empty hints", () => {
+    const base = candidate();
+    const englishId = "sys-daily-01-1-1";
+    const chineseId = "sys-daily-01-1-1-e1";
+    const content = replacePhrases(base, new Map([
+      [englishId, { english: "   " }],
+      [chineseId, { chinese: "" }],
+    ]));
+    const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "reviewable-empty" });
+
+    expect(codes(model.hintsById[englishId])).toContain("empty");
+    expect(codes(model.hintsById[chineseId])).toContain("empty");
+  });
+
+  it("rejects non-string phrase text in reviewable content", () => {
+    const malformed = structuredClone(candidate()) as unknown as { phrases: Array<{ english: unknown }> };
+    malformed.phrases[0].english = 123;
+
+    expect(() => buildReviewModel({
+      content: malformed as unknown as SystemContentPackage,
+      candidateRaw: JSON.stringify(malformed),
+      sampleSeed: "reviewable-non-text",
+    })).toThrow(/string|text/i);
+  });
+
+  it("rejects structural, relationship, count, metadata, and version defects", () => {
+    const base = candidate();
+    const invalidPackages: SystemContentPackage[] = [
+      { ...base, qualityVersion: "" },
+      { ...base, phrases: base.phrases.map((phrase, index) => index === 0 ? { ...phrase, id: "" } : phrase) },
+      { ...base, phrases: base.phrases.map((phrase) => phrase.id === "sys-daily-01-1-1-e1" ? { ...phrase, parentPhraseId: "missing-parent" } : phrase) },
+      { ...base, phrases: base.phrases.slice(0, -1) },
+      { ...base, phrases: base.phrases.map((phrase, index) => index === 0 ? { ...phrase, contentVersion: "2026.08.2" } : phrase) },
+    ];
+
+    for (const [index, content] of invalidPackages.entries()) {
+      expect(() => buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: `reviewable-structure-${index}` })).toThrow(/candidate|content|count/i);
+    }
+  });
+
   it("reports deterministic, unique bilingual quality hints over deliberate defects", () => {
     const base = candidate();
     const packagingCores = base.phrases
@@ -230,6 +270,31 @@ describe("local phrase review", () => {
 
     expect(codes(model.hintsById[packagingOnlyId])).not.toContain("missing-context");
     expect(codes(model.hintsById[semanticVariantId])).not.toContain("missing-context");
+  });
+
+  it.each([
+    ["审核→审查", "sys-supply-chain-02-1-1-e1", "During packaging review, please inspect this carefully.", "请在包装审查期间仔细检查。"],
+    ["审核→复核", "sys-supply-chain-02-1-1-e2", "During packaging review, please inspect this carefully.", "请在包装复核期间仔细检查。"],
+    ["规划→计划", "sys-work-01-1-1-e1", "During work planning, please review this carefully.", "请在工作计划期间仔细审阅。"],
+    ["确认→核实", "sys-supply-chain-01-1-1-e1", "During sample approval, please inspect this carefully.", "请在样品核实期间仔细检查。"],
+  ])("accepts reviewed full-context token equivalence %s", (_label, id, english, chinese) => {
+    const base = candidate();
+    const content = replacePhrases(base, new Map([[id, { english, chinese }]]));
+    const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: `context-alias-${id}` });
+
+    expect(codes(model.hintsById[id])).not.toContain("missing-context");
+  });
+
+  it("does not accept a non-equivalent partial replacement for full catalog context", () => {
+    const base = candidate();
+    const id = "sys-work-01-1-1-e2";
+    const content = replacePhrases(base, new Map([[
+      id,
+      { english: "During work planning, please review this carefully.", chinese: "请在工作安排期间仔细审阅。" },
+    ]]));
+    const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "context-alias-omission" });
+
+    expect(codes(model.hintsById[id])).toContain("missing-context");
   });
 
   it("recognizes non-ASCII Latin letters as English content", () => {

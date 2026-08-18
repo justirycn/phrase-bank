@@ -49,9 +49,11 @@ const PLACEHOLDER = /\b(?:xxx|tbd|todo|placeholder)\b/iu;
 const CONTEXT_MARKER = /\b(?:regarding|during|before|after|when|while|context|as part of|for)\b/iu;
 const HINT_ORDER: QualityHintCode[] = ["empty", "placeholder", "language-mismatch", "repeated-opening", "missing-context"];
 const HINT_RISK_ORDER: QualityHintCode[] = ["empty", "placeholder", "language-mismatch", "missing-context", "repeated-opening"];
-const CONTEXT_VARIANTS = new Map<string, readonly string[]>([
-  ["包装审核", ["包装审核", "包装审查", "包装复核"]],
-]);
+const CONTEXT_TOKEN_EQUIVALENCES: readonly (readonly string[])[] = [
+  ["审核", "审查", "复核"],
+  ["规划", "计划"],
+  ["确认", "核实"],
+];
 
 export function candidateSha256(rawCandidate: string): string {
   return createHash("sha256").update(rawCandidate, "utf8").digest("hex");
@@ -80,8 +82,17 @@ function containsNormalizedPhrase(value: string, phrase: string): boolean {
 
 function containsTranslatedContext(chinese: string, expected: string): boolean {
   const compactChinese = normalizedWords(chinese).replaceAll(" ", "");
-  return (CONTEXT_VARIANTS.get(expected) ?? [expected]).some((variant) =>
-    compactChinese.includes(normalizedWords(variant).replaceAll(" ", "")));
+  let variants = new Set([expected]);
+  for (const equivalents of CONTEXT_TOKEN_EQUIVALENCES) {
+    const expanded = new Set<string>();
+    for (const variant of variants) {
+      const token = equivalents.find((candidate) => variant.includes(candidate));
+      if (!token) expanded.add(variant);
+      else for (const replacement of equivalents) expanded.add(variant.replaceAll(token, replacement));
+    }
+    variants = expanded;
+  }
+  return [...variants].some((variant) => compactChinese.includes(normalizedWords(variant).replaceAll(" ", "")));
 }
 
 function normalizedOpening(english: string): string {
@@ -151,6 +162,29 @@ function addSelected(target: Map<string, SystemContentPhrase>, choices: SystemCo
   }
 }
 
+export function validateReviewableContent(value: unknown): SystemContentPackage {
+  if (!value || typeof value !== "object" || !("phrases" in value) || !Array.isArray(value.phrases)) {
+    throw new Error("Candidate content must contain a phrases array");
+  }
+  const validationCopy = structuredClone(value) as { phrases: unknown[] };
+  for (const [index, phrase] of validationCopy.phrases.entries()) {
+    if (!phrase || typeof phrase !== "object" || Array.isArray(phrase)) throw new Error(`Candidate phrase ${index} must be an object`);
+    const fields = phrase as Record<string, unknown>;
+    if (typeof fields.english !== "string" || typeof fields.chinese !== "string") {
+      throw new Error(`Candidate phrase ${index} English and Chinese text must be strings`);
+    }
+    const sentinelKey = `${index}-${String(fields.id ?? "missing-id")}`;
+    if (!fields.english.trim()) fields.english = `local-review-empty-english-${sentinelKey}`;
+    if (!fields.chinese.trim()) fields.chinese = `本地审阅空中文${sentinelKey}`;
+  }
+
+  const validated = validateSystemContentPackage(validationCopy as SystemContentPackage);
+  if (validated.phrases.length !== 2000) throw new Error(`Candidate content count must be 2000, got ${validated.phrases.length}`);
+  const coreCount = validated.phrases.filter(({ kind }) => kind === "core").length;
+  if (coreCount !== 600) throw new Error(`Candidate core count must be 600, got ${coreCount}`);
+  return structuredClone(value) as SystemContentPackage;
+}
+
 export function buildReviewModel(options: { content: SystemContentPackage; candidateRaw: string; sampleSeed: string }): ReviewModel {
   const { content, candidateRaw, sampleSeed } = options;
   let parsed: unknown;
@@ -161,9 +195,10 @@ export function buildReviewModel(options: { content: SystemContentPackage; candi
   }
   let candidateContent: SystemContentPackage;
   try {
-    candidateContent = validateSystemContentPackage(parsed as SystemContentPackage);
+    candidateContent = validateReviewableContent(parsed);
   } catch (error) {
-    throw new Error("Candidate content is not a valid system content package", { cause: error });
+    const reason = error instanceof Error ? error.message : "unknown validation error";
+    throw new Error(`Candidate content is not a valid system content package: ${reason}`, { cause: error });
   }
   if (!isDeepStrictEqual(candidateContent, content)) throw new Error("Candidate raw content does not match the supplied content");
 
