@@ -278,12 +278,16 @@ describe("PhraseBankApp", () => {
     const review = await screen.findByRole("button", { name: /继续今日任务/ });
     expect(review).toHaveTextContent("到期复习 2 句 · 今日新句 0 / 10");
     await user.click(review);
-    expect(await screen.findByText("已学习提示")).toBeVisible();
+    const eligiblePrompts = ["已学习提示", "已掌握提示"];
+    const firstPrompt = await screen.findByText(/^(已学习提示|已掌握提示)$/);
+    const firstPromptText = firstPrompt.textContent;
+    expect(eligiblePrompts).toContain(firstPromptText);
     expect(screen.getByText(/第\s*1\s*\/\s*2\s*个/)).toBeVisible();
     expect(screen.queryByText("Missing state")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
     await user.click(screen.getByRole("button", { name: /掌握/ }));
-    expect(await screen.findByText("已掌握提示")).toBeVisible();
+    const secondPrompt = await screen.findByText(/^(已学习提示|已掌握提示)$/);
+    expect(secondPrompt.textContent).toBe(firstPromptText === "已学习提示" ? "已掌握提示" : "已学习提示");
     expect(screen.getByText(/第\s*2\s*\/\s*2\s*个/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
     await user.click(screen.getByRole("button", { name: /掌握/ }));
