@@ -147,9 +147,11 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
     };
     const retryButton = elements.retry;
     const pendingIds = new Set();
+    const pendingNotes = new Map();
     let model = null;
     let loading = false;
     let approvalPending = false;
+    let approvalEnabled = false;
 
     function setText(element, value) {
       element.textContent = value == null || value === "" ? "—" : String(value);
@@ -240,7 +242,8 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
           : "所有抽样均已审核，但报告或门禁仍未通过。";
       }
       setText(elements.approvalHelp, reason);
-      elements.approve.disabled = approvalPending || Boolean(model.approvedAt) || model.canApprove !== true;
+      approvalEnabled = model.canApprove === true && issueCount === 0 && undecidedCount === 0 && !model.approvedAt;
+      elements.approve.disabled = approvalPending || !approvalEnabled;
     }
 
     function appendMeta(container, value) {
@@ -316,8 +319,10 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       note.id = "note-" + phrase.id;
       note.maxLength = 1000;
       note.setAttribute("aria-label", "审核备注：" + phrase.id);
-      note.value = item && typeof item.note === "string" ? item.note : "";
+      const serverNote = item && typeof item.note === "string" ? item.note : "";
+      note.value = pendingNotes.has(phrase.id) ? pendingNotes.get(phrase.id) : serverNote;
       note.disabled = pendingIds.has(phrase.id);
+      note.addEventListener("input", () => pendingNotes.set(phrase.id, note.value));
       noteField.append(noteLabel, note);
 
       const actions = document.createElement("div");
@@ -426,6 +431,8 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
     async function submitDecision(id, decision, note, rowStatus) {
       if (!model || pendingIds.has(id)) return;
       clearError();
+      const submittedNote = note.value;
+      pendingNotes.set(id, submittedNote);
       pendingIds.add(id);
       rowStatus.textContent = "正在保存…";
       rowStatus.setAttribute("role", "status");
@@ -433,23 +440,23 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       try {
         const payload = await readJson(await fetch("/api/decision", {
           method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ id, decision, note: note.value, candidateSha256: model.candidateSha256 }),
+          body: JSON.stringify({ id, decision, note: submittedNote, candidateSha256: model.candidateSha256 }),
         }));
-        pendingIds.delete(id);
         applyPayload(payload);
+        pendingIds.delete(id);
+        pendingNotes.delete(id);
+        renderRows();
         clearError();
       } catch (error) {
         pendingIds.delete(id);
         renderRows();
-        const current = document.getElementById("note-" + id);
-        if (current) current.value = note.value;
         const detail = error instanceof Error ? error.message : "未知错误";
         showError("保存 " + id + " 失败：" + detail);
       }
     }
 
     async function approveVersion() {
-      if (!model || approvalPending || model.canApprove !== true) return;
+      if (!model || approvalPending || !approvalEnabled) return;
       const confirmation = window.prompt("请输入要批准的确切版本号：", "");
       if (confirmation !== model.version) {
         if (confirmation !== null) showError("版本号不匹配，未执行批准。");

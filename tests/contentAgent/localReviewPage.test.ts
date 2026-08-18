@@ -122,7 +122,7 @@ describe("renderLocalReviewPage", () => {
     expect(html).toContain('fetch("/api/review"');
     expect(html).toContain('fetch("/api/decision"');
     expect(html).toContain('fetch("/api/approve"');
-    expect(html).toContain('JSON.stringify({ id, decision, note: note.value, candidateSha256: model.candidateSha256 })');
+    expect(html).toContain('JSON.stringify({ id, decision, note: submittedNote, candidateSha256: model.candidateSha256 })');
     expect(html).toContain('JSON.stringify({ version: model.version, candidateSha256: model.candidateSha256 })');
     expect(html).toContain('window.prompt("请输入要批准的确切版本号：", "")');
     expect(html).not.toMatch(/https?:\/\//i);
@@ -141,8 +141,10 @@ describe("renderLocalReviewPage", () => {
     expect(html).toContain("pendingIds.has(id)");
     expect(html).toContain("pendingIds.add(id)");
     expect(html).toContain("pendingIds.delete(id)");
+    expect(html).toContain("pendingNotes.set(id, submittedNote)");
+    expect(html).toContain("pendingNotes.delete(id)");
     expect(html).toContain("approvalPending");
-    expect(html).toContain("if (!model || approvalPending || model.canApprove !== true) return");
+    expect(html).toContain("if (!model || approvalPending || !approvalEnabled) return");
     expect(html).not.toMatch(/setInterval|setTimeout\s*\(\s*loadReview/);
   });
 
@@ -259,7 +261,7 @@ describe("local review page runtime", () => {
     const firstSave = deferred<ReturnType<typeof response>>();
     const secondSave = deferred<ReturnType<typeof response>>();
     const updated = payload();
-    updated.review.items["daily-example"] = { decision: "pass", note: "当前备注", updatedAt: "2026-08-18T01:00:00.000Z" };
+    updated.review.items["daily-example"] = { decision: "pass", note: "服务器备注", updatedAt: "2026-08-18T01:00:00.000Z" };
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response(payload()))
       .mockReturnValueOnce(firstSave.promise)
@@ -279,8 +281,14 @@ describe("local review page runtime", () => {
       id: "daily-example", decision: "pass", note: "当前备注", candidateSha256: HASH,
     });
     expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).disabled).toBe(true);
+    expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).value).toBe("当前备注");
+    change(dom, "search", "daily-example");
+    expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).value).toBe("当前备注");
+    expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).disabled).toBe(true);
+    change(dom, "search", "");
     firstSave.resolve(response(updated));
     await vi.waitFor(() => expect(dom.window.document.getElementById("pass-count")?.textContent).toBe("3"));
+    expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).value).toBe("服务器备注");
 
     const current = dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement;
     current.value = "失败后保留";
@@ -299,7 +307,9 @@ describe("local review page runtime", () => {
     expect(dom.window.document.getElementById("page-error")?.textContent).toBe("");
     secondSave.resolve(response(updated));
     await vi.waitFor(() => expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).value)
-      .toBe("当前备注"));
+      .toBe("服务器备注"));
+    change(dom, "search", "daily-example");
+    expect((dom.window.document.getElementById("note-daily-example") as HTMLTextAreaElement).value).toBe("服务器备注");
     await vi.waitFor(() => expect(dom.window.document.getElementById("page-error")?.hidden).toBe(true));
     expect(dom.window.document.getElementById("page-error")?.textContent).toBe("");
   });
@@ -333,6 +343,20 @@ describe("local review page runtime", () => {
     expect(dom.window.document.getElementById("approved-value")?.textContent).toBe("已批准");
     expect(dom.window.document.getElementById("approval-status")?.textContent).toBe("版本已批准。");
     expect((dom.window.document.getElementById("approve") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("refuses approval when derived blockers contradict canApprove", async () => {
+    const inconsistent = payload();
+    inconsistent.review.items["daily-example"] = { decision: "pass", note: "", updatedAt: "2026-08-18T01:00:00.000Z" };
+    inconsistent.canApprove = true;
+    const fetchMock = vi.fn().mockResolvedValue(response(inconsistent));
+    const dom = boot(fetchMock);
+
+    await vi.waitFor(() => expect(dom.window.document.getElementById("approval-help")?.textContent).toContain("work-issue"));
+    const approve = dom.window.document.getElementById("approve") as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    approve.click();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("shows a retry after initial GET failure and clears the alert when retry succeeds", async () => {
