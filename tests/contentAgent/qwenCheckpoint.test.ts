@@ -92,6 +92,18 @@ describe("Qwen checkpoint validation", () => {
       await expect(loadQwenCheckpoint({ path, version: VERSION, sourceContent }), name).rejects.toThrow(message);
     }
   });
+
+  it.each([
+    ["gap", (phrases: ReturnType<typeof fixture>["phrases"]) => [phrases[0], phrases[2]]],
+    ["reorder", (phrases: ReturnType<typeof fixture>["phrases"]) => [phrases[1], phrases[0]]],
+    ["same-length different IDs", (phrases: ReturnType<typeof fixture>["phrases"]) => [phrases[0], phrases[2], phrases[1]]],
+    ["incomparable", (phrases: ReturnType<typeof fixture>["phrases"]) => [phrases[3], phrases[4]]],
+  ])("rejects a checkpoint with a %s instead of an exact ordered source prefix", async (_label, mutate) => {
+    const { sourceContent, phrases } = fixture();
+    const { path } = await checkpointFile({ version: VERSION, sourceSha256: sourceSha256(sourceContent), phrases: mutate(phrases) });
+
+    await expect(loadQwenCheckpoint({ path, version: VERSION, sourceContent })).rejects.toThrow(/prefix|order/i);
+  });
 });
 
 describe("Qwen checkpoint import", () => {

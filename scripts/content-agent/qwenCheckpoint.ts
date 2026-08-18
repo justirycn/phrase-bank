@@ -15,6 +15,11 @@ interface LoadOptions {
   sourceContent: SystemContentPackage;
 }
 
+interface ValidateOptions {
+  version: string;
+  sourceContent: SystemContentPackage;
+}
+
 interface ImportOptions {
   source: string;
   destination: string;
@@ -58,9 +63,9 @@ function validatePhrase(value: unknown, index: number): asserts value is SystemC
   if (typeof phrase.qualityVersion !== "string" || !phrase.qualityVersion.trim()) throw new Error(`Checkpoint phrase ${index + 1} has malformed qualityVersion`);
 }
 
-export async function loadQwenCheckpoint(options: LoadOptions): Promise<QwenCheckpoint> {
+export function validateQwenCheckpoint(value: unknown, options: ValidateOptions): QwenCheckpoint {
   assertContentVersion(options.version);
-  const parsed = JSON.parse(await readFile(options.path, "utf8")) as Record<string, unknown>;
+  const parsed = value as Record<string, unknown>;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Checkpoint is malformed");
   if (parsed.version !== options.version) throw new Error(`Checkpoint version does not match ${options.version}`);
   if (!Array.isArray(parsed.phrases)) throw new Error("Checkpoint phrases must be an array");
@@ -76,12 +81,17 @@ export async function loadQwenCheckpoint(options: LoadOptions): Promise<QwenChec
     seen.add(value.id);
     const sourcePhrase = sourceById.get(value.id);
     if (!sourcePhrase) throw new Error(`Checkpoint contains unknown ID: ${value.id}`);
+    if (options.sourceContent.phrases[index]?.id !== value.id) throw new Error(`Checkpoint phrases must be an exact ordered source prefix at index ${index + 1}`);
     const actualMetadata = canonical(immutableMetadata(value as unknown as Record<string, unknown>));
     const expectedMetadata = canonical(immutableMetadata(sourcePhrase as unknown as Record<string, unknown>));
     if (actualMetadata !== expectedMetadata) throw new Error(`Checkpoint immutable metadata drift for ID: ${value.id}`);
     phrases.push(value);
   }
   return { version: options.version, sourceSha256: expectedFingerprint, phrases };
+}
+
+export async function loadQwenCheckpoint(options: LoadOptions): Promise<QwenCheckpoint> {
+  return validateQwenCheckpoint(JSON.parse(await readFile(options.path, "utf8")), options);
 }
 
 export async function importQwenCheckpoint(options: ImportOptions): Promise<{ count: number; destination: string }> {

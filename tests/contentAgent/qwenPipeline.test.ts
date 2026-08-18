@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { link, lstat, mkdir, open, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -74,6 +75,8 @@ function exactSlicePatchClient(): QwenClient {
     : JSON.stringify({ phrases: promptPhrases(messages).map(({ id, english, chinese }) => ({ id, english, chinese })) })) };
 }
 
+const noOpCheckpointDurability = { platform: "linux" as const, syncDirectory: async () => undefined };
+
 describe("Qwen content pipeline", () => {
   it("generates and independently reviews all six exact category batches", async () => {
     const outputs = responseQueue("2026.08.3");
@@ -143,14 +146,14 @@ describe("Qwen content pipeline", () => {
 
   it("writes candidate and passing report only after the complete pipeline succeeds", async () => {
     const outputDir = await tempRoots.create("phrase-bank-qwen-");
-    const paths = await runQwenAgent({ client: fakeClient(responseQueue("2026.08.3")), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir });
+    const paths = await runQwenAgent({ client: fakeClient(responseQueue("2026.08.3")), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir, checkpointDependencies: noOpCheckpointDurability });
     expect(JSON.parse(await readFile(paths.reportPath, "utf8"))).toMatchObject({ status: "pass", coreCount: 600, totalCount: 2000 });
     expect(JSON.parse(await readFile(paths.candidatePath, "utf8"))).toMatchObject({ version: "2026.08.3" });
 
     const failedDir = await tempRoots.create("phrase-bank-qwen-failed-");
     await expect(runQwenAgent({ client: fakeClient(responseQueue("2026.08.3", "fail")), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir: failedDir })).rejects.toThrow();
     expect(await readdir(failedDir)).not.toContain("candidate-2026.08.3.json");
-  }, 20_000);
+  }, 30_000);
 
   it("rejects a batch that changes stable source IDs", async () => {
     const outputs = responseQueue("2026.08.3");
@@ -202,7 +205,7 @@ describe("Qwen content pipeline", () => {
     const remaining = responseQueue("2026.08.3").slice(reviewIndexes[0] + 1);
     const expectedRemainingCalls = remaining.length;
     const resumedClient = fakeClient(remaining);
-    await expect(runQwenAgent({ client: resumedClient, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir })).resolves.toBeTruthy();
+    await expect(runQwenAgent({ client: resumedClient, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir, checkpointDependencies: noOpCheckpointDurability })).resolves.toBeTruthy();
     expect(resumedClient.complete).toHaveBeenCalledTimes(expectedRemainingCalls);
     expect(await readdir(outputDir)).not.toContain("checkpoint-2026.08.3.json");
   }, 20_000);
@@ -219,6 +222,17 @@ describe("Qwen content pipeline", () => {
     expect(checkpoint).toMatchObject({ version: "2026.08.3", sourceSha256: sourceSha256(generateSystemContent()) });
     expect(checkpoint.phrases).toHaveLength(40);
     expect(checkpoint.phrases.map(({ id }: { id: string }) => id)).toEqual(generateSystemContent().phrases.slice(0, 40).map(({ id }) => id));
+  });
+
+  it("rejects a non-prefix imported checkpoint before any Qwen call", async () => {
+    const outputDir = await tempRoots.create("phrase-bank-qwen-nonprefix-checkpoint-");
+    const source = generateSystemContent();
+    const phrases = [source.phrases[0], source.phrases[2]].map((phrase) => ({ ...phrase, contentVersion: "2026.08.3", qualityVersion: "qwen-plus-review-v2" }));
+    await writeFile(join(outputDir, "checkpoint-2026.08.3.json"), `${JSON.stringify({ version: "2026.08.3", sourceSha256: sourceSha256(source), phrases })}\n`, "utf8");
+    const client = exactSlicePatchClient();
+
+    await expect(runQwenAgent({ client, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir })).rejects.toThrow(/prefix|order/i);
+    expect(client.complete).not.toHaveBeenCalled();
   });
 
   it("keeps the prior valid checkpoint when an atomic checkpoint write fails", async () => {
@@ -282,6 +296,100 @@ describe("Qwen content pipeline", () => {
     expect(await readdir(outputDir)).toEqual(["checkpoint-2026.08.3.json"]);
     expect(JSON.parse(await readFile(checkpointPath, "utf8")).phrases).toHaveLength(40);
   });
+
+  it.each([
+    ["win32", "sync-file"],
+    ["linux", "sync-directory"],
+  ] as const)("durably syncs a replaced checkpoint on %s after rename and verification", async (platform, expectedSync) => {
+    const outputDir = await tempRoots.create(`phrase-bank-qwen-durable-${platform}-`);
+    const events: string[] = [];
+    const outputs = responseQueue("2026.08.3");
+    const reviewIndexes = outputs.flatMap((output, index) => JSON.parse(output).status === "pass" ? [index] : []);
+    outputs[reviewIndexes[1]] = JSON.stringify({ status: "fail", issues: ["stop after checkpoint"], corrections: [] });
+
+    await expect(runQwenAgent({
+      client: fakeClient(outputs), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir,
+      checkpointDependencies: {
+        platform,
+        rename: async (sourcePath, destination) => { events.push("rename"); await rename(sourcePath, destination); },
+        syncCommittedDestination: async (path) => { events.push(`sync-file:${path}`); },
+        syncDirectory: async (path) => { events.push(`sync-directory:${path}`); },
+      },
+    })).rejects.toThrow("审校未通过");
+
+    expect(events).toEqual(["rename", `${expectedSync}:${platform === "win32" ? join(outputDir, "checkpoint-2026.08.3.json") : outputDir}`]);
+  });
+
+  it("reopens the committed Windows checkpoint r+, syncs it, and closes it after verification", async () => {
+    const outputDir = await tempRoots.create("phrase-bank-qwen-windows-committed-sync-");
+    const events: string[] = [];
+    const outputs = responseQueue("2026.08.3");
+    const reviewIndexes = outputs.flatMap((output, index) => JSON.parse(output).status === "pass" ? [index] : []);
+    outputs[reviewIndexes[1]] = JSON.stringify({ status: "fail", issues: ["stop after checkpoint"], corrections: [] });
+    const openDestination = vi.fn(async (path: string, flags: Parameters<typeof open>[1]) => {
+      const phase = flags === "r+" ? "committed" : "verify";
+      events.push(`open-${phase}:${String(flags)}`);
+      const handle = await open(path, flags);
+      const originalSync = handle.sync.bind(handle);
+      const originalClose = handle.close.bind(handle);
+      vi.spyOn(handle, "sync").mockImplementation(async () => { events.push(`sync-${phase}`); await originalSync(); });
+      vi.spyOn(handle, "close").mockImplementation(async () => { events.push(`close-${phase}`); await originalClose(); });
+      return handle;
+    }) as typeof open;
+
+    await expect(runQwenAgent({
+      client: fakeClient(outputs), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir,
+      checkpointDependencies: {
+        platform: "win32",
+        rename: async (sourcePath, destination) => { events.push("rename"); await rename(sourcePath, destination); },
+        openDestination,
+      },
+    })).rejects.toThrow("审校未通过");
+
+    expect(events).toEqual(["rename", `open-verify:${constants.O_RDONLY | constants.O_NOFOLLOW}`, "close-verify", "open-committed:r+", "sync-committed", "close-committed"]);
+  });
+
+  it("syncs each newly created POSIX output-directory entry before checkpoint rename", async () => {
+    const root = await tempRoots.create("phrase-bank-qwen-created-output-");
+    const outputDir = join(root, "first-created", "nested-output");
+    const events: string[] = [];
+    const outputs = responseQueue("2026.08.3");
+    const reviewIndexes = outputs.flatMap((output, index) => JSON.parse(output).status === "pass" ? [index] : []);
+    outputs[reviewIndexes[1]] = JSON.stringify({ status: "fail", issues: ["stop after checkpoint"], corrections: [] });
+
+    await expect(runQwenAgent({
+      client: fakeClient(outputs), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir,
+      checkpointDependencies: {
+        platform: "linux",
+        rename: async (sourcePath, destination) => { events.push("rename"); await rename(sourcePath, destination); },
+        syncDirectory: async (path) => { events.push(`sync:${path}`); },
+      },
+    })).rejects.toThrow("审校未通过");
+
+    expect(events).toEqual([`sync:${root}`, `sync:${join(root, "first-created")}`, "rename", `sync:${outputDir}`]);
+  });
+
+  it("reports an ambiguous committed sync failure, reloads disk progress, and keeps the checkpoint queue usable", async () => {
+    const outputDir = await tempRoots.create("phrase-bank-qwen-ambiguous-sync-");
+    const firstClient = fakeClient(responseQueue("2026.08.3"));
+
+    await expect(runQwenAgent({
+      client: firstClient, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir,
+      checkpointDependencies: { platform: "win32", syncCommittedDestination: async () => { throw new Error("committed checkpoint sync failed"); } },
+    })).rejects.toThrow(/committed.*ambiguous|ambiguous.*committed/i);
+    expect(firstClient.complete).toHaveBeenCalledTimes(6);
+    expect(JSON.parse(await readFile(join(outputDir, "checkpoint-2026.08.3.json"), "utf8")).phrases).toHaveLength(40);
+    expect(await readdir(outputDir)).toEqual(["checkpoint-2026.08.3.json"]);
+
+    const remaining = responseQueue("2026.08.3").slice(6);
+    const reviewIndexes = remaining.flatMap((output, index) => JSON.parse(output).status === "pass" ? [index] : []);
+    remaining[reviewIndexes[1]] = JSON.stringify({ status: "fail", issues: ["stop after recovered write"], corrections: [] });
+    const recoveredClient = fakeClient(remaining);
+    await expect(runQwenAgent({ client: recoveredClient, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir })).rejects.toThrow("审校未通过");
+
+    expect(promptPhrases(vi.mocked(recoveredClient.complete).mock.calls[0][0])[0].id).toBe(generateSystemContent().phrases[40].id);
+    expect(JSON.parse(await readFile(join(outputDir, "checkpoint-2026.08.3.json"), "utf8")).phrases).toHaveLength(80);
+  }, 20_000);
 
   it("does not let legacy or unique stale pending artifacts block a new checkpoint", async () => {
     const outputDir = await tempRoots.create("phrase-bank-qwen-stale-pending-");
@@ -462,7 +570,7 @@ describe("Qwen content pipeline", () => {
     const outputDir = await tempRoots.create("phrase-bank-qwen-final-output-");
     await mkdir(join(outputDir, "report-2026.08.3.json"));
 
-    await expect(runQwenAgent({ client: fakeClient(responseQueue("2026.08.3")), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir })).rejects.toThrow();
+    await expect(runQwenAgent({ client: fakeClient(responseQueue("2026.08.3")), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir, checkpointDependencies: noOpCheckpointDurability })).rejects.toThrow();
 
     expect(await readdir(outputDir)).toContain("checkpoint-2026.08.3.json");
   }, 20_000);

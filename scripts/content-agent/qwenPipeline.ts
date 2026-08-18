@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import { lstat, mkdir, open, realpath, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import type { SystemContentPackage, SystemContentPhrase } from "../../app/domain/types";
 import { inspectSystemContent } from "./qualityGate";
 import type { QwenClient, QwenMessage } from "./qwenClient";
 import { generateSystemContent } from "./generator";
-import { loadQwenCheckpoint, sourceSha256 } from "./qwenCheckpoint";
+import { loadQwenCheckpoint, sourceSha256, validateQwenCheckpoint } from "./qwenCheckpoint";
 
 const CATEGORY_QUOTAS = [
   ["daily", 180], ["travel", 100], ["work", 120], ["business", 100], ["supply-chain", 70], ["social", 30],
@@ -25,6 +25,9 @@ interface CheckpointDependencies {
   openDestination?: typeof open;
   rename?: (source: string, destination: string) => Promise<void>;
   retryDelay?: (milliseconds: number) => Promise<void>;
+  platform?: NodeJS.Platform;
+  syncCommittedDestination?: (path: string) => Promise<void>;
+  syncDirectory?: (path: string) => Promise<void>;
 }
 interface AgentOptions extends PipelineOptions { outputDir: string; checkpointDependencies?: CheckpointDependencies; }
 interface BatchResponse { phrases: SystemContentPhrase[]; }
@@ -152,7 +155,7 @@ async function assertOwnedCheckpointPath(path: string, identity: { dev: bigint; 
   }
 }
 
-async function readCheckpointProgress(path: string, version: string, expectedSourceSha256: string) {
+async function readCheckpointProgress(path: string, version: string, sourceContent: SystemContentPackage) {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -166,12 +169,49 @@ async function readCheckpointProgress(path: string, version: string, expectedSou
     const pathMetadata = await lstat(path, { bigint: true });
     if (!pathMetadata.isFile() || pathMetadata.isSymbolicLink() || pathMetadata.dev !== identity.dev || pathMetadata.ino !== identity.ino) throw new Error("Qwen 检查点文件所有权已变化");
     const raw = await handle.readFile("utf8");
-    const value = JSON.parse(raw) as { version?: unknown; sourceSha256?: unknown; phrases?: unknown };
-    if (value.version !== version || (value.sourceSha256 !== undefined && value.sourceSha256 !== expectedSourceSha256) || !Array.isArray(value.phrases)) throw new Error("Qwen 检查点进度验证失败");
-    return value.phrases.length;
+    return validateQwenCheckpoint(JSON.parse(raw), { version, sourceContent }).phrases.length;
   } finally {
     await handle.close();
   }
+}
+
+async function defaultSyncDirectory(path: string) {
+  const handle = await open(path, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function defaultSyncCommittedDestination(path: string, identity: { dev: bigint; ino: bigint }, openCommitted: typeof open) {
+  const handle = await openCommitted(path, "r+");
+  try {
+    const metadata = await handle.stat({ bigint: true });
+    if (!metadata.isFile() || metadata.dev !== identity.dev || metadata.ino !== identity.ino) throw new Error("Qwen 已提交检查点所有权已变化");
+    await assertOwnedCheckpointPath(path, identity);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+function parentDirectoriesForCreatedPath(firstCreated: string, targetDirectory: string): string[] {
+  const nativeFirst = process.platform === "win32" && firstCreated.startsWith("\\\\?\\UNC\\")
+    ? `\\\\${firstCreated.slice(8)}`
+    : process.platform === "win32" && firstCreated.startsWith("\\\\?\\") ? firstCreated.slice(4) : firstCreated;
+  const first = resolve(nativeFirst);
+  const target = resolve(targetDirectory);
+  const remainder = relative(first, target);
+  if (remainder.startsWith("..") || resolve(first, remainder) !== target) return [dirname(first)];
+  const segments = remainder ? remainder.split(/[\\/]/u) : [];
+  const parents = [dirname(first)];
+  let directory = first;
+  for (const segment of segments) {
+    parents.push(directory);
+    directory = join(directory, segment);
+  }
+  return parents;
 }
 
 async function serializeCheckpointWrite(path: string, operation: () => Promise<void>) {
@@ -194,10 +234,12 @@ async function writeCheckpointAtomicallyLocked(options: {
   version: string;
   sourceContent: SystemContentPackage;
   phraseCount: number;
+  createdOutputDirectory?: string;
   dependencies?: CheckpointDependencies;
 }) {
-  const expectedSourceSha256 = sourceSha256(options.sourceContent);
-  const initialProgress = await readCheckpointProgress(options.checkpointPath, options.version, expectedSourceSha256);
+  const candidate = validateQwenCheckpoint(JSON.parse(options.serialized), { version: options.version, sourceContent: options.sourceContent });
+  if (candidate.phrases.length !== options.phraseCount) throw new Error("Qwen 检查点保存进度不一致");
+  const initialProgress = await readCheckpointProgress(options.checkpointPath, options.version, options.sourceContent);
   if (initialProgress !== undefined && initialProgress >= options.phraseCount) return;
   const pendingPath = `${options.checkpointPath}.pending.${process.pid}.${randomUUID()}`;
   const openCheckpoint = options.dependencies?.open ?? open;
@@ -216,9 +258,15 @@ async function writeCheckpointAtomicallyLocked(options: {
     await pendingFile.close();
     pendingFile = undefined;
     await assertOwnedCheckpointPath(pendingPath, identity);
+    const platform = options.dependencies?.platform ?? process.platform;
+    if (platform !== "win32" && options.createdOutputDirectory) {
+      for (const directory of parentDirectoriesForCreatedPath(options.createdOutputDirectory, dirname(options.checkpointPath))) {
+        await (options.dependencies?.syncDirectory ?? defaultSyncDirectory)(directory);
+      }
+    }
     for (let attempt = 1; ; attempt += 1) {
       await assertOwnedCheckpointPath(pendingPath, identity);
-      const currentProgress = await readCheckpointProgress(options.checkpointPath, options.version, expectedSourceSha256);
+      const currentProgress = await readCheckpointProgress(options.checkpointPath, options.version, options.sourceContent);
       if (currentProgress !== undefined && currentProgress >= options.phraseCount) return;
       try {
         await renameCheckpoint(pendingPath, options.checkpointPath);
@@ -238,6 +286,16 @@ async function writeCheckpointAtomicallyLocked(options: {
       if (await checkpointHandle.readFile("utf8") !== options.serialized) throw new Error("Qwen 检查点原子替换验证失败：内容不一致");
     } finally {
       await checkpointHandle.close();
+    }
+    try {
+      if (platform === "win32") {
+        if (options.dependencies?.syncCommittedDestination) await options.dependencies.syncCommittedDestination(options.checkpointPath);
+        else await defaultSyncCommittedDestination(options.checkpointPath, identity, options.dependencies?.openDestination ?? open);
+      } else {
+        await (options.dependencies?.syncDirectory ?? defaultSyncDirectory)(dirname(options.checkpointPath));
+      }
+    } catch (error) {
+      throw new Error("Qwen checkpoint replacement committed; durability is ambiguous", { cause: error });
     }
     identity = undefined;
   } finally {
@@ -399,7 +457,8 @@ export async function buildQwenCandidate(options: PipelineOptions): Promise<Syst
 }
 
 export async function runQwenAgent(options: AgentOptions) {
-  await mkdir(options.outputDir, { recursive: true });
+  const createdOutputDirectory = await mkdir(options.outputDir, { recursive: true });
+  let outputDirectoryEntryToSync = createdOutputDirectory;
   const checkpointPath = join(options.outputDir, `checkpoint-${options.version}.json`);
   const sourceContent = options.sourceContent ?? generateSystemContent();
   let resumePhrases: SystemContentPhrase[] = [];
@@ -420,8 +479,10 @@ export async function runQwenAgent(options: AgentOptions) {
         version: options.version,
         sourceContent,
         phraseCount: phrases.length,
+        createdOutputDirectory: outputDirectoryEntryToSync,
         dependencies: options.checkpointDependencies,
       });
+      outputDirectoryEntryToSync = undefined;
       await options.onBatchCompleted?.(phrases);
     },
   });
