@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { ReviewItem, ReviewState } from "./localReview";
 
 export interface LocalReviewSeed {
@@ -31,7 +32,16 @@ const VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const SHA256 = /^[0-9a-f]{64}$/u;
 
 function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  // Persisted JSON records use the ordinary object prototype; null and custom prototypes are rejected.
+  return typeof value === "object"
+    && value !== null
+    && !Array.isArray(value)
+    && Object.getPrototypeOf(value) === Object.prototype
+    && !("toJSON" in value);
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === code;
 }
 
 function exactKeys(value: Record<string, unknown>, allowed: Set<string>, required: readonly string[]): boolean {
@@ -151,8 +161,26 @@ async function removeOwnedTemp(path: string): Promise<void> {
   try {
     await unlink(path);
   } catch (error) {
-    if (!record(error) || error.code !== "ENOENT") throw error;
+    if (!hasErrorCode(error, "ENOENT")) throw error;
   }
+}
+
+function serializeCanonicalState(state: ReviewState): string {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(state, null, 2);
+  } catch (error) {
+    throw new Error("Review state cannot be serialized safely", { cause: error });
+  }
+  let canonical: unknown;
+  try {
+    canonical = JSON.parse(serialized);
+  } catch (error) {
+    throw new Error("Review state did not produce valid JSON", { cause: error });
+  }
+  validateState(canonical);
+  if (!isDeepStrictEqual(canonical, state)) throw new Error("Review state does not serialize to the same canonical value");
+  return `${serialized}\n`;
 }
 
 export async function saveReview(path: string, state: ReviewState, dependencies: SaveReviewDependencies = {}): Promise<void> {
@@ -162,11 +190,11 @@ export async function saveReview(path: string, state: ReviewState, dependencies:
   if (validIds && Object.keys(state.items).some((id) => !validIds.has(id))) {
     throw new Error("Review state contains an item outside the valid IDs");
   }
+  const contents = serializeCanonicalState(state);
 
   const parent = dirname(path);
   await mkdir(parent, { recursive: true });
   const temporaryPath = join(parent, `.${basename(path)}.pending-${process.pid}-${randomUUID()}`);
-  const contents = `${JSON.stringify(state, null, 2)}\n`;
   try {
     await (dependencies.writeTemp ?? defaultWriteTemp)(temporaryPath, contents);
     await (dependencies.atomicReplace ?? rename)(temporaryPath, path);
@@ -186,7 +214,7 @@ export async function loadOrCreateReview(seed: LocalReviewSeed): Promise<ReviewS
   try {
     raw = await readFile(seed.path, "utf8");
   } catch (error) {
-    if (!record(error) || error.code !== "ENOENT") throw error;
+    if (!hasErrorCode(error, "ENOENT")) throw error;
     const created = initialState(seed);
     await saveReview(seed.path, created, { validIds: seed.validIds });
     return structuredClone(created);

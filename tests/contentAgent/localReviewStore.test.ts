@@ -204,6 +204,38 @@ describe("saveReview", () => {
     await expect(saveReview(seed.path, { ...decided(seed), extra: true } as ReviewState, { validIds: seed.validIds })).rejects.toThrow(/review state/i);
     await expect(readdir(join(seed.path, ".."))).rejects.toThrow();
   });
+
+  it.each([
+    ["Date top state", (state: ReviewState) => new Date(state.approvedAt!) as unknown as ReviewState],
+    ["Map top state", (state: ReviewState) => new Map(Object.entries(state)) as unknown as ReviewState],
+    ["custom-class top state", (state: ReviewState) => Object.assign(new (class ReviewContainer {})(), state) as ReviewState],
+    ["Date items record", (state: ReviewState) => ({ ...state, items: new Date() as unknown as ReviewState["items"] })],
+    ["Map items record", (state: ReviewState) => ({ ...state, items: new Map() as unknown as ReviewState["items"] })],
+    ["custom-class item", (state: ReviewState) => ({
+      ...state,
+      items: { "phrase-1": Object.assign(new (class ItemContainer {})(), state.items["phrase-1"]) as ReviewState["items"][string] },
+    })],
+    ["null-prototype top state", (state: ReviewState) => Object.assign(Object.create(null) as ReviewState, state)],
+    ["non-enumerable toJSON", (state: ReviewState) => {
+      const value = { ...state } as ReviewState & { toJSON?: () => ReviewState };
+      Object.defineProperty(value, "toJSON", {
+        enumerable: false,
+        value: () => ({ ...state, candidateSha256: HASH_B }),
+      });
+      return value;
+    }],
+  ])("rejects a %s without touching prior bytes or temporary files", async (_label, mutate) => {
+    const { seed } = await fixture();
+    const state = decided(seed);
+    await saveReview(seed.path, state, { validIds: seed.validIds });
+    const priorBytes = await readFile(seed.path, "utf8");
+    const parent = join(seed.path, "..");
+    const priorNames = await readdir(parent);
+
+    await expect(saveReview(seed.path, mutate(state), { validIds: seed.validIds })).rejects.toThrow(/review state/i);
+    expect(await readFile(seed.path, "utf8")).toBe(priorBytes);
+    expect(await readdir(parent)).toEqual(priorNames);
+  });
 });
 
 describe("createLocalReviewStore", () => {
