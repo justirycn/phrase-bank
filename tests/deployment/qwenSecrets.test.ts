@@ -32,6 +32,10 @@ describe("Qwen secret boundary", () => {
     expect(dockerIgnore).toContain("!.env.content.example");
     expect(dockerIgnore).toContain(".content-agent");
     expect(dockerIgnore).toContain(".superpowers");
+    const gitIgnore = readFileSync(resolve(root, ".gitignore"), "utf8");
+    expect(gitIgnore).toContain("/.content-agent/");
+    const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
+    expect(packageJson.scripts?.["content:qwen:local"]).toBe("tsx scripts/run-local-qwen-content-agent.ts");
   });
 
   it("requires revocation, private server configuration, validation, and rollback", () => {
