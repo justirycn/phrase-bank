@@ -211,8 +211,17 @@ describe("local review page runtime", () => {
       chinese: `中文短语 ${index}`,
     })) as typeof large.content.phrases;
     large.review.sampledIds = ["phrase-0000", "phrase-0001", "phrase-0002"];
-    large.review.items = {} as typeof large.review.items;
-    const fetchMock = vi.fn().mockResolvedValue(response(large));
+    large.review.items = Object.fromEntries(large.review.sampledIds.map((id) => [
+      id, { decision: "pass", note: "", updatedAt: "2026-08-18T00:00:00.000Z" },
+    ])) as typeof large.review.items;
+    large.canApprove = true;
+    const approved = structuredClone(large);
+    (approved.review as typeof approved.review & { approvedAt?: string }).approvedAt = "2026-08-18T03:00:00.000Z";
+    approved.canApprove = false;
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(large))
+      .mockResolvedValueOnce(response(large))
+      .mockResolvedValueOnce(response(approved));
     const dom = boot(fetchMock);
     await vi.waitFor(() => expect(rowIds(dom)).toHaveLength(3));
 
@@ -225,14 +234,31 @@ describe("local review page runtime", () => {
     loadMore.click();
     expect(rowIds(dom)).toHaveLength(200);
     expect(dom.window.document.getElementById("result-count")?.textContent).toBe("显示 200 / 2000 条");
-    const pass = [...dom.window.document.querySelectorAll("#phrase-phrase-0000 button")]
+    const pass = [...dom.window.document.querySelectorAll("#phrase-phrase-0150 button")]
       .find((button) => button.textContent === "通过") as HTMLButtonElement;
     pass.click();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(rowIds(dom)).toHaveLength(100));
-    expect(dom.window.document.getElementById("result-count")?.textContent).toBe("显示 100 / 2000 条");
+    const approveButton = dom.window.document.getElementById("approve") as HTMLButtonElement;
+    await vi.waitFor(() => expect(approveButton.disabled).toBe(false));
+    await vi.waitFor(() => expect(rowIds(dom)).toHaveLength(200));
+    expect(rowIds(dom)).toContain("phrase-0150");
+    expect(dom.window.document.getElementById("result-count")?.textContent).toBe("显示 200 / 2000 条");
+
+    const prompt = dom.window.prompt as ReturnType<typeof vi.fn>;
+    prompt.mockReturnValueOnce("2026.08.18");
+    approveButton.click();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(dom.window.document.getElementById("approved-value")?.textContent).toBe("已批准"));
+    await vi.waitFor(() => expect(rowIds(dom)).toHaveLength(200));
+    expect(dom.window.document.getElementById("result-count")?.textContent).toBe("显示 200 / 2000 条");
+
+    change(dom, "category", "daily", "change");
+    expect(rowIds(dom)).toHaveLength(100);
+    expect(dom.window.document.getElementById("result-count")?.textContent).toBe("显示 100 / 1000 条");
 
     change(dom, "search", "phrase-1999");
+    expect(rowIds(dom)).toEqual([]);
+    change(dom, "category", "", "change");
     expect(rowIds(dom)).toEqual(["phrase-1999"]);
     expect(dom.window.document.getElementById("result-count")?.textContent).toBe("显示 1 / 1 条");
     expect(loadMore.hidden).toBe(true);

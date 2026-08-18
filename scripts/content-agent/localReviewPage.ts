@@ -389,7 +389,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       elements.loadMore.disabled = allVisible;
     }
 
-    function applyPayload(payload) {
+    function applyPayload(payload, options) {
       const phrases = payload.content && Array.isArray(payload.content.phrases)
         ? payload.content.phrases : Array.isArray(payload.phrases) ? payload.phrases : [];
       const items = payload.review && payload.review.items ? payload.review.items : payload.items;
@@ -405,7 +405,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
         gateStatus: payload.gateStatus || (payload.report && payload.report.status === "pass" ? "通过" : "未通过"),
       };
       searchTextById = new Map(phrases.map((phrase) => [phrase.id, searchableText(phrase)]));
-      viewLimit = PAGE_SIZE;
+      if (options.resetView) viewLimit = PAGE_SIZE;
       updateSummary();
       updateFilterOptions();
       renderRows();
@@ -434,7 +434,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       elements.loadStatus.textContent = "正在加载审核数据…";
       try {
         const payload = await readJson(await fetch("/api/review", { headers: { Accept: "application/json" }, credentials: "same-origin" }));
-        applyPayload(payload);
+        applyPayload(payload, { resetView: true });
         clearError();
         elements.loadStatus.textContent = "审核数据已加载。";
       } catch (error) {
@@ -462,7 +462,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
           method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", Accept: "application/json" },
           body: JSON.stringify({ id, decision, note: submittedNote, candidateSha256: model.candidateSha256 }),
         }));
-        applyPayload(payload);
+        applyPayload(payload, { resetView: false });
         pendingIds.delete(id);
         pendingNotes.delete(id);
         updateSummary();
@@ -496,7 +496,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
           body: JSON.stringify({ version: model.version, candidateSha256: model.candidateSha256 }),
         }));
         approvalPending = false;
-        applyPayload(payload);
+        applyPayload(payload, { resetView: false });
         clearError();
         elements.approvalStatus.textContent = "版本已批准。";
       } catch (error) {
