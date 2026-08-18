@@ -144,7 +144,7 @@ describe("renderLocalReviewPage", () => {
     expect(html).toContain("pendingNotes.set(id, submittedNote)");
     expect(html).toContain("pendingNotes.delete(id)");
     expect(html).toContain("approvalPending");
-    expect(html).toContain("if (!model || approvalPending || !approvalEnabled) return");
+    expect(html).toContain("if (!model || approvalPending || pendingIds.size > 0 || !approvalEnabled) return");
     expect(html).not.toMatch(/setInterval|setTimeout\s*\(\s*loadReview/);
   });
 
@@ -357,6 +357,47 @@ describe("local review page runtime", () => {
     expect(approve.disabled).toBe(true);
     approve.click();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks approval during decisions and re-enables only after a clean pass response", async () => {
+    const ready = payload();
+    ready.review.items["daily-example"] = { decision: "pass", note: "", updatedAt: "2026-08-18T01:00:00.000Z" };
+    ready.review.items["work-issue"] = { decision: "pass", note: "resolved", updatedAt: "2026-08-18T01:00:00.000Z" };
+    ready.canApprove = true;
+    const withIssue = structuredClone(ready);
+    withIssue.review.items["daily-example"] = { decision: "issue", note: "check", updatedAt: "2026-08-18T02:00:00.000Z" };
+    withIssue.canApprove = false;
+    const issueSave = deferred<ReturnType<typeof response>>();
+    const passSave = deferred<ReturnType<typeof response>>();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(ready))
+      .mockReturnValueOnce(issueSave.promise)
+      .mockReturnValueOnce(passSave.promise);
+    const dom = boot(fetchMock);
+    await vi.waitFor(() => expect((dom.window.document.getElementById("approve") as HTMLButtonElement).disabled).toBe(false));
+
+    const issue = [...dom.window.document.querySelectorAll("#phrase-daily-example button")]
+      .find((button) => button.textContent === "标记问题") as HTMLButtonElement;
+    issue.click();
+    const approve = dom.window.document.getElementById("approve") as HTMLButtonElement;
+    expect(approve.disabled).toBe(true);
+    expect(dom.window.document.getElementById("approval-help")?.textContent).toBe("正在等待 1 条审核决定保存完成。");
+    approve.disabled = false;
+    approve.click();
+    expect(dom.window.prompt).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    issueSave.resolve(response(withIssue));
+    await vi.waitFor(() => expect(dom.window.document.getElementById("approval-help")?.textContent).toContain("daily-example"));
+    expect((dom.window.document.getElementById("approve") as HTMLButtonElement).disabled).toBe(true);
+    const pass = [...dom.window.document.querySelectorAll("#phrase-daily-example button")]
+      .find((button) => button.textContent === "通过") as HTMLButtonElement;
+    pass.click();
+    expect((dom.window.document.getElementById("approve") as HTMLButtonElement).disabled).toBe(true);
+    expect(dom.window.document.getElementById("approval-help")?.textContent).toBe("正在等待 1 条审核决定保存完成。");
+    passSave.resolve(response(ready));
+    await vi.waitFor(() => expect((dom.window.document.getElementById("approve") as HTMLButtonElement).disabled).toBe(false));
+    expect(dom.window.document.getElementById("approval-help")?.textContent).toBe("所有批准条件均已满足，可以批准当前版本。");
   });
 
   it("shows a retry after initial GET failure and clears the alert when retry succeeds", async () => {

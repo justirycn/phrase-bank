@@ -232,7 +232,8 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       setText(elements.issue, issueCount);
       setText(elements.undecided, undecidedCount);
       let reason;
-      if (model.approvedAt) reason = "当前候选已批准，等待独立发布命令。";
+      if (pendingIds.size > 0) reason = "正在等待 " + pendingIds.size + " 条审核决定保存完成。";
+      else if (model.approvedAt) reason = "当前候选已批准，等待独立发布命令。";
       else {
         const blockers = [];
         if (issueCount > 0) blockers.push("问题 ID（" + issueCount + "）：" + boundedIds(issueIds));
@@ -242,7 +243,8 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
           : "所有抽样均已审核，但报告或门禁仍未通过。";
       }
       setText(elements.approvalHelp, reason);
-      approvalEnabled = model.canApprove === true && issueCount === 0 && undecidedCount === 0 && !model.approvedAt;
+      approvalEnabled = model.canApprove === true && issueCount === 0 && undecidedCount === 0
+        && !model.approvedAt && pendingIds.size === 0;
       elements.approve.disabled = approvalPending || !approvalEnabled;
     }
 
@@ -436,6 +438,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
       pendingIds.add(id);
       rowStatus.textContent = "正在保存…";
       rowStatus.setAttribute("role", "status");
+      updateSummary();
       renderRows();
       try {
         const payload = await readJson(await fetch("/api/decision", {
@@ -445,10 +448,12 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
         applyPayload(payload);
         pendingIds.delete(id);
         pendingNotes.delete(id);
+        updateSummary();
         renderRows();
         clearError();
       } catch (error) {
         pendingIds.delete(id);
+        updateSummary();
         renderRows();
         const detail = error instanceof Error ? error.message : "未知错误";
         showError("保存 " + id + " 失败：" + detail);
@@ -456,7 +461,7 @@ export function renderLocalReviewPage({ nonce }: { nonce: string }): string {
     }
 
     async function approveVersion() {
-      if (!model || approvalPending || !approvalEnabled) return;
+      if (!model || approvalPending || pendingIds.size > 0 || !approvalEnabled) return;
       const confirmation = window.prompt("请输入要批准的确切版本号：", "");
       if (confirmation !== model.version) {
         if (confirmation !== null) showError("版本号不匹配，未执行批准。");
