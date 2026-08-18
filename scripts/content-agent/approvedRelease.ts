@@ -34,11 +34,14 @@ interface RunApprovedReleaseOptions {
   repositoryRoot: string;
   execute: ReleaseCommandExecutor;
   validate: () => Promise<void>;
-  publish: () => Promise<void>;
+  publish: () => Promise<Record<string, string>>;
   rollback?: () => Promise<void>;
+  hooksPath?: string | (() => string);
+  platform?: NodeJS.Platform;
 }
 
 const SHA = /^[0-9a-f]{40}$/u;
+const SHA256 = /^[0-9a-f]{64}$/u;
 const REPORT_KEYS = new Set(["status", "version", "coreCount", "totalCount", "coreByCategory", "errors"]);
 
 function plainRecord(value: unknown): value is Record<string, unknown> {
@@ -259,16 +262,43 @@ function checkedSha(value: string, label: string): string {
   return sha;
 }
 
+function comparablePath(path: string, platform: NodeJS.Platform): string {
+  const normalized = resolve(path).replace(/^\\\\\?\\UNC\\/iu, "\\\\").replace(/^\\\\\?\\/u, "");
+  return platform === "win32" ? normalized.toLocaleLowerCase("en-US") : normalized;
+}
+
+async function canonicalComparablePath(path: string, platform: NodeJS.Platform): Promise<string> {
+  try { return comparablePath(await realpath(resolve(path)), platform); }
+  catch (error) {
+    if (hasErrorCode(error, "ENOENT")) return comparablePath(path, platform);
+    throw error;
+  }
+}
+
+function remoteMainSha(output: string): string | undefined {
+  const trimmed = output.trim();
+  if (!trimmed) return undefined;
+  const [sha, reference, ...extra] = trimmed.split(/\s+/u);
+  if (extra.length || reference !== "refs/heads/main" || !SHA.test(sha)) throw new Error("Remote main lookup returned an invalid result");
+  return sha;
+}
+
 export async function runApprovedRelease(options: RunApprovedReleaseOptions): Promise<void> {
   const version = assertContentVersion(options.version);
   const allowed = [`public/content/system-content-${version}.json`, "app/domain/bundledSystemContent.ts"];
+  const platform = options.platform ?? process.platform;
   const initialStatus = parseGitStatusPorcelain(await options.execute("git", "status", "--porcelain=v1", "-z", "--untracked-files=all"));
   if (initialStatus.length) throw new Error("Release worktree must start completely clean");
   const topLevel = resolve((await options.execute("git", "rev-parse", "--show-toplevel")).trim());
-  if (topLevel !== resolve(options.repositoryRoot)) throw new Error("Release command is not running at the expected worktree root");
+  if (await canonicalComparablePath(topLevel, platform) !== await canonicalComparablePath(options.repositoryRoot, platform)) {
+    throw new Error("Release command is not running at the expected worktree root");
+  }
   const gitDirectory = resolve(topLevel, (await options.execute("git", "rev-parse", "--git-dir")).trim());
   const commonDirectory = resolve(topLevel, (await options.execute("git", "rev-parse", "--git-common-dir")).trim());
-  if (gitDirectory === commonDirectory || !relative(commonDirectory, gitDirectory).split(/[\\/]/u).includes("worktrees")) {
+  const comparableGitDirectory = await canonicalComparablePath(gitDirectory, platform);
+  const comparableCommonDirectory = await canonicalComparablePath(commonDirectory, platform);
+  if (comparableGitDirectory === comparableCommonDirectory
+    || !relative(comparableCommonDirectory, comparableGitDirectory).split(/[\\/]/u).includes("worktrees")) {
     throw new Error("Release command requires an isolated linked Git worktree");
   }
   await options.execute("git", "fetch", "--no-tags", "origin", "main");
@@ -280,10 +310,16 @@ export async function runApprovedRelease(options: RunApprovedReleaseOptions): Pr
   let published = false;
   let staged = false;
   let committed = false;
+  let releaseHead: string | undefined;
+  let pushConfirmed = false;
   try {
     await options.validate();
     published = true;
-    await options.publish();
+    const expectedOutputSha256 = await options.publish();
+    if (!plainRecord(expectedOutputSha256) || Object.keys(expectedOutputSha256).length !== allowed.length
+      || allowed.some((path) => !SHA256.test(expectedOutputSha256[path] ?? ""))) {
+      throw new Error("Publisher must return exact SHA-256 hashes for both approved outputs");
+    }
     await options.execute("npm", "test");
     await options.execute("npm", "run", "lint");
     await options.execute("npm", "run", "build");
@@ -302,9 +338,11 @@ export async function runApprovedRelease(options: RunApprovedReleaseOptions): Pr
     if (!exactAllowedChanges(stagedStatus, allowed) || stagedStatus.some(({ status }) => status[0] === " " || status[1] !== " " || status === "??")) {
       throw new Error("Release worktree changed after exact-file staging");
     }
-    await options.execute("git", "commit", "-m", `content: publish Qwen phrase library ${version}`);
+    const configuredHooksPath = typeof options.hooksPath === "function" ? options.hooksPath() : options.hooksPath;
+    const hooksPath = resolve(configuredHooksPath ?? join(options.repositoryRoot, ".content-agent/disabled-release-hooks"));
+    await options.execute("git", "-c", `core.hooksPath=${hooksPath}`, "commit", "-m", `content: publish Qwen phrase library ${version}`);
     committed = true;
-    const releaseHead = checkedSha(await options.execute("git", "rev-parse", "HEAD"), "release HEAD");
+    releaseHead = checkedSha(await options.execute("git", "rev-parse", "HEAD"), "release HEAD");
     if (releaseHead === baseHead || checkedSha(await options.execute("git", "rev-parse", "HEAD^"), "release parent") !== baseHead
       || (await options.execute("git", "rev-list", "--count", `${baseHead}..HEAD`)).trim() !== "1") {
       throw new Error("Release must create exactly one commit on origin/main");
@@ -312,11 +350,18 @@ export async function runApprovedRelease(options: RunApprovedReleaseOptions): Pr
     await options.execute("git", "diff-tree", "--check", "HEAD^", "HEAD");
     const committedChanges = parseCachedNameStatus(await options.execute("git", "diff-tree", "--no-commit-id", "--name-status", "-r", "-z", "HEAD"));
     if (!exactAllowedChanges(committedChanges, allowed)) throw new Error("Release commit does not contain exactly the two approved outputs");
+    for (const path of allowed) {
+      const committedRaw = await options.execute("git", "show", `${releaseHead}:${path}`);
+      if (createHash("sha256").update(committedRaw, "utf8").digest("hex") !== expectedOutputSha256[path]) {
+        throw new Error(`Release commit bytes do not match the approved output: ${path}`);
+      }
+    }
     await options.execute("git", "fetch", "--no-tags", "origin", "main");
     if (checkedSha(await options.execute("git", "rev-parse", "origin/main"), "origin/main") !== baseHead) throw new Error("origin/main changed immediately before push");
-    await options.execute("git", "push", "origin", "HEAD:main");
-    const remote = (await options.execute("git", "ls-remote", "--heads", "origin", "refs/heads/main")).trim().split(/\s+/u)[0] ?? "";
+    await options.execute("git", "push", "origin", `${releaseHead}:refs/heads/main`);
+    const remote = remoteMainSha(await options.execute("git", "ls-remote", "--heads", "origin", "refs/heads/main"));
     if (remote !== releaseHead) throw new Error("Push could not be confirmed on origin/main");
+    pushConfirmed = true;
     await options.execute("gh", "workflow", "run", "deploy.yml", "--ref", "main");
   } catch (error) {
     const cleanupErrors: unknown[] = [];
@@ -327,6 +372,17 @@ export async function runApprovedRelease(options: RunApprovedReleaseOptions): Pr
     if (published && !committed && options.rollback) {
       try { await options.rollback(); }
       catch (rollbackError) { cleanupErrors.push(rollbackError); }
+    }
+    if (committed && !pushConfirmed && releaseHead && options.rollback) {
+      try {
+        const currentHead = checkedSha(await options.execute("git", "rev-parse", "HEAD"), "rollback HEAD");
+        const currentRemote = remoteMainSha(await options.execute("git", "ls-remote", "--heads", "origin", "refs/heads/main"));
+        if (currentHead === releaseHead && currentRemote === baseHead) {
+          await options.execute("git", "update-ref", "HEAD", baseHead, releaseHead);
+          await options.execute("git", "reset", "--mixed", baseHead, "--", ...allowed);
+          await options.rollback();
+        }
+      } catch (rollbackError) { cleanupErrors.push(rollbackError); }
     }
     if (cleanupErrors.length) throw new AggregateError([error, ...cleanupErrors], "Release failed and pre-commit cleanup also failed");
     throw error;

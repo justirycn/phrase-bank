@@ -1,5 +1,6 @@
 import { execFile as nodeExecFile } from "node:child_process";
-import { lstat, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
@@ -15,7 +16,7 @@ import { publishCandidate } from "./content-agent/publisher";
 export interface ApprovedReleaseArguments { version: string }
 
 type ExecFileResult = { stdout: string; stderr: string };
-type ExecFileLike = (program: string, args: readonly string[], options: { encoding: "utf8"; windowsHide: true }) => Promise<ExecFileResult>;
+type ExecFileLike = (program: string, args: readonly string[], options: { encoding: "utf8"; windowsHide: true; maxBuffer: number }) => Promise<ExecFileResult>;
 
 interface CommandExecutorOptions {
   execFile?: ExecFileLike;
@@ -28,6 +29,7 @@ interface OutputSnapshot { path: string; existed: boolean; contents?: Buffer }
 interface ApprovedPublishSnapshot {
   candidatePath: string;
   reportPath: string;
+  hooksPath: string;
   cleanup(): Promise<void>;
 }
 
@@ -38,15 +40,16 @@ export function parseApprovedReleaseArguments(args: string[]): ApprovedReleaseAr
 
 export function createReleaseCommandExecutor(options: CommandExecutorOptions = {}): ReleaseCommandExecutor {
   const execFile = options.execFile ?? (promisify(nodeExecFile) as unknown as ExecFileLike);
+  const executionOptions = { encoding: "utf8" as const, windowsHide: true as const, maxBuffer: 32 * 1024 * 1024 };
   return async (...command: string[]) => {
     const [program, ...args] = command;
     if (!program) throw new Error("Release command is empty");
     if (program === "npm") {
       const npmCli = Object.hasOwn(options, "npmExecPath") ? options.npmExecPath : process.env.npm_execpath;
       if (!npmCli) throw new Error("Cannot locate npm CLI; run through npm run content:release:approved");
-      return (await execFile(options.nodeExecPath ?? process.execPath, [npmCli, ...args], { encoding: "utf8", windowsHide: true })).stdout;
+      return (await execFile(options.nodeExecPath ?? process.execPath, [npmCli, ...args], executionOptions)).stdout;
     }
-    return (await execFile(program, args, { encoding: "utf8", windowsHide: true })).stdout;
+    return (await execFile(program, args, executionOptions)).stdout;
   };
 }
 
@@ -54,7 +57,9 @@ export async function createApprovedPublishSnapshot(options: { directory: string
   const root = await mkdtemp(join(options.directory, ".approved-publish-snapshot-"));
   const candidatePath = join(root, "candidate.json");
   const reportPath = join(root, "report.json");
+  const hooksPath = join(root, "disabled-hooks");
   try {
+    await mkdir(hooksPath);
     await writeFile(candidatePath, options.candidateRaw, { encoding: "utf8", flag: "wx" });
     await writeFile(reportPath, `${JSON.stringify(options.report)}\n`, { encoding: "utf8", flag: "wx" });
   } catch (error) {
@@ -62,7 +67,7 @@ export async function createApprovedPublishSnapshot(options: { directory: string
     throw error;
   }
   let cleanup: Promise<void> | undefined;
-  return { candidatePath, reportPath, cleanup: () => cleanup ??= rm(root, { recursive: true, force: true }) };
+  return { candidatePath, reportPath, hooksPath, cleanup: () => cleanup ??= rm(root, { recursive: true, force: true }) };
 }
 
 async function snapshotOutputs(paths: readonly string[]): Promise<OutputSnapshot[]> {
@@ -95,7 +100,7 @@ export async function runApprovedReleaseCli(
   dependencies: { repositoryRoot?: string; execute?: ReleaseCommandExecutor } = {},
 ): Promise<void> {
   const { version } = parseApprovedReleaseArguments(args);
-  const repositoryRoot = resolve(dependencies.repositoryRoot ?? process.cwd());
+  const repositoryRoot = await realpath(resolve(dependencies.repositoryRoot ?? process.cwd()));
   const candidatePath = resolve(repositoryRoot, `.content-agent/candidate-${version}.json`);
   const reportPath = resolve(repositoryRoot, `.content-agent/report-${version}.json`);
   const reviewPath = resolve(repositoryRoot, `.content-agent/review-${version}.json`);
@@ -125,8 +130,16 @@ export async function runApprovedReleaseCli(
         if (!loaded || !approvedSnapshot) throw new Error("Approval validation must complete before publishing");
         await assertSafeReleasePaths(repositoryRoot, [{ path: destination, kind: "output" }, { path: versionModulePath, kind: "output" }]);
         await publishCandidate({ version, candidatePath: approvedSnapshot.candidatePath, reportPath: approvedSnapshot.reportPath, publicDir, versionModulePath });
+        return {
+          [`public/content/system-content-${version}.json`]: createHash("sha256").update(loaded.candidateRaw, "utf8").digest("hex"),
+          "app/domain/bundledSystemContent.ts": createHash("sha256").update(`export const BUNDLED_SYSTEM_CONTENT_VERSION = "${version}";\n`, "utf8").digest("hex"),
+        };
       },
       rollback: () => restoreOutputs(snapshots),
+      hooksPath: () => {
+        if (!approvedSnapshot) throw new Error("Approved publish snapshot is unavailable for hook isolation");
+        return approvedSnapshot.hooksPath;
+      },
     });
   } finally {
     await approvedSnapshot?.cleanup();
