@@ -1,19 +1,26 @@
 // @vitest-environment node
-import { chmod, link, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { spawn } from "node:child_process";
-import { describe, expect, it } from "vitest";
+import { basename, dirname, join, resolve } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 const sha = "a".repeat(40);
 const script = resolve(".github/scripts/deploy-exact-sha.sh");
 const bashExecutable = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "bash.exe") : "bash";
+const fixturePrefix = "deploy-exact-sha-";
+const ownedRoots = new Set<string>();
+const activeChildren = new Set<ChildProcessWithoutNullStreams>();
+let createdRootCount = 0;
+let cleanedRootCount = 0;
 const bashPath = (path: string) => process.platform === "win32"
   ? path.replace(/^([A-Za-z]):\\/u, (_, drive: string) => `/mnt/${drive.toLowerCase()}/`).replaceAll("\\", "/")
   : path;
 
 async function fixture(statuses: number[]) {
-  const root = await mkdtemp(join(tmpdir(), "deploy-exact-sha-"));
+  const root = await mkdtemp(join(tmpdir(), fixturePrefix));
+  ownedRoots.add(root);
+  createdRootCount += 1;
   const home = join(root, "home");
   const repository = join(root, "repository");
   const bin = join(root, "bin");
@@ -63,16 +70,70 @@ async function execute(files: Awaited<ReturnType<typeof fixture>>) {
   ].join("; ");
   return await new Promise<{ code: number | null; stdout: string; stderr: string }>((done, reject) => {
     const child = spawn(bashExecutable, ["-c", command], { env: process.env });
+    activeChildren.add(child);
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => { stdout += chunk; });
     child.stderr.on("data", (chunk: string) => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("close", (code) => done({ code, stdout, stderr }));
+    child.on("error", (error) => {
+      activeChildren.delete(child);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      activeChildren.delete(child);
+      done({ code, stdout, stderr });
+    });
   });
 }
+
+async function terminateAndWait(child: ChildProcessWithoutNullStreams) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  await new Promise<void>((done, reject) => {
+    const forceTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }, 2_000);
+    const failureTimer = setTimeout(() => {
+      reject(new Error(`deployment test child ${child.pid ?? "unknown"} did not terminate`));
+    }, 5_000);
+    child.once("close", () => {
+      clearTimeout(forceTimer);
+      clearTimeout(failureTimer);
+      done();
+    });
+    child.kill("SIGTERM");
+  });
+}
+
+async function cleanOwnedRoot(root: string) {
+  expect(ownedRoots.has(root)).toBe(true);
+  expect(resolve(dirname(root)).toLowerCase()).toBe(resolve(tmpdir()).toLowerCase());
+  expect(basename(root).startsWith(fixturePrefix)).toBe(true);
+  expect(basename(root).length).toBeGreaterThan(fixturePrefix.length);
+  const stats = await lstat(root);
+  expect(stats.isDirectory()).toBe(true);
+  expect(stats.isSymbolicLink()).toBe(false);
+  const resolvedRoot = await realpath(root);
+  const resolvedTemp = await realpath(tmpdir());
+  expect(resolve(dirname(resolvedRoot)).toLowerCase()).toBe(resolve(resolvedTemp).toLowerCase());
+  expect(resolve(resolvedRoot).toLowerCase()).toBe(resolve(resolvedTemp, basename(root)).toLowerCase());
+  await rm(root, { recursive: true });
+  await expect(lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
+  ownedRoots.delete(root);
+  cleanedRootCount += 1;
+}
+
+afterEach(async () => {
+  await Promise.all([...activeChildren].map(terminateAndWait));
+  activeChildren.clear();
+  for (const root of [...ownedRoots]) await cleanOwnedRoot(root);
+  expect(activeChildren.size).toBe(0);
+  expect(cleanedRootCount).toBe(createdRootCount);
+  expect(ownedRoots.size).toBe(0);
+  createdRootCount = 0;
+  cleanedRootCount = 0;
+});
 
 describe("exact SHA remote deployment script", () => {
   it("writes the marker only after the first deployment becomes healthy", async () => {
@@ -81,7 +142,7 @@ describe("exact SHA remote deployment script", () => {
     expect(result.code, JSON.stringify(result)).toBe(0);
     expect(await readFile(files.marker, "utf8")).toBe(`${sha}\n`);
     expect(await readFile(files.log, "utf8")).toMatch(/docker compose build[\s\S]*docker compose up -d[\s\S]*curl 200[\s\S]*curl 200/u);
-  });
+  }, 30_000);
 
   it("skips every Docker mutation when the same SHA marker is healthy", async () => {
     const files = await fixture([200, 200]);
@@ -89,7 +150,7 @@ describe("exact SHA remote deployment script", () => {
     const result = await execute(files);
     expect(result).toMatchObject({ code: 0 });
     expect(await readFile(files.log, "utf8")).not.toContain("docker ");
-  });
+  }, 30_000);
 
   it("rebuilds the same SHA when its existing deployment is unhealthy", async () => {
     const files = await fixture([500, 500, 200, 200]);
@@ -98,14 +159,14 @@ describe("exact SHA remote deployment script", () => {
     expect(result).toMatchObject({ code: 0 });
     expect(await readFile(files.log, "utf8")).toContain("docker compose up -d");
     expect(await readFile(files.marker, "utf8")).toBe(`${sha}\n`);
-  });
+  }, 30_000);
 
   it("does not create a marker when post-deploy health fails", async () => {
     const files = await fixture([500, 500]);
     const result = await execute(files);
     expect(result.code).not.toBe(0);
     await expect(readFile(files.marker, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-  });
+  }, 30_000);
 
   it("rejects directory, symbolic-link, hard-linked, and malformed markers", async () => {
     for (const kind of ["directory", "symlink", "hardlink", "malformed"] as const) {
@@ -126,5 +187,5 @@ describe("exact SHA remote deployment script", () => {
       expect(result.code, `${kind}: ${result.stderr}`).not.toBe(0);
       expect(await readFile(files.log, "utf8")).not.toContain("docker ");
     }
-  });
+  }, 30_000);
 });

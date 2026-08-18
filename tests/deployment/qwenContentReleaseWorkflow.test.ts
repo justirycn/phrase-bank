@@ -140,6 +140,25 @@ describe("Qwen content release workflow", () => {
     expect(source).toContain("逐字比较");
     expect(source).toContain("固定");
     expect(source).not.toMatch(/SHA256:[A-Za-z0-9+/]{20,}/u);
+    expect(source).toContain("New-TemporaryFile");
+    expect(source).toContain("try {");
+    expect(source).toContain("finally {");
+    expect(source).toContain("Remove-Item -LiteralPath $scanPath -Force");
+    expect(source).toContain("Remove-Item -LiteralPath $candidatePath -Force");
+    expect(source).toContain('if ($candidateFields[1] -eq $expectedFingerprint)');
+    expect(source).toContain('if ($matchedKeyLines.Count -ne 1)');
+    expect(source).toContain('$matchedKeyLines[0] | Set-Content');
+    expect(source).not.toContain("Copy-Item $scanPath");
+  });
+
+  it("routes deployment failures through the exact guarded recovery procedure", () => {
+    const source = runbook();
+    const failures = source.slice(source.indexOf("## 失败、重试与回滚"), source.indexOf("## 服务器工作流"));
+    expect(failures).toContain("优先重跑精确 push-event 任务");
+    expect(failures).toContain("gh run rerun $pushRunId --failed");
+    expect(failures).toContain("精确部署失败后的恢复");
+    expect(failures).toContain("origin/main");
+    expect(failures).not.toContain("再以 `approved_sha=<该 SHA>` 单独派发");
   });
 
   it("keeps server generation manual and recovery-only without local dispatches", () => {

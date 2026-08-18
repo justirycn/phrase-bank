@@ -38,12 +38,41 @@ $ErrorActionPreference = "Stop"
 $PSNativeCommandUseErrorActionPreference = $true
 $hostName = Read-Host "腾讯云主机名或 IP"
 $expectedFingerprint = Read-Host "粘贴从可信控制台取得的完整指纹"
-$scanPath = Join-Path $env:TEMP "phrase-bank-known-hosts"
-ssh-keyscan -t ed25519 $hostName | Set-Content -Encoding ascii $scanPath
-$scannedFingerprints = @(ssh-keygen -lf $scanPath)
-if (-not ($scannedFingerprints -match [regex]::Escape($expectedFingerprint))) { throw "主机密钥指纹不匹配；停止连接" }
-New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
-Copy-Item $scanPath "$env:USERPROFILE\.ssh\phrase-bank-known_hosts" -Force
+$scanPath = $null
+try {
+  $scanPath = (New-TemporaryFile).FullName
+  ssh-keyscan -t ed25519 $hostName | Set-Content -Encoding ascii $scanPath
+  $scannedKeyLines = @(Get-Content -LiteralPath $scanPath | Where-Object {
+    $_ -and -not $_.StartsWith("#")
+  })
+  $matchedKeyLines = @()
+  foreach ($keyLine in $scannedKeyLines) {
+    $candidatePath = $null
+    try {
+      $candidatePath = (New-TemporaryFile).FullName
+      $keyLine | Set-Content -Encoding ascii $candidatePath
+      $candidateFingerprintLine = ssh-keygen -lf $candidatePath
+      $candidateFields = @($candidateFingerprintLine.Trim() -split '\s+')
+      if ($candidateFields.Count -lt 2) { throw "无法解析扫描到的主机密钥指纹" }
+      if ($candidateFields[1] -eq $expectedFingerprint) {
+        $matchedKeyLines += $keyLine
+      }
+    }
+    finally {
+      if ($candidatePath -and (Test-Path -LiteralPath $candidatePath)) {
+        Remove-Item -LiteralPath $candidatePath -Force
+      }
+    }
+  }
+  if ($matchedKeyLines.Count -ne 1) { throw "主机密钥必须恰好有一行匹配可信指纹；停止连接" }
+  New-Item -ItemType Directory -Force "$env:USERPROFILE\.ssh" | Out-Null
+  $matchedKeyLines[0] | Set-Content -Encoding ascii "$env:USERPROFILE\.ssh\phrase-bank-known_hosts"
+}
+finally {
+  if ($scanPath -and (Test-Path -LiteralPath $scanPath)) {
+    Remove-Item -LiteralPath $scanPath -Force
+  }
+}
 ```
 
 只有逐字比较成功的完整主机密钥行才能固定到专用 `known_hosts` 文件。指纹变化时立即停止，回到腾讯云控制台核实轮换或安全事件。上述操作固定的是本机连接；当前 Actions 动态 `ssh-keyscan` 仍是 TOFU，不能把它描述成已固定。生产派发前应由基础设施负责人通过单独评审，把同一条已核验主机密钥固定到 Actions 的 `known_hosts` 来源；本文不虚构指纹、变量值或秘密。
@@ -229,7 +258,7 @@ git worktree remove $worktreePath
 - 自动质检失败：查看不含 Key 的报告摘要；不要运行 `content:release:approved`。任何新候选哈希都必须重新审核并批准。
 - 审核发现问题：保留备注，但不要手工修改只读候选。修复来源或生成逻辑、获得必要费用授权、生成新候选，再重新审核并批准。
 - 发布前检查失败：命令不会推送。保留当前 worktree，修复测试或 `origin/main` 漂移问题；不要跨 worktree 复制 `.content-agent`，也不要使用强制推送。
-- 推送成功但显式部署派发失败：不要再次生成或创建第二个内容提交。查出已经推送的精确 SHA，再以 `approved_sha=<该 SHA>` 单独派发 `deploy.yml`。push 事件与显式派发可能产生两个同 SHA 的部署任务；服务器在同一把锁内读取原子部署标记，已健康的相同 SHA 会跳过 Docker，健康失败才重建。
+- 推送或部署失败：严格执行上文“精确部署失败后的恢复”。优先重跑精确 push-event 任务：先按已批准 SHA 唯一确定 `$pushRunId`，再运行 `gh run rerun $pushRunId --failed` 并监控同一个 ID。只有该精确任务无法恢复时，才可使用文档中的 `origin/main` 精确 SHA 守卫和手动派发块；禁止通用或“最新任务”式手动派发。不要再次生成或创建第二个内容提交。同 SHA 的两个部署任务由服务器锁和健康检查幂等处理。
 - 部署后安装失败：网页继续使用旧版本，不会删除个人句子或学习记录。需要回滚时，把 `app/domain/bundledSystemContent.ts` 恢复为上一版本，提交后用该回滚提交的精确 SHA 重新部署；旧 JSON 与 IndexedDB 包仍保留。
 
 ## 服务器工作流：仅限灾难恢复
