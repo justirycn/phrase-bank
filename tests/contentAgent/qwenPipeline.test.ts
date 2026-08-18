@@ -22,7 +22,7 @@ function responseQueue(requestedVersion: string, reviewStatus: "pass" | "fail" =
       const chunkCores = cores.slice(chunkIndex * 10, chunkIndex * 10 + 10);
       const ids = new Set(chunkCores.map(({ id }) => id));
       const chunk = phrases.filter((phrase) => phrase.kind === "core" ? ids.has(phrase.id) : ids.has(phrase.parentPhraseId ?? ""));
-      return [JSON.stringify({ phrases: chunk }), JSON.stringify({ status: reviewStatus, issues: reviewStatus === "pass" ? [] : ["unnatural"], corrections: [] })];
+      return [JSON.stringify({ phrases: chunk.map(({ id, english, chinese }) => ({ id, english, chinese })) }), JSON.stringify({ status: reviewStatus, issues: reviewStatus === "pass" ? [] : ["unnatural"], corrections: [] })];
     }).flat();
   });
 }
@@ -33,6 +33,10 @@ function fakeClient(outputs: string[]): QwenClient {
     if (!output) throw new Error("unexpected request");
     return output;
   }) };
+}
+
+function workBatchIndex(outputs: string[]) {
+  return outputs.findIndex((output, index) => index % 2 === 0 && JSON.parse(output).phrases.length === 30 && JSON.parse(output).phrases[0].id.startsWith("sys-work-"));
 }
 
 describe("Qwen content pipeline", () => {
@@ -53,6 +57,7 @@ describe("Qwen content pipeline", () => {
     expect(firstGenerationPrompt).toContain("完整翻译子场景");
     expect(firstGenerationPrompt).toContain("不得整批使用同一种开头");
     expect(firstGenerationPrompt).toContain("只允许修改 english 和 chinese");
+    expect(firstGenerationPrompt).toContain("不得包含任何其他字段");
     expect(firstGenerationPrompt).toContain("2026.08.3");
     expect(calls[1][0][0].content).toContain("独立审校");
     expect(calls[1][0]).not.toBe(calls[0][0]);
@@ -132,8 +137,7 @@ describe("Qwen content pipeline", () => {
   it("automatically retries an incomplete generated batch", async () => {
     const outputs = responseQueue("2026.08.3");
     const incomplete = JSON.parse(outputs[0]);
-    const omittedId = incomplete.phrases.find((phrase: { kind: string }) => phrase.kind === "core").id;
-    incomplete.phrases = incomplete.phrases.filter((phrase: { id: string; parentPhraseId?: string }) => phrase.id !== omittedId && phrase.parentPhraseId !== omittedId);
+    incomplete.phrases = incomplete.phrases.slice(1);
     outputs.unshift(JSON.stringify(incomplete));
     const client = fakeClient(outputs);
 
@@ -155,13 +159,60 @@ describe("Qwen content pipeline", () => {
     expect(await readdir(outputDir)).not.toContain("checkpoint-2026.08.3.json");
   });
 
-  it.each(["subcategory", "cefrLevel", "intent", "parentPhraseId", "unlockOrder"])("rejects a generated batch that changes immutable %s metadata", async (field) => {
+  it.each(["subcategory", "cefrLevel", "intent", "parentPhraseId", "unlockOrder"])("rejects a generated patch that includes immutable %s metadata", async (field) => {
     const outputs = responseQueue("2026.08.3");
     const first = JSON.parse(outputs[0]);
     first.phrases[0][field] = field === "unlockOrder" ? 99 : "changed-metadata";
     outputs[0] = JSON.stringify(first);
     outputs.unshift(JSON.stringify(first), JSON.stringify(first));
 
-    await expect(buildQwenCandidate({ client: fakeClient(outputs), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).rejects.toThrow("元数据");
+    await expect(buildQwenCandidate({ client: fakeClient(outputs), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).rejects.toThrow("字段");
+  });
+
+  it("reports omitted IDs after three invalid 30-item generation attempts without reviewing", async () => {
+    const outputs = responseQueue("2026.08.3");
+    const index = workBatchIndex(outputs);
+    const original = JSON.parse(outputs[index]);
+    const missingIds = original.phrases.slice(0, 2).map((phrase: { id: string }) => phrase.id);
+    const missing = JSON.stringify({ phrases: original.phrases.slice(2) });
+    outputs.splice(index, 1, missing, missing, missing);
+    const client = fakeClient(outputs);
+
+    await expect(buildQwenCandidate({ client, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).rejects.toThrow(missingIds.join(", "));
+    const failedBatchCalls = vi.mocked(client.complete).mock.calls.filter(([messages]) => messages[1].content.includes("优化 work 类别第 1/12 批"));
+    expect(failedBatchCalls).toHaveLength(3);
+    expect(failedBatchCalls.every(([messages]) => messages[0].content.includes("内容设计师"))).toBe(true);
+  });
+
+  it("feeds omitted IDs back into the next generation prompt and merges valid patches onto the source", async () => {
+    const outputs = responseQueue("2026.08.3");
+    const index = workBatchIndex(outputs);
+    const missing = JSON.parse(outputs[index]);
+    const missingIds = missing.phrases.slice(0, 2).map((phrase: { id: string }) => phrase.id);
+    missing.phrases = missing.phrases.slice(2);
+    const valid = JSON.parse(outputs[index]);
+    valid.phrases[0].english = `${valid.phrases[0].english} Please let me know.`;
+    valid.phrases[0].chinese = `${valid.phrases[0].chinese} 请告诉我。`;
+    outputs[index] = JSON.stringify(valid);
+    outputs.splice(index, 0, JSON.stringify(missing));
+    const client = fakeClient(outputs);
+
+    const result = await buildQwenCandidate({ client, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" });
+    const expected = generateSystemContent().phrases.find(({ id }) => id === valid.phrases[0].id)!;
+    const retryPrompt = vi.mocked(client.complete).mock.calls.find(([messages]) => messages[1].content.includes("优化 work 类别第 1/12 批") && messages[1].content.includes("上一轮补丁无效"))![0].map(({ content }) => content).join(" ");
+    expect(retryPrompt).toContain("期望 30 条，实际 28 条");
+    expect(retryPrompt).toContain(missingIds[0]);
+    expect(result.phrases.find(({ id }) => id === expected.id)).toMatchObject({ ...expected, english: valid.phrases[0].english, chinese: valid.phrases[0].chinese, contentVersion: "2026.08.3", qualityVersion: "qwen-plus-review-v2" });
+    expect(result.phrases.map(({ id }) => id)).toEqual(generateSystemContent().phrases.map(({ id }) => id));
+  });
+
+  it.each(["duplicate", "extra"])("rejects generated patches with %s IDs", async (kind) => {
+    const outputs = responseQueue("2026.08.3");
+    const invalid = JSON.parse(outputs[0]);
+    invalid.phrases.push(kind === "duplicate" ? invalid.phrases[0] : { id: "extra-id", english: "Extra.", chinese: "多余。" });
+    const serialized = JSON.stringify(invalid);
+    outputs.splice(0, 1, serialized, serialized, serialized);
+
+    await expect(buildQwenCandidate({ client: fakeClient(outputs), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).rejects.toThrow(kind === "duplicate" ? "重复 ID" : "额外 ID");
   });
 });
