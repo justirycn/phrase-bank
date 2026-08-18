@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
+import { validateSystemContentPackage } from "../../app/domain/systemContent";
 import type { SystemContentPackage, SystemContentPhrase } from "../../app/domain/types";
 import { BLUEPRINTS } from "./catalog";
 
@@ -47,6 +49,9 @@ const PLACEHOLDER = /\b(?:xxx|tbd|todo|placeholder)\b/iu;
 const CONTEXT_MARKER = /\b(?:regarding|during|before|after|when|while|context|as part of|for)\b/iu;
 const HINT_ORDER: QualityHintCode[] = ["empty", "placeholder", "language-mismatch", "repeated-opening", "missing-context"];
 const HINT_RISK_ORDER: QualityHintCode[] = ["empty", "placeholder", "language-mismatch", "missing-context", "repeated-opening"];
+const CONTEXT_VARIANTS = new Map<string, readonly string[]>([
+  ["包装审核", ["包装审核", "包装审查", "包装复核"]],
+]);
 
 export function candidateSha256(rawCandidate: string): string {
   return createHash("sha256").update(rawCandidate, "utf8").digest("hex");
@@ -65,11 +70,25 @@ function translatedSubcategories(): Map<string, string> {
     subcategoryZh ? [[`${id}:${subcategory}`, subcategoryZh] as const] : [])));
 }
 
+function normalizedWords(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase("en-US").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+}
+
+function containsNormalizedPhrase(value: string, phrase: string): boolean {
+  return ` ${normalizedWords(value)} `.includes(` ${normalizedWords(phrase)} `);
+}
+
+function containsTranslatedContext(chinese: string, expected: string): boolean {
+  const compactChinese = normalizedWords(chinese).replaceAll(" ", "");
+  return (CONTEXT_VARIANTS.get(expected) ?? [expected]).some((variant) =>
+    compactChinese.includes(normalizedWords(variant).replaceAll(" ", "")));
+}
+
 function normalizedOpening(english: string): string {
-  const normalized = english.toLowerCase().replace(/[’']/gu, "'").replace(/[^a-z0-9',]+/gu, " ").trim();
+  const normalized = english.normalize("NFKC").toLocaleLowerCase("en-US");
   const comma = normalized.indexOf(",");
-  const lead = comma >= 0 ? normalized.slice(0, comma) : normalized.split(/\s+/u).slice(0, 5).join(" ");
-  return lead.replace(/[^a-z0-9]+/gu, " ").trim();
+  if (comma >= 0) return normalizedWords(normalized.slice(0, comma));
+  return (normalized.match(/[\p{L}\p{N}]+/gu) ?? []).slice(0, 5).join(" ");
 }
 
 function repeatedOpeningIds(phrases: SystemContentPhrase[]): Set<string> {
@@ -95,7 +114,9 @@ function buildHints(phrases: SystemContentPhrase[]): Record<string, QualityHint[
     const chinese = phrase.chinese.trim();
     const emptyFields = [!english && "英文", !chinese && "中文"].filter(Boolean).join("和");
     if (emptyFields) hints.set("empty", `${emptyFields}内容为空，请补充完整。`);
-    if (PLACEHOLDER.test(english) || PLACEHOLDER.test(chinese)) hints.set("placeholder", "检测到占位文字，请替换为可发布的真实表达。 ");
+    if (PLACEHOLDER.test(english.normalize("NFKC")) || PLACEHOLDER.test(chinese.normalize("NFKC"))) {
+      hints.set("placeholder", "检测到占位文字，请替换为可发布的真实表达。 ");
+    }
     if ((english && !/\p{Script=Latin}/u.test(english)) || (chinese && !/\p{Script=Han}/u.test(chinese))) {
       hints.set("language-mismatch", "英文或中文字段的语言可能填反，请核对双语内容。 ");
     }
@@ -104,8 +125,11 @@ function buildHints(phrases: SystemContentPhrase[]): Record<string, QualityHint[
     const expectedContext = contextualZh.get(`${phrase.categoryId}:${phrase.subcategory}`);
     const hanLength = (chinese.match(/\p{Script=Han}/gu) ?? []).length;
     const englishWords = english.match(/\p{Script=Latin}+(?:'\p{Script=Latin}+)?/gu)?.length ?? 0;
-    const obviouslyMissingContext = englishWords >= 9 && hanLength <= 3 && CONTEXT_MARKER.test(english);
-    if ((expectedContext && !chinese.includes(expectedContext)) || obviouslyMissingContext) {
+    const obviouslyMissingContext = englishWords >= 9 && hanLength <= 3 && CONTEXT_MARKER.test(english.normalize("NFKC"));
+    const omittedCatalogContext = expectedContext
+      && containsNormalizedPhrase(english, phrase.subcategory)
+      && !containsTranslatedContext(chinese, expectedContext);
+    if (omittedCatalogContext || obviouslyMissingContext) {
       hints.set("missing-context", "中文译文可能遗漏了英文中的场景或主题信息，请对照补全上下文。 ");
     }
 
@@ -129,7 +153,21 @@ function addSelected(target: Map<string, SystemContentPhrase>, choices: SystemCo
 
 export function buildReviewModel(options: { content: SystemContentPackage; candidateRaw: string; sampleSeed: string }): ReviewModel {
   const { content, candidateRaw, sampleSeed } = options;
-  const allPhrases = [...content.phrases].sort((left, right) => left.id.localeCompare(right.id));
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(candidateRaw);
+  } catch (error) {
+    throw new Error("Candidate raw is not valid JSON", { cause: error });
+  }
+  let candidateContent: SystemContentPackage;
+  try {
+    candidateContent = validateSystemContentPackage(parsed as SystemContentPackage);
+  } catch (error) {
+    throw new Error("Candidate content is not a valid system content package", { cause: error });
+  }
+  if (!isDeepStrictEqual(candidateContent, content)) throw new Error("Candidate raw content does not match the supplied content");
+
+  const allPhrases = [...candidateContent.phrases].sort((left, right) => left.id.localeCompare(right.id));
   const allIds = allPhrases.map(({ id }) => id);
   const hintsById = buildHints(allPhrases);
   const selected = new Map<string, SystemContentPhrase>();
@@ -162,7 +200,7 @@ export function buildReviewModel(options: { content: SystemContentPackage; candi
     allIds,
     initialState: {
       format: "phrase-bank-local-review",
-      version: content.version,
+      version: candidateContent.version,
       candidateSha256: hash,
       sampleSeed,
       sampledIds: [...sampledIds],
@@ -216,11 +254,17 @@ export function decideReviewItem(
 
 export function approveReview(
   state: ReviewState,
-  options: { candidateSha256: string; version: string; now?: string },
+  options: { candidateSha256: string; version: string; expectedSampledIds: readonly string[]; now?: string },
 ): ReviewState {
   if (options.candidateSha256 !== state.candidateSha256) throw new Error("Candidate hash drift prevents approval");
   if (options.version !== state.version) throw new Error("Candidate version drift prevents approval");
-  const undecided = state.sampledIds.find((id) => state.items[id]?.decision !== "pass");
+  if (options.expectedSampledIds.length === 0) throw new Error("Expected sample must not be empty");
+  if (new Set(options.expectedSampledIds).size !== options.expectedSampledIds.length) throw new Error("Expected sample IDs must be unique");
+  if (state.sampledIds.length !== options.expectedSampledIds.length
+    || state.sampledIds.some((id, index) => id !== options.expectedSampledIds[index])) {
+    throw new Error("Review sample does not match the expected sample");
+  }
+  const undecided = options.expectedSampledIds.find((id) => state.items[id]?.decision !== "pass");
   if (undecided) throw new Error(`Sampled ID is undecided or not passed: ${undecided}`);
   const issue = Object.entries(state.items).find(([, item]) => item.decision === "issue");
   if (issue) throw new Error(`Review contains an unresolved issue: ${issue[0]}`);

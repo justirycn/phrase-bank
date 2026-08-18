@@ -84,13 +84,33 @@ describe("local phrase review", () => {
     });
   });
 
+  it("validates and binds the supplied content to the parsed candidate raw bytes", () => {
+    const content = candidate();
+    const changedPhrase = replacePhrases(content, new Map([
+      [content.phrases[0].id, { english: `${content.phrases[0].english} Updated.` }],
+    ]));
+    const changedVersion = {
+      ...content,
+      version: "2026.08.4",
+      phrases: content.phrases.map((phrase) => ({ ...phrase, contentVersion: "2026.08.4" })),
+    };
+
+    expect(() => buildReviewModel({ content, candidateRaw: "{not json", sampleSeed: "raw-invalid" })).toThrow(/candidate|json/i);
+    expect(() => buildReviewModel({ content, candidateRaw: raw(changedPhrase), sampleSeed: "raw-phrase-mismatch" })).toThrow(/match|content/i);
+    expect(() => buildReviewModel({ content, candidateRaw: raw(changedVersion), sampleSeed: "raw-version-mismatch" })).toThrow(/match|content/i);
+
+    const standard = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "raw-whitespace" });
+    const whitespace = buildReviewModel({ content, candidateRaw: `${raw(content)} \n`, sampleSeed: "raw-whitespace" });
+    expect(whitespace.sampledIds).toEqual(standard.sampledIds);
+    expect(whitespace.candidateSha256).not.toBe(standard.candidateSha256);
+  });
+
   it("reports deterministic, unique bilingual quality hints over deliberate defects", () => {
     const base = candidate();
     const packagingCores = base.phrases
       .filter(({ categoryId, subcategory, kind }) => categoryId === "supply-chain" && subcategory === "packaging review" && kind === "core")
       .slice(0, 4);
     const replacements = new Map<string, Partial<SystemContentPhrase>>([
-      ["sys-daily-01-1-1", { english: "   " }],
       ["sys-daily-01-1-1-e1", { english: "Regarding XXX, TODO placeholder text." }],
       ["sys-daily-01-1-1-e2", { english: "只有中文", chinese: "这是正常中文。" }],
       ["sys-supply-chain-02-2-1", { chinese: "检查。" }],
@@ -102,12 +122,10 @@ describe("local phrase review", () => {
     const content = replacePhrases(base, replacements);
     const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "hints" });
 
-    expect(codes(model.hintsById["sys-daily-01-1-1"])).toContain("empty");
     expect(codes(model.hintsById["sys-daily-01-1-1-e1"])).toContain("placeholder");
     expect(codes(model.hintsById["sys-daily-01-1-1-e2"])).toContain("language-mismatch");
     expect(codes(model.hintsById["sys-supply-chain-02-2-1"])).toContain("missing-context");
     expect(model.sampledIds).toEqual(expect.arrayContaining([
-      "sys-daily-01-1-1",
       "sys-daily-01-1-1-e1",
       "sys-daily-01-1-1-e2",
       "sys-supply-chain-02-2-1",
@@ -200,6 +218,20 @@ describe("local phrase review", () => {
     expect(codes(model.hintsById[translatedId])).not.toContain("missing-context");
   });
 
+  it("requires catalog context only when English expresses it and accepts known exact variants", () => {
+    const base = candidate();
+    const packagingOnlyId = "sys-supply-chain-02-1-2-e1";
+    const semanticVariantId = "sys-supply-chain-02-1-2-e2";
+    const content = replacePhrases(base, new Map([
+      [packagingOnlyId, { english: "Please inspect the packaging carefully.", chinese: "请仔细检查包装。" }],
+      [semanticVariantId, { english: "Please inspect this during the packaging review.", chinese: "请在包装审查时仔细检查。" }],
+    ]));
+    const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "context-precision" });
+
+    expect(codes(model.hintsById[packagingOnlyId])).not.toContain("missing-context");
+    expect(codes(model.hintsById[semanticVariantId])).not.toContain("missing-context");
+  });
+
   it("recognizes non-ASCII Latin letters as English content", () => {
     const base = candidate();
     const content = replacePhrases(base, new Map([
@@ -208,6 +240,43 @@ describe("local phrase review", () => {
     const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "latin-script" });
 
     expect(codes(model.hintsById["sys-daily-01-1-1-e1"])).not.toContain("language-mismatch");
+  });
+
+  it("normalizes full-width placeholder tokens without flagging normal text", () => {
+    const base = candidate();
+    const xxxId = "sys-daily-01-1-2-e1";
+    const tbdId = "sys-daily-01-1-2-e2";
+    const normalId = "sys-daily-01-1-2-e3";
+    const content = replacePhrases(base, new Map([
+      [xxxId, { english: "Regarding ＸＸＸ, please update this." }],
+      [tbdId, { english: "This item is ＴＢＤ." }],
+      [normalId, { english: "This item is ready." }],
+    ]));
+    const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "unicode-placeholders" });
+
+    expect(codes(model.hintsById[xxxId])).toContain("placeholder");
+    expect(codes(model.hintsById[tbdId])).toContain("placeholder");
+    expect(codes(model.hintsById[normalId])).not.toContain("placeholder");
+  });
+
+  it("preserves distinct accented normalized openings", () => {
+    const base = candidate();
+    const distinct = base.phrases.filter(({ categoryId, subcategory }) => categoryId === "travel" && subcategory === "airport").slice(0, 4);
+    const repeated = base.phrases.filter(({ categoryId, subcategory }) => categoryId === "travel" && subcategory === "flight").slice(0, 4);
+    const content = replacePhrases(base, new Map([
+      ...distinct.map((phrase, index) => [phrase.id, {
+        english: `${index < 2 ? "Café" : "Cafè"} route, please check item ${index}.`,
+        chinese: `请检查路线项目${index}。`,
+      }] as [string, Partial<SystemContentPhrase>]),
+      ...repeated.map((phrase, index) => [phrase.id, {
+        english: `Café flight, please check item ${index}.`,
+        chinese: `请检查航班项目${index}。`,
+      }] as [string, Partial<SystemContentPhrase>]),
+    ]));
+    const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "unicode-openings" });
+
+    for (const phrase of distinct) expect(codes(model.hintsById[phrase.id])).not.toContain("repeated-opening");
+    for (const phrase of repeated) expect(codes(model.hintsById[phrase.id])).toContain("repeated-opening");
   });
 
   it("records an immutable decision for any valid ID and clears approval", () => {
@@ -247,7 +316,7 @@ describe("local phrase review", () => {
   it("blocks approval on undecided samples, any issue, hash drift, or version drift", () => {
     const content = candidate();
     const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "approval-blocks" });
-    expect(() => approveReview(model.initialState, { candidateSha256: model.candidateSha256, version: content.version })).toThrow(/undecided/i);
+    expect(() => approveReview(model.initialState, { candidateSha256: model.candidateSha256, version: content.version, expectedSampledIds: model.sampledIds })).toThrow(/undecided/i);
 
     let state = model.initialState;
     for (const id of model.sampledIds) {
@@ -256,9 +325,26 @@ describe("local phrase review", () => {
     const nonSampleId = model.allIds.find((id) => !model.sampledIds.includes(id))!;
     state = decideReviewItem(state, { candidateSha256: model.candidateSha256, validIds: model.allIds, id: nonSampleId, decision: "issue", note: "found by search" });
 
-    expect(() => approveReview(state, { candidateSha256: model.candidateSha256, version: content.version })).toThrow(/issue/i);
-    expect(() => approveReview({ ...state, items: { ...state.items, [nonSampleId]: { ...state.items[nonSampleId], decision: "pass" } } }, { candidateSha256: "f".repeat(64), version: content.version })).toThrow(/hash/i);
-    expect(() => approveReview({ ...state, items: { ...state.items, [nonSampleId]: { ...state.items[nonSampleId], decision: "pass" } } }, { candidateSha256: model.candidateSha256, version: "2026.08.4" })).toThrow(/version/i);
+    expect(() => approveReview(state, { candidateSha256: model.candidateSha256, version: content.version, expectedSampledIds: model.sampledIds })).toThrow(/issue/i);
+    expect(() => approveReview({ ...state, items: { ...state.items, [nonSampleId]: { ...state.items[nonSampleId], decision: "pass" } } }, { candidateSha256: "f".repeat(64), version: content.version, expectedSampledIds: model.sampledIds })).toThrow(/hash/i);
+    expect(() => approveReview({ ...state, items: { ...state.items, [nonSampleId]: { ...state.items[nonSampleId], decision: "pass" } } }, { candidateSha256: model.candidateSha256, version: "2026.08.4", expectedSampledIds: model.sampledIds })).toThrow(/version/i);
+  });
+
+  it("rejects empty or tampered sampled ID lists during approval", () => {
+    const content = candidate();
+    const model = buildReviewModel({ content, candidateRaw: raw(content), sampleSeed: "approval-integrity" });
+    let state = model.initialState;
+    for (const id of model.sampledIds) {
+      state = decideReviewItem(state, { candidateSha256: model.candidateSha256, validIds: model.allIds, id, decision: "pass", note: "" });
+    }
+    const replacement = model.allIds.find((id) => !model.sampledIds.includes(id))!;
+    const approval = { candidateSha256: model.candidateSha256, version: content.version, expectedSampledIds: model.sampledIds };
+
+    expect(() => approveReview(state, { ...approval, expectedSampledIds: [] })).toThrow(/sample/i);
+    expect(() => approveReview({ ...state, sampledIds: [] }, approval)).toThrow(/sample/i);
+    expect(() => approveReview({ ...state, sampledIds: state.sampledIds.slice(1) }, approval)).toThrow(/sample/i);
+    expect(() => approveReview({ ...state, sampledIds: [replacement, ...state.sampledIds.slice(1)] }, approval)).toThrow(/sample/i);
+    expect(() => approveReview({ ...state, sampledIds: [...state.sampledIds, state.sampledIds[0]] }, approval)).toThrow(/sample/i);
   });
 
   it("allows issue-to-pass resolution, approves immutably, and refreshes re-approval time", () => {
@@ -272,8 +358,8 @@ describe("local phrase review", () => {
     state = decideReviewItem(state, { candidateSha256: model.candidateSha256, validIds: model.allIds, id: nonSampleId, decision: "issue", note: "check" });
     state = decideReviewItem(state, { candidateSha256: model.candidateSha256, validIds: model.allIds, id: nonSampleId, decision: "pass", note: "resolved" });
 
-    const approved = approveReview(state, { candidateSha256: model.candidateSha256, version: content.version, now: "2026-08-18T03:00:00.000Z" });
-    const reapproved = approveReview(approved, { candidateSha256: model.candidateSha256, version: content.version, now: "2026-08-18T04:00:00.000Z" });
+    const approved = approveReview(state, { candidateSha256: model.candidateSha256, version: content.version, expectedSampledIds: model.sampledIds, now: "2026-08-18T03:00:00.000Z" });
+    const reapproved = approveReview(approved, { candidateSha256: model.candidateSha256, version: content.version, expectedSampledIds: model.sampledIds, now: "2026-08-18T04:00:00.000Z" });
 
     expect(approved.approvedAt).toBe("2026-08-18T03:00:00.000Z");
     expect(reapproved.approvedAt).toBe("2026-08-18T04:00:00.000Z");
