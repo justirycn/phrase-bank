@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import { createQwenClient, type QwenClient } from "./content-agent/qwenClient";
 import { runQwenAgent } from "./content-agent/qwenPipeline";
 
-export const QWEN_REVIEW_QUALITY_VERSION = "qwen-plus-review-v2";
+export const QWEN_REVIEW_QUALITY_VERSION = "qwen-plus-review-v3";
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);

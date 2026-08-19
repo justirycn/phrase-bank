@@ -19,6 +19,7 @@ export async function installBundledSystemContent(
   let content: SystemContentPackage;
   try { content = validateSystemContentPackage(await response.json() as SystemContentPackage); }
   catch { throw new Error("系统内容包无效，已继续使用原有句库"); }
+  if (content.version !== BUNDLED_SYSTEM_CONTENT_VERSION) throw new Error("系统内容包版本不一致，已继续使用原有句库");
   await repository.installSystemContentPackage(content);
   return "installed";
 }

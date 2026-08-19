@@ -89,7 +89,7 @@ class ScreenLoadBoundary extends Component<{ children: ReactNode; onRetry: () =>
   }
 }
 
-export function PhraseBankApp({ repository, contentInstaller, initialScreen = "home" }: { repository?: Repository; contentInstaller?: (repository: Repository) => Promise<unknown>; initialScreen?: Screen }) {
+export function PhraseBankApp({ repository, contentInstaller, initialScreen = "home", username, onLogout }: { repository?: Repository; contentInstaller?: (repository: Repository) => Promise<unknown>; initialScreen?: Screen; username?: string; onLogout?: () => Promise<void> }) {
   const repo = repository ?? defaultRepository;
   const [screenState, setScreenState] = useState<{ repository?: Repository; value: Screen }>(() => ({ repository: repo, value: initialScreen }));
   const isRepositoryTaskScreen = (value: Screen) => value === "practice" || value === "daily-learn" || value === "learn";
@@ -308,7 +308,7 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
         }} />
         : <ScreenLoading screen="review" />)}
       {screen === "practice" && repo && <PracticeSession key={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} completionKey={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} onComplete={() => afterReviewComplete(repo)} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => { setTrainingRun((run) => run + 1); void refresh().catch(() => setError("本地数据暂时无法刷新，请稍后再试。")); }} setError={setError} />}
-      {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} appPreferences={home.data?.appPreferences ?? { dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 }} refresh={refresh} setNotice={setNotice} setError={setError} />}</Suspense></ScreenLoadBoundary>
+      {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} appPreferences={home.data?.appPreferences ?? { dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 }} refresh={refresh} setNotice={setNotice} setError={setError} username={username} onLogout={onLogout} />}</Suspense></ScreenLoadBoundary>
     </main>
     {screen !== "learn" && screen !== "daily-learn" && screen !== "review" && screen !== "practice" && <nav className="bottom-nav" aria-label="主导航">
       <button className={screen === "home" ? "active" : ""} aria-current={screen === "home" ? "page" : undefined} onClick={() => go("home")}><span><AppIcon name="home" size={21} /></span>复习</button>

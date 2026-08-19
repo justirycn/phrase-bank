@@ -675,6 +675,25 @@ label.settings-action:focus-within {
   font-size: 10px;
   margin: 25px;
 }
+.account-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.account-settings-row b {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.account-settings-row button {
+  flex: 0 0 auto;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0 16px;
+  background: transparent;
+  color: var(--danger);
+}
 .toast {
   margin: 0 0 14px;
   padding: 12px 15px;

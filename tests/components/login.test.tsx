@@ -41,6 +41,7 @@ describe("AuthPhraseBankApp", () => {
     const renderApplication = vi.fn(() => <p>cloud app</p>);
     render(<AuthPhraseBankApp fetcher={fetcher} renderApplication={renderApplication} />);
     await screen.findByText("cloud app");
-    expect(renderApplication).toHaveBeenCalledWith(expect.objectContaining({ contentInstaller: expect.any(Function) }));
+    expect(renderApplication).toHaveBeenCalledWith(expect.objectContaining({ contentInstaller: expect.any(Function), username: "alice", onLogout: expect.any(Function) }));
+    expect(screen.queryByRole("button", { name: "退出登录" })).not.toBeInTheDocument();
   });
 });

@@ -48,7 +48,7 @@ describe("local Qwen content agent runner", () => {
       client,
       version: "2026.08.3",
       generatedAt: "2026-08-18T00:00:00.000Z",
-      qualityVersion: "qwen-plus-review-v2",
+      qualityVersion: "qwen-plus-review-v3",
       outputDir: resolve(".content-agent"),
     });
   });
@@ -65,7 +65,7 @@ describe("local Qwen content agent runner", () => {
     });
     const runAgent = vi.fn(async (options: ReturnType<typeof runner.createLocalAgentOptions>) => {
       calls.push("agent");
-      expect(options).toMatchObject({ client, qualityVersion: "qwen-plus-review-v2", outputDir: resolve(".content-agent") });
+      expect(options).toMatchObject({ client, qualityVersion: "qwen-plus-review-v3", outputDir: resolve(".content-agent") });
       return { candidatePath: "candidate.json", reportPath: "report.json" };
     });
 

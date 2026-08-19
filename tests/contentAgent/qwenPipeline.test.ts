@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { link, lstat, mkdir, open, readFile, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { generateSystemContent } from "../../scripts/content-agent/generator";
+import { generateReorganizedContentSource } from "../../scripts/content-agent/reorganizedGenerator";
 import { buildQwenCandidate, runQwenAgent } from "../../scripts/content-agent/qwenPipeline";
 import { sourceSha256 } from "../../scripts/content-agent/qwenCheckpoint";
 import { createQwenClient, type QwenClient } from "../../scripts/content-agent/qwenClient";
@@ -13,11 +13,11 @@ const tempRoots = createTempRootTracker();
 
 afterEach(async () => tempRoots.cleanup());
 
-const categories = ["daily", "travel", "work", "business", "supply-chain", "social"] as const;
-const quotas = { daily: 180, travel: 100, work: 120, business: 100, "supply-chain": 70, social: 30 };
+const categories = ["daily", "social", "travel", "work", "business", "supply-chain"] as const;
+const quotas = { daily: 240, travel: 80, work: 80, business: 40, "supply-chain": 40, social: 120 };
 
 function responseQueue(requestedVersion: string, reviewStatus: "pass" | "fail" = "pass") {
-  const source = generateSystemContent();
+  const source = generateReorganizedContentSource();
   return categories.flatMap((category) => {
     const phrases = source.phrases.filter((phrase) => phrase.categoryId === category).map((phrase) => ({
       ...phrase,
@@ -60,7 +60,7 @@ function fakeClient(outputs: string[]): QwenClient {
 function workBatchIndex(outputs: string[]) {
   return outputs.findIndex((output) => {
     const parsed = JSON.parse(output) as { phrases?: Array<{ id: string }> };
-    return parsed.phrases?.[0]?.id.startsWith("sys-work-") ?? false;
+    return parsed.phrases?.[0]?.id.startsWith("sys-v4-work-") ?? false;
   });
 }
 
@@ -93,20 +93,21 @@ describe("Qwen content pipeline", () => {
     const firstGenerationPrompt = calls[0][0].map(({ content }) => content).join(" ");
     expect(firstGenerationPrompt).toContain("daily");
     expect(firstGenerationPrompt).toContain("本次输入恰好包含 8 条扁平短语记录");
-    expect(firstGenerationPrompt).toContain("sys-daily-01-1-1");
-    expect(firstGenerationPrompt).toContain("完整翻译子场景");
+    expect(firstGenerationPrompt).toContain("sys-v4-daily-01-01");
+    expect(firstGenerationPrompt).toContain("输入是内容 brief");
+    expect(firstGenerationPrompt).toContain("不同人物或情境");
     expect(firstGenerationPrompt).toContain("不得整批使用同一种开头");
     expect(firstGenerationPrompt).toContain("只允许修改 english 和 chinese");
     expect(firstGenerationPrompt).toContain("不得包含任何其他字段");
     expect(firstGenerationPrompt).toContain("2026.08.3");
     expect(calls[5][0][0].content).toContain("独立审校");
     expect(calls[5][0]).not.toBe(calls[0][0]);
-    const firstTravelCall = calls.findIndex(([messages]) => messages[1].content.includes("优化 travel 类别第 1/10 批"));
+    const firstTravelCall = calls.findIndex(([messages]) => messages[1].content.includes("创作 travel 类别第 1/8 批"));
     expect(calls[firstTravelCall][0].map(({ content }) => content).join(" ")).toContain("本次输入恰好包含 8 条扁平短语记录");
-    const thirdTravelCall = calls.findIndex(([messages]) => messages[1].content.includes("优化 travel 类别第 3/10 批"));
-    expect(calls[thirdTravelCall][0].map(({ content }) => content).join(" ")).toContain("本次输入恰好包含 9 条扁平短语记录");
+    const thirdTravelCall = calls.findIndex(([messages]) => messages[1].content.includes("创作 travel 类别第 3/8 批"));
+    expect(calls[thirdTravelCall][0].map(({ content }) => content).join(" ")).toContain("本次输入恰好包含 8 条扁平短语记录");
     expect(onProgress).toHaveBeenCalledTimes(120);
-    expect(onProgress).toHaveBeenLastCalledWith({ category: "social", completed: 120, total: 120, stage: "review" });
+    expect(onProgress).toHaveBeenLastCalledWith({ category: "supply-chain", completed: 120, total: 120, stage: "review" });
     expect(result.phrases.every((phrase) => phrase.contentVersion === "2026.08.3")).toBe(true);
     expect(result.phrases.every((phrase) => phrase.qualityVersion === "qwen-plus-review-v2")).toBe(true);
   });
@@ -155,7 +156,7 @@ describe("Qwen content pipeline", () => {
     const durableCheckpointRaw = await readFile(checkpointPath, "utf8");
     const durableCheckpoint = JSON.parse(durableCheckpointRaw);
     expect(durableCheckpoint.phrases).toHaveLength(2000);
-    expect(durableCheckpoint.phrases.map(({ id }: { id: string }) => id)).toEqual(generateSystemContent().phrases.map(({ id }) => id));
+    expect(durableCheckpoint.phrases.map(({ id }: { id: string }) => id)).toEqual(generateReorganizedContentSource().phrases.map(({ id }) => id));
 
     const damageOutputs = [
       async () => rm(paths.candidatePath),
@@ -255,14 +256,14 @@ describe("Qwen content pipeline", () => {
     await expect(runQwenAgent({ client: fakeClient(outputs), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir })).rejects.toThrow("审校未通过");
     const checkpoint = JSON.parse(await readFile(join(outputDir, "checkpoint-2026.08.3.json"), "utf8"));
 
-    expect(checkpoint).toMatchObject({ version: "2026.08.3", sourceSha256: sourceSha256(generateSystemContent()) });
+    expect(checkpoint).toMatchObject({ version: "2026.08.3", sourceSha256: sourceSha256(generateReorganizedContentSource()) });
     expect(checkpoint.phrases).toHaveLength(40);
-    expect(checkpoint.phrases.map(({ id }: { id: string }) => id)).toEqual(generateSystemContent().phrases.slice(0, 40).map(({ id }) => id));
+    expect(checkpoint.phrases.map(({ id }: { id: string }) => id)).toEqual(generateReorganizedContentSource().phrases.slice(0, 40).map(({ id }) => id));
   });
 
   it("rejects a non-prefix imported checkpoint before any Qwen call", async () => {
     const outputDir = await tempRoots.create("phrase-bank-qwen-nonprefix-checkpoint-");
-    const source = generateSystemContent();
+    const source = generateReorganizedContentSource();
     const phrases = [source.phrases[0], source.phrases[2]].map((phrase) => ({ ...phrase, contentVersion: "2026.08.3", qualityVersion: "qwen-plus-review-v2" }));
     await writeFile(join(outputDir, "checkpoint-2026.08.3.json"), `${JSON.stringify({ version: "2026.08.3", sourceSha256: sourceSha256(source), phrases })}\n`, "utf8");
     const client = exactSlicePatchClient();
@@ -274,7 +275,7 @@ describe("Qwen content pipeline", () => {
   it("keeps the prior valid checkpoint when an atomic checkpoint write fails", async () => {
     const outputDir = await tempRoots.create("phrase-bank-qwen-atomic-checkpoint-");
     const checkpointPath = join(outputDir, "checkpoint-2026.08.3.json");
-    const prior = { version: "2026.08.3", sourceSha256: sourceSha256(generateSystemContent()), phrases: [] };
+    const prior = { version: "2026.08.3", sourceSha256: sourceSha256(generateReorganizedContentSource()), phrases: [] };
     const priorSerialized = `${JSON.stringify(prior)}\n`;
     await writeFile(checkpointPath, priorSerialized, "utf8");
     const legacyPendingPath = `${checkpointPath}.pending`;
@@ -295,7 +296,7 @@ describe("Qwen content pipeline", () => {
   it("syncs and closes a unique checkpoint temp before retrying a Windows atomic replace", async () => {
     const outputDir = await tempRoots.create("phrase-bank-qwen-windows-retry-");
     const checkpointPath = join(outputDir, "checkpoint-2026.08.3.json");
-    await writeFile(checkpointPath, `${JSON.stringify({ version: "2026.08.3", sourceSha256: sourceSha256(generateSystemContent()), phrases: [] })}\n`, "utf8");
+    await writeFile(checkpointPath, `${JSON.stringify({ version: "2026.08.3", sourceSha256: sourceSha256(generateReorganizedContentSource()), phrases: [] })}\n`, "utf8");
     const openedPaths: string[] = [];
     const sync = vi.fn(async () => undefined);
     const close = vi.fn(async () => undefined);
@@ -423,7 +424,7 @@ describe("Qwen content pipeline", () => {
     const recoveredClient = fakeClient(remaining);
     await expect(runQwenAgent({ client: recoveredClient, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2", outputDir })).rejects.toThrow("审校未通过");
 
-    expect(promptPhrases(vi.mocked(recoveredClient.complete).mock.calls[0][0])[0].id).toBe(generateSystemContent().phrases[40].id);
+    expect(promptPhrases(vi.mocked(recoveredClient.complete).mock.calls[0][0])[0].id).toBe(generateReorganizedContentSource().phrases[40].id);
     expect(JSON.parse(await readFile(join(outputDir, "checkpoint-2026.08.3.json"), "utf8")).phrases).toHaveLength(80);
   }, 20_000);
 
@@ -449,7 +450,7 @@ describe("Qwen content pipeline", () => {
   it("refuses to follow or delete a foreign link swapped over its owned temp before rename", async () => {
     const outputDir = await tempRoots.create("phrase-bank-qwen-temp-swap-");
     const checkpointPath = join(outputDir, "checkpoint-2026.08.3.json");
-    const priorSerialized = `${JSON.stringify({ version: "2026.08.3", sourceSha256: sourceSha256(generateSystemContent()), phrases: [] })}\n`;
+    const priorSerialized = `${JSON.stringify({ version: "2026.08.3", sourceSha256: sourceSha256(generateReorganizedContentSource()), phrases: [] })}\n`;
     const foreignPath = join(outputDir, "foreign-checkpoint.json");
     await writeFile(checkpointPath, priorSerialized, "utf8");
     await writeFile(foreignPath, priorSerialized, "utf8");
@@ -480,7 +481,7 @@ describe("Qwen content pipeline", () => {
   it("revalidates temp ownership after a Windows retry delay before replacing the checkpoint", async () => {
     const outputDir = await tempRoots.create("phrase-bank-qwen-retry-swap-");
     const checkpointPath = join(outputDir, "checkpoint-2026.08.3.json");
-    const priorSerialized = `${JSON.stringify({ version: "2026.08.3", sourceSha256: sourceSha256(generateSystemContent()), phrases: [] })}\n`;
+    const priorSerialized = `${JSON.stringify({ version: "2026.08.3", sourceSha256: sourceSha256(generateReorganizedContentSource()), phrases: [] })}\n`;
     const foreignPath = join(outputDir, "foreign-checkpoint.json");
     await writeFile(checkpointPath, priorSerialized, "utf8");
     await writeFile(foreignPath, priorSerialized, "utf8");
@@ -548,7 +549,7 @@ describe("Qwen content pipeline", () => {
     expect(results).toHaveLength(4);
     expect(results.every(({ status }) => status === "rejected")).toBe(true);
     const checkpoint = JSON.parse(await readFile(join(outputDir, "checkpoint-2026.08.3.json"), "utf8"));
-    expect(checkpoint).toMatchObject({ version: "2026.08.3", sourceSha256: sourceSha256(generateSystemContent()) });
+    expect(checkpoint).toMatchObject({ version: "2026.08.3", sourceSha256: sourceSha256(generateReorganizedContentSource()) });
     expect(checkpoint.phrases).toHaveLength(40);
     expect(await readdir(outputDir)).toEqual(["checkpoint-2026.08.3.json"]);
   });
@@ -569,7 +570,7 @@ describe("Qwen content pipeline", () => {
     const slowSettled = slowRun.catch(() => undefined);
     await slowRenameStarted;
 
-    const source = generateSystemContent();
+    const source = generateReorganizedContentSource();
     const firstForty = source.phrases.slice(0, 40).map((phrase) => ({ ...phrase, contentVersion: "2026.08.3", qualityVersion: "qwen-plus-review-v2" }));
     await writeFile(join(outputDir, "checkpoint-2026.08.3.json"), `${JSON.stringify({ version: "2026.08.3", sourceSha256: sourceSha256(source), phrases: firstForty })}\n`, "utf8");
     let signalFastRename!: () => void;
@@ -621,27 +622,27 @@ describe("Qwen content pipeline", () => {
     await expect(buildQwenCandidate({ client: fakeClient(outputs), version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).rejects.toThrow("字段");
   });
 
-  it("collects a 30-record work batch in complete family slices before one review", async () => {
+  it("collects a 40-record work batch in complete family slices before one review", async () => {
     const client = exactSlicePatchClient();
 
     await expect(buildQwenCandidate({ client, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).resolves.toMatchObject({ version: "2026.08.3" });
-    const workGenerationCalls = vi.mocked(client.complete).mock.calls.filter(([messages]) => messages[1].content.includes("优化 work 类别第 1/12 批"));
-    expect(workGenerationCalls.map(([messages]) => promptPhrases(messages).length)).toEqual([9, 9, 9, 3]);
+    const workGenerationCalls = vi.mocked(client.complete).mock.calls.filter(([messages]) => messages[1].content.includes("创作 work 类别第 1/8 批"));
+    expect(workGenerationCalls.map(([messages]) => promptPhrases(messages).length)).toEqual([8, 8, 8, 8, 8]);
     for (const [messages] of workGenerationCalls) {
       const ids = new Set(promptPhrases(messages).map(({ id }) => id));
-      for (const phrase of generateSystemContent().phrases.filter((phrase) => ids.has(phrase.id))) {
+      for (const phrase of generateReorganizedContentSource().phrases.filter((phrase) => ids.has(phrase.id))) {
         if (phrase.kind === "example") expect(ids).toContain(phrase.parentPhraseId);
       }
     }
     const firstWorkGenerationIndex = vi.mocked(client.complete).mock.calls.indexOf(workGenerationCalls[0]);
-    expect(vi.mocked(client.complete).mock.calls[firstWorkGenerationIndex + 4][0][0].content).toContain("独立审校");
+    expect(vi.mocked(client.complete).mock.calls[firstWorkGenerationIndex + 5][0][0].content).toContain("独立审校");
   });
 
   it("collects a 40-record daily batch in complete family slices", async () => {
     const client = exactSlicePatchClient();
 
     await expect(buildQwenCandidate({ client, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" })).resolves.toMatchObject({ version: "2026.08.3" });
-    const dailyGenerationCalls = vi.mocked(client.complete).mock.calls.filter(([messages]) => messages[1].content.includes("优化 daily 类别第 1/18 批"));
+    const dailyGenerationCalls = vi.mocked(client.complete).mock.calls.filter(([messages]) => messages[1].content.includes("创作 daily 类别第 1/24 批"));
     expect(dailyGenerationCalls.map(([messages]) => promptPhrases(messages).length)).toEqual([8, 8, 8, 8, 8]);
   });
 
@@ -655,11 +656,11 @@ describe("Qwen content pipeline", () => {
     const client = fakeClient(outputs);
 
     const result = await buildQwenCandidate({ client, version: "2026.08.3", generatedAt: "2026-08-10T00:00:00.000Z", qualityVersion: "qwen-plus-review-v2" });
-    const expected = generateSystemContent().phrases.find(({ id }) => id === full.phrases[0].id)!;
-    const nextSlicePrompt = vi.mocked(client.complete).mock.calls.filter(([messages]) => messages[1].content.includes("优化 work 类别第 1/12 批"))[1][0];
-    expect(promptPhrases(nextSlicePrompt).map(({ id }) => id)).toEqual(familySlices(generateSystemContent().phrases.filter(({ categoryId }) => categoryId === "work").slice(0, 30))[1].map(({ id }) => id));
+    const expected = generateReorganizedContentSource().phrases.find(({ id }) => id === full.phrases[0].id)!;
+    const nextSlicePrompt = vi.mocked(client.complete).mock.calls.filter(([messages]) => messages[1].content.includes("创作 work 类别第 1/8 批"))[1][0];
+    expect(promptPhrases(nextSlicePrompt).map(({ id }) => id)).toEqual(familySlices(generateReorganizedContentSource().phrases.filter(({ categoryId }) => categoryId === "work").slice(0, 30))[1].map(({ id }) => id));
     expect(result.phrases.find(({ id }) => id === expected.id)).toMatchObject({ ...expected, english: full.phrases[0].english, chinese: full.phrases[0].chinese, contentVersion: "2026.08.3", qualityVersion: "qwen-plus-review-v2" });
-    expect(result.phrases.map(({ id }) => id)).toEqual(generateSystemContent().phrases.map(({ id }) => id));
+    expect(result.phrases.map(({ id }) => id)).toEqual(generateReorganizedContentSource().phrases.map(({ id }) => id));
   });
 
   it("stops on a repeated already-collected patch without reviewing", async () => {

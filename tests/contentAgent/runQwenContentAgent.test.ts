@@ -7,9 +7,9 @@ import type { QwenClient } from "../../scripts/content-agent/qwenClient";
 const runnerPath = resolve(process.cwd(), "scripts/run-qwen-content-agent.ts");
 
 describe("Qwen content agent runner", () => {
-  it("stamps the v2 review provenance in its exported run options", async () => {
+  it("stamps the v3 review provenance in its exported run options", async () => {
     const source = await readFile(runnerPath, "utf8");
-    expect(source).toContain('export const QWEN_REVIEW_QUALITY_VERSION = "qwen-plus-review-v2"');
+    expect(source).toContain('export const QWEN_REVIEW_QUALITY_VERSION = "qwen-plus-review-v3"');
 
     const runner = await import(`${pathToFileURL(runnerPath).href}?test=${Date.now()}`);
     const client: QwenClient = { complete: vi.fn() };
@@ -19,7 +19,7 @@ describe("Qwen content agent runner", () => {
       client,
       version: "2026.08.3",
       generatedAt: "2026-08-10T00:00:00.000Z",
-      qualityVersion: "qwen-plus-review-v2",
+      qualityVersion: "qwen-plus-review-v3",
     });
   });
 });
