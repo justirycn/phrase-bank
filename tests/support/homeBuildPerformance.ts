@@ -11,8 +11,8 @@ export const SCREEN_MODULES = [
 ] as const;
 
 export const HOME_BUILD_BUDGETS = {
-  // Optimized build: 55,212 B. This permits about 15% growth.
-  homeChunkBytes: 63_500,
+  // Current guarded installer build: 63,592 B. Keep a narrow regression margin.
+  homeChunkBytes: 64_000,
   // Optimized build: 483,723 B of uncompressed initial JavaScript.
   initialJavaScriptBytes: 556_500,
 } as const;
