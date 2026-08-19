@@ -8,7 +8,7 @@ import type { PhraseRepository } from "../../storage/repository";
 type Repository = PhraseRepository;
 const defaultSpeechPreferences: SpeechPreferences = { accent: "en-US", autoSpeak: true };
 
-export default function Settings({ repository, categories, phrases, appPreferences, refresh, setNotice, setError }: { repository: Repository; categories: Category[]; phrases: Phrase[]; appPreferences: AppPreferences; refresh: () => Promise<void>; setNotice: (s: string) => void; setError: (s: string) => void }) {
+export default function Settings({ repository, categories, phrases, appPreferences, refresh, setNotice, setError, username, onLogout }: { repository: Repository; categories: Category[]; phrases: Phrase[]; appPreferences: AppPreferences; refresh: () => Promise<void>; setNotice: (s: string) => void; setError: (s: string) => void; username?: string; onLogout?: () => Promise<void> }) {
   const [name, setName] = useState("");
   const [goalDraft, setGoalDraft] = useState(() => ({
     mastery: String(appPreferences.dailyMasteryGoal),
@@ -84,6 +84,7 @@ export default function Settings({ repository, categories, phrases, appPreferenc
       <fieldset className="accent-options" disabled={speechPreferencesLoading}><legend>朗读口音</legend><label><input type="radio" name="speech-accent" value="en-US" checked={speechPreferences.accent === "en-US"} onChange={() => saveSpeechPreferences({ ...speechPreferences, accent: "en-US" })} /><span>美式英语</span></label><label><input type="radio" name="speech-accent" value="en-GB" checked={speechPreferences.accent === "en-GB"} onChange={() => saveSpeechPreferences({ ...speechPreferences, accent: "en-GB" })} /><span>英式英语</span></label></fieldset>
     </section>
     <section className="settings-card"><div className="section-title"><div><span>数据备份</span><small>BACKUP & RESTORE</small></div></div><div className="warning"><b>数据只保存在当前设备</b><p>更换设备、卸载浏览器或清除网站数据前，请先导出备份。</p></div><button className="settings-action" onClick={exportData}><span><AppIcon name="download" size={20} /></span><div><b>导出备份</b><small>下载完整 JSON 文件</small></div><i><AppIcon name="next" size={20} /></i></button><label className="settings-action"><span><AppIcon name="upload" size={20} /></span><div><b>导入备份</b><small>从以前的备份恢复</small></div><i><AppIcon name="next" size={20} /></i><input type="file" accept="application/json,.json" onChange={(e) => importData(e.target.files?.[0])} hidden /></label></section>
+    {username && onLogout && <section className="settings-card account-settings"><div className="section-title"><div><span>账户</span><small>当前登录账号</small></div></div><div className="account-settings-row"><b>{username}</b><button type="button" onClick={() => { void onLogout(); }}>退出登录</button></div></section>}
     <p className="version">Phrase Bank · 本地版 MVP</p>
   </>;
 }
