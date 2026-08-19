@@ -400,7 +400,7 @@ describe("approved release orchestration", () => {
 
   it("compares canonical Windows worktree roots case-insensitively", async () => {
     const base = releaseExecutor();
-    await expect(runApprovedRelease({ version: VERSION, repositoryRoot: resolve("release-root").toUpperCase(), execute: base.execute, validate: vi.fn(), publish: async () => approvedOutputHashes(), rollback: vi.fn() })).resolves.toBeUndefined();
+    await expect(runApprovedRelease({ version: VERSION, repositoryRoot: resolve("release-root").toUpperCase(), platform: "win32", execute: base.execute, validate: vi.fn(), publish: async () => approvedOutputHashes(), rollback: vi.fn() })).resolves.toBeUndefined();
   });
 
   it("disables a real mutating commit hook and safely restores a linked worktree after a simulated push failure", async () => {
