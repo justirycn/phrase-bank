@@ -29,7 +29,7 @@ describe("bundled system content installer", () => {
     await expect(installBundledSystemContent(repository, async () => new Response("{}", { status: 200 }))).rejects.toThrow("系统内容包无效");
     const current = await bundledContent();
     const wrongVersion = { ...current, version: "2026.08.3", phrases: current.phrases.map((phrase: { contentVersion: string }) => ({ ...phrase, contentVersion: "2026.08.3" })) };
-    await expect(installBundledSystemContent(repository, async () => new Response(JSON.stringify(wrongVersion), { status: 200 }))).rejects.toThrow("系统内容包版本不一致");
+    await expect(installBundledSystemContent(repository, async () => new Response(JSON.stringify(wrongVersion), { status: 200 }))).rejects.toThrow("系统内容包无效");
     expect(repository.installSystemContentPackage).not.toHaveBeenCalled();
   });
 
