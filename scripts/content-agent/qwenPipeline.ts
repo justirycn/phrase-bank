@@ -5,12 +5,11 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import type { SystemContentPackage, SystemContentPhrase } from "../../app/domain/types";
 import { inspectSystemContent } from "./qualityGate";
 import type { QwenClient, QwenMessage } from "./qwenClient";
-import { generateSystemContent } from "./generator";
+import { generateReorganizedContentSource } from "./reorganizedGenerator";
+import { REORGANIZED_CATEGORY_PLAN } from "./reorganizedCatalog";
 import { loadQwenCheckpoint, sourceSha256, validateQwenCheckpoint } from "./qwenCheckpoint";
 
-const CATEGORY_QUOTAS = [
-  ["daily", 180], ["travel", 100], ["work", 120], ["business", 100], ["supply-chain", 70], ["social", 30],
-] as const;
+const CATEGORY_QUOTAS = REORGANIZED_CATEGORY_PLAN.map(({ id, coreQuota }) => [id, coreQuota] as const);
 
 interface PipelineProgress { category: string; stage: "generate" | "review"; completed: number; total: number; }
 interface PipelineOptions { client: QwenClient; version: string; generatedAt: string; qualityVersion: string; sourceContent?: SystemContentPackage; resumePhrases?: SystemContentPhrase[]; onProgress?: (progress: PipelineProgress) => void; onBatchCompleted?: (phrases: SystemContentPhrase[]) => Promise<void>; }
@@ -53,14 +52,14 @@ const TOTAL_REQUESTS = CATEGORY_QUOTAS.reduce((total, [, quota]) => total + Math
 function generationMessages(category: string, chunkIndex: number, chunkCount: number, source: BatchResponse, options: PipelineOptions, feedback?: string): QwenMessage[] {
   return [
     { role: "system", content: "你是英语口语课程内容设计师。只返回 JSON，不要 Markdown。内容必须自然、实用、准确，适合中国成年学习者。" },
-    { role: "user", content: `优化 ${category} 类别第 ${chunkIndex + 1}/${chunkCount} 批。只允许修改 english 和 chinese；英文必须是自然、多样的口语表达；不得整批使用同一种开头或机械重复模式。中文必须完整翻译子场景，包括英文中的引导上下文，并与英文含义完整对应。批次之间不得重复。使用版本 ${options.version} 和质检版本 ${options.qualityVersion}。本次输入恰好包含 ${source.phrases.length} 条扁平短语记录，必须返回恰好 ${source.phrases.length} 条补丁，每个输入 ID 一条。返回紧凑补丁 JSON：'{"phrases":[{"id":"输入ID","english":"优化后的英文","chinese":"优化后的中文"}]}'。每个补丁只允许 id、english、chinese 三个字段，不得包含任何其他字段。${feedback ? `上一轮该切片无效：${feedback}。请修正后只返回本切片的完整补丁。` : ""}输入模板：${JSON.stringify(source)}` },
+    { role: "user", content: `创作 ${category} 类别第 ${chunkIndex + 1}/${chunkCount} 批高频口语。输入是内容 brief，不是可改写的成句。只允许修改 english 和 chinese。核心句必须是当代英语使用者在真实对话中会直接说出的完整短句，优先高频、简洁、可脱口而出，避免元话语、书面腔和生硬场景标签。每个核心的案例必须迁移同一种沟通功能到不同人物或情境，不能只替换句首、语气词或一个名词。批次内外避免近义堆叠，不得整批使用同一种开头。中文要翻译实际英文含义，自然简洁，不要翻译 brief 或 subcategory 名称。使用版本 ${options.version} 和质检版本 ${options.qualityVersion}。本次输入恰好包含 ${source.phrases.length} 条扁平短语记录，必须返回恰好 ${source.phrases.length} 条补丁，每个输入 ID 一条。返回紧凑补丁 JSON：'{"phrases":[{"id":"输入ID","english":"创作后的英文","chinese":"自然中文"}]}'。每个补丁只允许 id、english、chinese 三个字段，不得包含任何其他字段。${feedback ? `上一轮该切片无效：${feedback}。请修正后只返回本切片的完整补丁。` : ""}输入模板：${JSON.stringify(source)}` },
   ];
 }
 
 function reviewMessages(category: string, coreCount: number, batch: BatchResponse, options: PipelineOptions): QwenMessage[] {
   return [
-    { role: "system", content: "你是独立审校员，不继承生成上下文。检查双语完整性、完整翻译子场景、自然口语、实用性、机械重复的表达模式或句首开头、冒犯或危险内容。只返回 JSON。" },
-    { role: "user", content: `逐条独立审校 ${category} 批次中的全部内容（共 ${coreCount} 个核心及其案例）。中文必须完整翻译子场景，包括英文中的引导上下文；检查中英文含义是否完整对应，并识别机械重复模式或整批同一种开头。只可修正 english 和 chinese，版本必须是 ${options.version}，质检版本必须是 ${options.qualityVersion}。不要复述整批；只返回需要修改的条目。若修正后整批可发布，返回 '{"status":"pass","issues":[],"corrections":[{"id":"原ID","english":"修正后的英文","chinese":"修正后的中文"}]}'；无法安全修正才返回 fail。corrections 可为空，ID 必须来自输入。输入：${JSON.stringify(batch)}` },
+    { role: "system", content: "你是独立审校员，负责英语口语课程质量，不继承生成上下文。检查真实口语频率、自然度、场景覆盖、语义重复、案例迁移质量和双语一致性。只返回 JSON。" },
+    { role: "user", content: `逐条独立审校 ${category} 批次中的全部内容（共 ${coreCount} 个核心及其案例）。淘汰英语使用者不常直接说的元话语、书面表达、生硬搭配和为了凑场景而拼接的句子。核心之间不得近义堆叠；同一核心的案例必须换人物或真实情境来迁移沟通功能，不能只换句首、语气或单个名词。中文必须自然并与实际英文完整对应，不得翻译元数据标签。只可修正 english 和 chinese，版本必须是 ${options.version}，质检版本必须是 ${options.qualityVersion}。不要复述整批；只返回需要修改的条目。若修正后整批可发布，返回 '{"status":"pass","issues":[],"corrections":[{"id":"原ID","english":"修正后的英文","chinese":"修正后的中文"}]}'；无法安全修正才返回 fail。corrections 可为空，ID 必须来自输入。输入：${JSON.stringify(batch)}` },
   ];
 }
 
@@ -405,7 +404,7 @@ export async function buildQwenCandidate(options: PipelineOptions): Promise<Syst
   const phrases: SystemContentPhrase[] = [];
   const resumedById = new Map((options.resumePhrases ?? []).map((phrase) => [phrase.id, phrase]));
   let completedRequests = 0;
-  const sourceContent = options.sourceContent ?? generateSystemContent();
+  const sourceContent = options.sourceContent ?? generateReorganizedContentSource();
   const targetSource: SystemContentPackage = {
     ...sourceContent,
     version: options.version,
@@ -460,7 +459,7 @@ export async function runQwenAgent(options: AgentOptions) {
   const createdOutputDirectory = await mkdir(options.outputDir, { recursive: true });
   let outputDirectoryEntryToSync = createdOutputDirectory;
   const checkpointPath = join(options.outputDir, `checkpoint-${options.version}.json`);
-  const sourceContent = options.sourceContent ?? generateSystemContent();
+  const sourceContent = options.sourceContent ?? generateReorganizedContentSource();
   let resumePhrases: SystemContentPhrase[] = [];
   let checkpointGeneratedAt: string | undefined;
   try {
