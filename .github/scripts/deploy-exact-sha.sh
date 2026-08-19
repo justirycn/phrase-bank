@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Kept as LF by .gitattributes because this script is executed by Bash.
 set -euo pipefail
 
 repository_path="${1:-/opt/phrase-bank}"

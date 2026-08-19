@@ -136,6 +136,10 @@ afterEach(async () => {
 });
 
 describe("exact SHA remote deployment script", () => {
+  it("keeps the executable shell script on LF line endings", async () => {
+    expect(await readFile(script, "utf8")).not.toContain("\r");
+  });
+
   it("writes the marker only after the first deployment becomes healthy", async () => {
     const files = await fixture([200, 200]);
     const result = await execute(files);
