@@ -13,6 +13,15 @@ describe("deployment configuration", () => {
     expect(dockerfile).toMatch(/EXPOSE 3000/);
   });
 
+  it("installs Git for build-time integration tests without adding it to the runtime image", async () => {
+    const dockerfile = await text("Dockerfile");
+    const [builder, runtime] = dockerfile.split("FROM node:22-bookworm-slim AS runtime");
+
+    expect(builder).toMatch(/apt-get install -y --no-install-recommends git/);
+    expect(builder.indexOf("apt-get install")).toBeLessThan(builder.indexOf("RUN npm test"));
+    expect(runtime).not.toContain("apt-get install");
+  });
+
   it("publishes HTTP and HTTPS through Caddy and defines app restart and health behavior", async () => {
     const compose = await text("compose.yaml");
     expect(compose).toContain('"80:80"');
