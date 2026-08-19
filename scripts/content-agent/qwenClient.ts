@@ -16,6 +16,7 @@ export interface QwenClientOptions {
   maxAttempts?: number;
   retryDelayMs?: number;
   maxTokens?: number;
+  temperature?: number;
 }
 
 type CompletionResponse = { choices?: Array<{ message?: { content?: unknown } }> };
@@ -39,7 +40,7 @@ export function createQwenClient(options: QwenClientOptions): QwenClient {
           const response = await fetcher(endpoint, {
             method: "POST",
             headers: { Authorization: `Bearer ${options.apiKey}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ model: options.model, messages, stream: false, max_tokens: options.maxTokens ?? 8192 }),
+            body: JSON.stringify({ model: options.model, messages, stream: false, max_tokens: options.maxTokens ?? 8192, temperature: options.temperature ?? 0.2 }),
             signal: controller.signal,
           });
           if (response.status === 401 || response.status === 403) throw new Error("Qwen 认证失败，请检查服务器密钥");

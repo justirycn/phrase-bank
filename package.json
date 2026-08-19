@@ -18,6 +18,8 @@
     "content:generate": "tsx scripts/generate-system-content.ts",
     "content:qwen": "tsx scripts/run-qwen-content-agent.ts",
     "content:qwen:local": "tsx scripts/run-local-qwen-content-agent.ts",
+    "content:repair": "tsx scripts/repair-reorganized-content.ts",
+    "content:audit-scenarios": "tsx scripts/audit-reorganized-scenarios.ts",
     "content:checkpoint:import": "tsx scripts/import-qwen-checkpoint.ts",
     "content:publish": "tsx scripts/publish-qwen-content.ts",
     "content:review": "tsx scripts/run-local-content-review.ts",

@@ -11,6 +11,14 @@ const similarity = (left: Set<string>, right: Set<string>) => {
   return union.size ? [...left].filter((word) => right.has(word)).length / union.size : 0;
 };
 
+export const containsPlaceholderOrBrandIdentifier = (english: string) => (
+  /\[[^\]]+\]/.test(english)
+  || /(?:^|\s)X(?:\s|[?.!,]|$)/.test(english)
+  || /\b(?:PO|SKU)[-_ ]?\d+\b/i.test(english)
+  || /tracking\s*#/i.test(english)
+  || /\b(?:FedEx|UPS|DHL)\b/.test(english)
+);
+
 export function inspectSystemContent(content: SystemContentPackage) {
   const errors: string[] = [];
   try { validateSystemContentPackage(content); } catch (error) { errors.push(error instanceof Error ? error.message : "invalid package"); }
@@ -58,6 +66,8 @@ export function inspectSystemContent(content: SystemContentPackage) {
     if (content.phrases.some(({ english, chinese }) => /^Write one common|^Transfer "/i.test(english) || /创作一句|沟通功能迁移/.test(chinese))) {
       errors.push("content still contains generation briefs");
     }
+    const placeholder = content.phrases.find(({ english }) => containsPlaceholderOrBrandIdentifier(english));
+    if (placeholder) errors.push(`content contains a placeholder or brand-dependent identifier: ${placeholder.id}`);
     const openings = new Map<string, number>();
     for (const phrase of content.phrases) {
       const opening = words(phrase.english).slice(0, 4).join(" ");

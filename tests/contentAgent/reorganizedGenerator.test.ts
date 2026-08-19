@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { generateReorganizedContentSource } from "../../scripts/content-agent/reorganizedGenerator";
 import { REORGANIZED_CORE_QUOTAS, REORGANIZED_SUBCATEGORIES } from "../../scripts/content-agent/reorganizedCatalog";
-import { inspectSystemContent } from "../../scripts/content-agent/qualityGate";
+import { REORGANIZED_SCENARIO_GOALS } from "../../scripts/content-agent/reorganizedScenarioGoals";
+import { containsPlaceholderOrBrandIdentifier, inspectSystemContent } from "../../scripts/content-agent/qualityGate";
 
 describe("reorganized spoken-content source", () => {
   it("allocates 60 percent of core coverage to daily and social speech", () => {
@@ -25,6 +26,8 @@ describe("reorganized spoken-content source", () => {
 
     expect(actual).toEqual(REORGANIZED_SUBCATEGORIES);
     expect(cores.every(({ id }) => id.startsWith("sys-v4-"))).toBe(true);
+    expect(new Set(Object.keys(REORGANIZED_SCENARIO_GOALS))).toEqual(REORGANIZED_SUBCATEGORIES);
+    expect(Object.values(REORGANIZED_SCENARIO_GOALS).every((goals) => goals.length === 10 && new Set(goals).size === 10)).toBe(true);
   });
 
   it("uses complete families with two or three ordered transfer examples", () => {
@@ -48,5 +51,10 @@ describe("reorganized spoken-content source", () => {
     };
 
     expect(inspectSystemContent(candidate).errors).toContain("content still contains generation briefs");
+  });
+
+  it("does not mistake normal follow-ups for the UPS brand", () => {
+    expect(containsPlaceholderOrBrandIdentifier("Thanks for the thoughtful follow-ups.")).toBe(false);
+    expect(containsPlaceholderOrBrandIdentifier("I'll send it through UPS.")).toBe(true);
   });
 });
