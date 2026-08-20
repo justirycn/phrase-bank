@@ -363,7 +363,7 @@ describe("PhraseBankApp", () => {
     expect(screen.queryByRole("button", { name: /三分钟速练/ })).not.toBeInTheDocument();
   });
 
-  it("previews the same rotated system theme and count that learning starts", async () => {
+  it("labels a fresh group as random and starts the advertised number of phrases", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true }); vi.setSystemTime(new Date("2026-08-10T08:00:00.000Z"));
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime }); const repo = new MemoryRepository();
     repo.categories.push(
@@ -379,9 +379,10 @@ describe("PhraseBankApp", () => {
     markDailyTaskComplete(repo);
     render(<PhraseBankApp repository={repo as never} />);
     const entry = await screen.findByRole("button", { name: /自主学习/ });
-    expect(entry).toHaveTextContent("开始学习 4 句 · 工作");
+    expect(entry).toHaveTextContent("开始学习 4 句 · 随机新句");
     await user.click(entry);
-    await vi.waitFor(() => expect(repo.learningSessions[0]).toMatchObject({ themeCategoryId: "work", phraseIds: expect.any(Array) }));
+    await vi.waitFor(() => expect(repo.learningSessions[0]).toMatchObject({ phraseIds: expect.any(Array) }));
+    expect(["daily", "travel", "work"]).toContain(repo.learningSessions[0].themeCategoryId);
     expect(repo.learningSessions[0].phraseIds).toHaveLength(4);
     vi.useRealTimers();
   });

@@ -5,7 +5,7 @@ import { AppIcon } from "./AppIcon";
 import { LearningHeatmap } from "./LearningHeatmap";
 import { WeeklySummary, type WeeklyFocusPhrase } from "./WeeklySummary";
 
-export function TrainingHome({ dailyProgress, dailyMasteryGoal = 10, dailyNewPhraseGoal, newCompletedToday, dailyTask, weeklySummary, focusPhrases, learnedToday, nextLearningCount, themeName, activeLearning, activeRemaining, activeDailyLearning, dailyLearningRemaining, activeReview, reviewRemaining, dueCount, heatmapDays, heatmapError, onRetryHeatmap, onContinue, onStartLearning }: {
+export function TrainingHome({ dailyProgress, dailyMasteryGoal = 10, dailyNewPhraseGoal, newCompletedToday, dailyTask, weeklySummary, focusPhrases, learnedToday, nextLearningCount, activeLearning, activeRemaining, activeDailyLearning, dailyLearningRemaining, activeReview, reviewRemaining, dueCount, heatmapDays, heatmapError, onRetryHeatmap, onContinue, onStartLearning }: {
   streak: TrainingStreak; weeklySummary: WeeklySummaryType;
   dailyProgress: { correct: number; mastered: number; reviewed: number };
   dailyMasteryGoal?: number;
@@ -13,7 +13,7 @@ export function TrainingHome({ dailyProgress, dailyMasteryGoal = 10, dailyNewPhr
   newCompletedToday: number;
   dailyTask: DailyTask;
   focusPhrases?: WeeklyFocusPhrase[];
-  learnedToday: number; nextLearningCount: number; themeName?: string; activeLearning?: boolean; activeRemaining?: number; activeDailyLearning?: boolean; dailyLearningRemaining?: number; activeReview?: boolean; reviewRemaining?: number; dueCount: number;
+  learnedToday: number; nextLearningCount: number; activeLearning?: boolean; activeRemaining?: number; activeDailyLearning?: boolean; dailyLearningRemaining?: number; activeReview?: boolean; reviewRemaining?: number; dueCount: number;
   heatmapDays?: LearningHeatmapDay[]; heatmapError?: string; onRetryHeatmap?: () => void;
   onContinue: () => void;
   onStartLearning: () => void;
@@ -41,7 +41,7 @@ export function TrainingHome({ dailyProgress, dailyMasteryGoal = 10, dailyNewPhr
     : activeLearning
       ? `继续上次 · 剩余 ${activeRemaining ?? nextLearningCount} 句`
       : nextLearningCount > 0
-        ? `开始学习 ${nextLearningCount} 句${themeName ? ` · ${themeName}` : ""}`
+        ? `开始学习 ${nextLearningCount} 句 · 随机新句`
         : "暂无新句，可去句库添加";
 
   return <div className="training-home">

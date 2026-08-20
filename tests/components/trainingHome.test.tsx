@@ -88,7 +88,7 @@ describe("TrainingHome heatmap", () => {
     expect(screen.getByRole("button", { name: /^继续今日任务/ })).toHaveTextContent("今日新句 6 / 10 · 还差 4 句");
 
     const completeTask: DailyTask = { ...learningTask, stage: "complete", newRemaining: 0, nextBatchSize: 0, complete: true, autonomousUnlocked: true };
-    rerender(<TrainingHome {...base} dailyTask={completeTask} newCompletedToday={10} nextLearningCount={5} activeLearning activeRemaining={3} themeName="工作" />);
+    rerender(<TrainingHome {...base} dailyTask={completeTask} newCompletedToday={10} nextLearningCount={5} activeLearning activeRemaining={3} />);
     expect(screen.getByRole("button", { name: /^继续今日任务/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^继续今日任务/ })).toHaveTextContent("今日任务已完成");
     expect(screen.getByRole("button", { name: /^自主学习/ })).toBeEnabled();
@@ -98,11 +98,11 @@ describe("TrainingHome heatmap", () => {
 
   it("uses the unlocked autonomous entry for a fresh preview or empty inventory", () => {
     const completeTask: DailyTask = { ...learningTask, stage: "complete", newRemaining: 0, nextBatchSize: 0, complete: true, autonomousUnlocked: true };
-    const { container, rerender } = render(<TrainingHome {...base} dailyTask={completeTask} newCompletedToday={10} nextLearningCount={5} themeName="工作" />);
+    const { container, rerender } = render(<TrainingHome {...base} dailyTask={completeTask} newCompletedToday={10} nextLearningCount={5} />);
 
     const autonomous = screen.getByRole("button", { name: /^自主学习/ });
     expect(autonomous).toBeEnabled();
-    expect(autonomous).toHaveTextContent("开始学习 5 句 · 工作");
+    expect(autonomous).toHaveTextContent("开始学习 5 句 · 随机新句");
     expect(container.querySelector(".learning-start [data-icon=\"due-review\"]")).not.toBeInTheDocument();
     expect(container.querySelector(".learning-start svg")).toBeInTheDocument();
 
