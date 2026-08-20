@@ -778,6 +778,20 @@ describe("useTrainingSession", () => {
     visibility.mockRestore();
   });
 
+  it("does not upload the same session again immediately before completion", async () => {
+    const store = memoryRepository();
+    const api = services();
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+    const save = store.repository.saveTrainingSession as ReturnType<typeof vi.fn>;
+    const savesBeforeCompletion = save.mock.calls.length;
+
+    await act(() => result.current.finish());
+
+    expect(save).toHaveBeenCalledTimes(savesBeforeCompletion);
+    expect(store.repository.completeTrainingSession).toHaveBeenCalledTimes(1);
+  });
+
   it("retries a failed review with the same id and active-time snapshot", async () => {
     const store = memoryRepository();
     const api = services();

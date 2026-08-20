@@ -5,10 +5,37 @@ export class AuthenticationError extends Error { name = "AuthenticationError"; }
 
 export class CloudPhraseRepository extends LocalPhraseRepository {
   private ready = false;
-  constructor(private fetcher: typeof fetch = fetch) { super(`phrase-cloud-${crypto.randomUUID()}`); }
+  constructor(
+    private fetcher: typeof fetch = fetch,
+    private requestTimeoutMs = 15_000,
+  ) { super(`phrase-cloud-${crypto.randomUUID()}`); }
+
+  private async request(input: RequestInfo | URL, init: RequestInit | undefined, timeoutMessage: string) {
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        controller.abort();
+        reject(new Error(timeoutMessage));
+      }, this.requestTimeoutMs);
+    });
+    try {
+      return await Promise.race([
+        this.fetcher.call(globalThis, input, { ...init, signal: controller.signal }),
+        timeout,
+      ]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
+  }
+
   async initialize() {
     if (this.ready) return;
-    const response = await this.fetcher.call(globalThis, "/api/repository", { credentials: "same-origin" });
+    const response = await this.request(
+      "/api/repository",
+      { credentials: "same-origin" },
+      "云端数据加载超时，请检查网络后重试",
+    );
     if (response.status === 401) throw new AuthenticationError("登录已过期");
     if (!response.ok) throw new Error("云端数据暂时无法加载");
     const { snapshot } = await response.json() as { snapshot?: BackupEnvelope };
@@ -19,7 +46,11 @@ export class CloudPhraseRepository extends LocalPhraseRepository {
   private async sync() {
     const snapshot = await super.exportSnapshot();
     const body = await new Response(new Response(JSON.stringify({ snapshot })).body!.pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
-    const response = await this.fetcher.call(globalThis, "/api/repository", { method: "PUT", headers: { "content-encoding": "gzip" }, body });
+    const response = await this.request(
+      "/api/repository",
+      { method: "PUT", headers: { "content-encoding": "gzip" }, body },
+      "云端数据保存超时，请重试",
+    );
     if (response.status === 401) throw new AuthenticationError("登录已过期");
     if (!response.ok) throw new Error("云端数据保存失败");
   }

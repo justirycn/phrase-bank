@@ -246,4 +246,25 @@ describe("CloudPhraseRepository", () => {
     const repo = new CloudPhraseRepository(async () => Response.json({}, { status: 401 }));
     await expect(repo.initialize()).rejects.toMatchObject({ name: "AuthenticationError" });
   });
+
+  it("stops waiting and allows retry when a cloud upload never responds", async () => {
+    let stalledSignal: AbortSignal | undefined;
+    let uploadAttempts = 0;
+    const fetcher = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        uploadAttempts += 1;
+        if (uploadAttempts > 1) return Promise.resolve(Response.json({ ok: true }));
+        stalledSignal = init.signal ?? undefined;
+        return new Promise<Response>(() => undefined);
+      }
+      return Promise.resolve(Response.json({ snapshot: null }));
+    }) as unknown as typeof fetch;
+    const repo = new CloudPhraseRepository(fetcher, 10);
+    await repo.initialize();
+
+    await expect(repo.saveAppPreferences({ dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 })).rejects.toThrow("云端数据保存超时，请重试");
+    expect(stalledSignal?.aborted).toBe(true);
+    await expect(repo.saveAppPreferences({ dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 })).resolves.toBeUndefined();
+    expect(uploadAttempts).toBe(2);
+  });
 });

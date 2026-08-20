@@ -581,7 +581,7 @@ export function useTrainingSession({
     const completion = (async () => {
       if (session && !session.completedAt) {
         const finishedAt = readNow();
-        await persistSession(true);
+        await sessionWriteRef.current;
         if (!isCurrent(generation)) return;
         await repository.completeTrainingSession(session.id, finishedAt);
         if (!isCurrent(generation)) return;
@@ -598,7 +598,7 @@ export function useTrainingSession({
       }
       throw error;
     }
-  }, [isCurrent, persistSession, readNow, recorder, repository, speech]);
+  }, [isCurrent, readNow, recorder, repository, speech]);
 
   return {
     phase,
