@@ -106,6 +106,14 @@ describe("Qwen content pipeline", () => {
     expect(calls[firstTravelCall][0].map(({ content }) => content).join(" ")).toContain("本次输入恰好包含 8 条扁平短语记录");
     const thirdTravelCall = calls.findIndex(([messages]) => messages[1].content.includes("创作 travel 类别第 3/8 批"));
     expect(calls[thirdTravelCall][0].map(({ content }) => content).join(" ")).toContain("本次输入恰好包含 8 条扁平短语记录");
+    const firstSupplyCall = calls.findIndex(([messages]) => messages[1].content.includes("创作 supply-chain 类别第 1/4 批"));
+    const supplyGenerationPrompt = calls[firstSupplyCall][0].map(({ content }) => content).join(" ");
+    expect(supplyGenerationPrompt).toContain("位于中国");
+    expect(supplyGenerationPrompt).toContain("海外潜在买家或现有客户");
+    expect(supplyGenerationPrompt).toContain("不要把学习者写成海外采购经理");
+    const firstSupplyReviewCall = calls.findIndex(([messages]) => messages[1].content.includes("逐条独立审校 supply-chain 批次"));
+    const firstSupplyReviewPrompt = calls[firstSupplyReviewCall][0].map(({ content }) => content).join(" ");
+    expect(firstSupplyReviewPrompt).toContain("发现角色颠倒时必须修正");
     expect(onProgress).toHaveBeenCalledTimes(120);
     expect(onProgress).toHaveBeenLastCalledWith({ category: "supply-chain", completed: 120, total: 120, stage: "review" });
     expect(result.phrases.every((phrase) => phrase.contentVersion === "2026.08.3")).toBe(true);

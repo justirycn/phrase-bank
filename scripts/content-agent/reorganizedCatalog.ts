@@ -1,4 +1,4 @@
-export const REORGANIZED_CONTENT_VERSION = "2026.08.4";
+export const REORGANIZED_CONTENT_VERSION = "2026.08.5";
 
 export const REORGANIZED_CATEGORY_PLAN = [
   {
@@ -79,11 +79,15 @@ export const REORGANIZED_CATEGORY_PLAN = [
     id: "supply-chain",
     coreQuota: 40,
     threeExampleFamilies: 1,
-    subcategories: ["product-requirements", "samples-and-quality", "orders-and-production", "shipping-and-delivery"],
+    subcategories: [
+      "introducing-products-and-capability", "inquiries-quotes-and-terms",
+      "samples-customization-and-quality", "orders-production-and-shipping",
+    ],
     goals: [
-      "ask for a specification", "confirm a requirement", "request evidence or a sample", "report a mismatch",
-      "ask about timing", "explain a constraint", "request a correction", "offer a practical option",
-      "check status", "confirm completion",
+      "understand the buyer's need", "introduce a relevant product or capability", "offer a suitable option",
+      "explain pricing or order terms", "discuss samples or customization", "set a realistic timeline",
+      "reassure the buyer about quality", "handle a concern or change", "give a clear progress update",
+      "confirm the next commercial step",
     ],
   },
 ] as const;

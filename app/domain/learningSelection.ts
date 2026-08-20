@@ -5,6 +5,7 @@ export interface LearningSelectionOptions {
   themeCategoryId: string;
   target: number;
   reservedPhraseIds?: ReadonlySet<string>;
+  selectionSeed?: string;
 }
 
 export const AUTONOMOUS_LEARNING_GROUP_SIZE = 5;
@@ -68,11 +69,11 @@ export function selectLearningGroup(
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
   const themed = spreadSubcategories(stableOrder(
     eligible.filter((phrase) => !isPersonal(phrase) && phrase.categoryId === options.themeCategoryId),
-    options.date,
+    options.selectionSeed ?? options.date,
   ));
   const fallback = spreadSubcategories(stableOrder(
     eligible.filter((phrase) => !isPersonal(phrase) && phrase.categoryId !== options.themeCategoryId),
-    options.date,
+    options.selectionSeed ?? options.date,
   ));
   return unique([...personal, ...themed, ...fallback]).slice(0, Math.max(0, options.target));
 }
@@ -81,7 +82,7 @@ export function previewLearningGroup(
   phrases: Phrase[],
   states: PhraseLearningState[],
   categoryIds: readonly string[],
-  options: { date: string; target?: number; reservedPhraseIds?: ReadonlySet<string> },
+  options: { date: string; target?: number; reservedPhraseIds?: ReadonlySet<string>; selectionSeed?: string },
 ): LearningGroupPreview {
   const requestedTarget = options.target ?? AUTONOMOUS_LEARNING_GROUP_SIZE;
   const target = Number.isFinite(requestedTarget)
@@ -97,7 +98,9 @@ export function previewLearningGroup(
   const personal = phrases.filter((phrase) => (phrase.origin ?? "personal") === "personal" && (phrase.kind ?? "standalone") === "standalone" && unseen(phrase))
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
   const themeCategoryId = systemThemes.length > 0
-    ? systemThemes[dateRotationIndex(options.date, systemThemes.length)]
+    ? systemThemes[options.selectionSeed
+      ? stableHash(options.selectionSeed) % systemThemes.length
+      : dateRotationIndex(options.date, systemThemes.length)]
     : personal[0]?.categoryId;
   if (!themeCategoryId) return { themeCategoryId, phrases: [] };
   return {
@@ -107,6 +110,7 @@ export function previewLearningGroup(
       themeCategoryId,
       target,
       reservedPhraseIds: options.reservedPhraseIds,
+      selectionSeed: options.selectionSeed,
     }),
   };
 }

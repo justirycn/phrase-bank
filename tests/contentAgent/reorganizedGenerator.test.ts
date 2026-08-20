@@ -30,6 +30,19 @@ describe("reorganized spoken-content source", () => {
     expect(Object.values(REORGANIZED_SCENARIO_GOALS).every((goals) => goals.length === 10 && new Set(goals).size === 10)).toBe(true);
   });
 
+  it("frames supply-chain speech as a China-based seller serving overseas buyers", () => {
+    const supplySubcategories = [...REORGANIZED_SUBCATEGORIES].filter((value) => value.startsWith("supply-chain:"));
+
+    expect(supplySubcategories).toEqual([
+      "supply-chain:introducing-products-and-capability",
+      "supply-chain:inquiries-quotes-and-terms",
+      "supply-chain:samples-customization-and-quality",
+      "supply-chain:orders-production-and-shipping",
+    ]);
+    expect(REORGANIZED_SCENARIO_GOALS["supply-chain:introducing-products-and-capability"]).toContain("explain the seller's China-based sourcing capability");
+    expect(REORGANIZED_SCENARIO_GOALS["supply-chain:inquiries-quotes-and-terms"]).toContain("provide a quotation");
+  });
+
   it("uses complete families with two or three ordered transfer examples", () => {
     const source = generateReorganizedContentSource();
     const cores = source.phrases.filter(({ kind }) => kind === "core");

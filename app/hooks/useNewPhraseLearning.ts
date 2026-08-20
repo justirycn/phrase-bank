@@ -359,10 +359,12 @@ export function useNewPhraseLearning({
         return;
       }
       const target = purpose === "daily" ? Math.min(5, remaining) : 5;
+      const newSessionId = readId();
       const preview = previewLearningGroup(phrases, states, categories.map((item) => item.id), {
         date,
         target,
         reservedPhraseIds: new Set(otherActive?.phraseIds ?? []),
+        selectionSeed: newSessionId,
       });
       const { themeCategoryId } = preview;
       if (!themeCategoryId) {
@@ -377,7 +379,7 @@ export function useNewPhraseLearning({
         return;
       }
       const session: LearningSessionRecord = {
-        id: readId(),
+        id: newSessionId,
         purpose,
         date,
         themeCategoryId,

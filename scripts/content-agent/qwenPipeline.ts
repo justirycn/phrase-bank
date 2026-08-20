@@ -49,17 +49,22 @@ const MAX_VALIDATION_ATTEMPTS = 3;
 const MAX_PATCH_RECORDS_PER_SLICE = 10;
 const TOTAL_REQUESTS = CATEGORY_QUOTAS.reduce((total, [, quota]) => total + Math.ceil(quota / MAX_CORES_PER_REQUEST) * 2, 0);
 
+function categoryDirection(category: string) {
+  if (category !== "supply-chain") return "";
+  return "本类固定角色：学习者是位于中国、能向海外客户提供产品、工厂资源或供应链服务的外贸卖家或供应商，对话对象是海外潜在买家或现有客户。句子应主要由卖方直接说，用于了解需求、介绍产品与供货能力、报价、打样、定制、确认订单、汇报生产、安排质检与出货。可以自然回应买方的问题，但不要把学习者写成海外采购经理向中国工厂下指令，也不要写内部采购、仓储管理或纯工程规格下发。";
+}
+
 function generationMessages(category: string, chunkIndex: number, chunkCount: number, source: BatchResponse, options: PipelineOptions, feedback?: string): QwenMessage[] {
   return [
     { role: "system", content: "你是英语口语课程内容设计师。只返回 JSON，不要 Markdown。内容必须自然、实用、准确，适合中国成年学习者。" },
-    { role: "user", content: `创作 ${category} 类别第 ${chunkIndex + 1}/${chunkCount} 批高频口语。输入是内容 brief，不是可改写的成句。只允许修改 english 和 chinese。核心句必须是当代英语使用者在真实对话中会直接说出的完整短句，优先高频、简洁、可脱口而出，避免元话语、书面腔和生硬场景标签。每个核心的案例必须迁移同一种沟通功能到不同人物或情境，不能只替换句首、语气词或一个名词。批次内外避免近义堆叠，不得整批使用同一种开头。中文要翻译实际英文含义，自然简洁，不要翻译 brief 或 subcategory 名称。使用版本 ${options.version} 和质检版本 ${options.qualityVersion}。本次输入恰好包含 ${source.phrases.length} 条扁平短语记录，必须返回恰好 ${source.phrases.length} 条补丁，每个输入 ID 一条。返回紧凑补丁 JSON：'{"phrases":[{"id":"输入ID","english":"创作后的英文","chinese":"自然中文"}]}'。每个补丁只允许 id、english、chinese 三个字段，不得包含任何其他字段。${feedback ? `上一轮该切片无效：${feedback}。请修正后只返回本切片的完整补丁。` : ""}输入模板：${JSON.stringify(source)}` },
+    { role: "user", content: `创作 ${category} 类别第 ${chunkIndex + 1}/${chunkCount} 批高频口语。${categoryDirection(category)}输入是内容 brief，不是可改写的成句。只允许修改 english 和 chinese。核心句必须是当代英语使用者在真实对话中会直接说出的完整短句，优先高频、简洁、可脱口而出，避免元话语、书面腔和生硬场景标签。每个核心的案例必须迁移同一种沟通功能到不同人物或情境，不能只替换句首、语气词或一个名词。批次内外避免近义堆叠，不得整批使用同一种开头。中文要翻译实际英文含义，自然简洁，不要翻译 brief 或 subcategory 名称。使用版本 ${options.version} 和质检版本 ${options.qualityVersion}。本次输入恰好包含 ${source.phrases.length} 条扁平短语记录，必须返回恰好 ${source.phrases.length} 条补丁，每个输入 ID 一条。返回紧凑补丁 JSON：'{"phrases":[{"id":"输入ID","english":"创作后的英文","chinese":"自然中文"}]}'。每个补丁只允许 id、english、chinese 三个字段，不得包含任何其他字段。${feedback ? `上一轮该切片无效：${feedback}。请修正后只返回本切片的完整补丁。` : ""}输入模板：${JSON.stringify(source)}` },
   ];
 }
 
 function reviewMessages(category: string, coreCount: number, batch: BatchResponse, options: PipelineOptions): QwenMessage[] {
   return [
     { role: "system", content: "你是独立审校员，负责英语口语课程质量，不继承生成上下文。检查真实口语频率、自然度、场景覆盖、语义重复、案例迁移质量和双语一致性。只返回 JSON。" },
-    { role: "user", content: `逐条独立审校 ${category} 批次中的全部内容（共 ${coreCount} 个核心及其案例）。淘汰英语使用者不常直接说的元话语、书面表达、生硬搭配和为了凑场景而拼接的句子。核心之间不得近义堆叠；同一核心的案例必须换人物或真实情境来迁移沟通功能，不能只换句首、语气或单个名词。中文必须自然并与实际英文完整对应，不得翻译元数据标签。只可修正 english 和 chinese，版本必须是 ${options.version}，质检版本必须是 ${options.qualityVersion}。不要复述整批；只返回需要修改的条目。若修正后整批可发布，返回 '{"status":"pass","issues":[],"corrections":[{"id":"原ID","english":"修正后的英文","chinese":"修正后的中文"}]}'；无法安全修正才返回 fail。corrections 可为空，ID 必须来自输入。输入：${JSON.stringify(batch)}` },
+    { role: "user", content: `逐条独立审校 ${category} 批次中的全部内容（共 ${coreCount} 个核心及其案例）。${categoryDirection(category)}发现角色颠倒时必须修正。淘汰英语使用者不常直接说的元话语、书面表达、生硬搭配和为了凑场景而拼接的句子。核心之间不得近义堆叠；同一核心的案例必须换人物或真实情境来迁移沟通功能，不能只换句首、语气或单个名词。中文必须自然并与实际英文完整对应，不得翻译元数据标签。只可修正 english 和 chinese，版本必须是 ${options.version}，质检版本必须是 ${options.qualityVersion}。不要复述整批；只返回需要修改的条目。若修正后整批可发布，返回 '{"status":"pass","issues":[],"corrections":[{"id":"原ID","english":"修正后的英文","chinese":"修正后的中文"}]}'；无法安全修正才返回 fail。corrections 可为空，ID 必须来自输入。输入：${JSON.stringify(batch)}` },
   ];
 }
 

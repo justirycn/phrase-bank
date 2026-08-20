@@ -49,9 +49,12 @@ function messages(key: string, phrases: SystemContentPhrase[], all: SystemConten
     english: phrase.english, chinese: phrase.chinese,
     parentEnglish: phrase.parentPhraseId ? byId.get(phrase.parentPhraseId)?.english : undefined,
   }));
+  const speakerDirection = categoryId === "supply-chain"
+    ? "本类固定角色：学习者是位于中国、向海外客户提供产品、工厂资源或供应链服务的外贸卖家或供应商，对话对象是海外潜在买家或现有客户。每个核心句和案例都必须由卖方说，或是卖方对买方问题的直接回应；不得写成海外采购经理向中国工厂下指令，也不得写内部采购、仓储管理或纯工程规格下发。"
+    : "";
   return [
     { role: "system", content: "你是资深英语口语课程主编，负责整组场景验收，不继承之前的生成或审校上下文。只返回 JSON。" },
-    { role: "user", content: `从头重建场景 ${key} 的 10 个核心句及全部案例，不要默认保留输入原句。subcategory 与 assignedGoal 是强制语义约束：每个核心句必须直接完成自己的 assignedGoal，不能用无关的通用担忧、请求或回应代替；每个 example 必须迁移其父句的同一 assignedGoal 到不同人物或真实情境，不能复述父句。风格必须像普通英语使用者每天会说的朴素短句，优先最常用、最容易脱口而出的表达；严禁文学化比喻、俏皮创作、段子、戏剧化细节、企业宣传腔和不必要的故事。核心句通常控制在 4–18 个英文单词。逐条强制保证：1）仅看句子本身就明显属于对应场景和 assignedGoal；2）开箱即用且语境清楚；3）禁止 [Name]、[task]、X 等占位符，禁止虚构人名、街道、机构、订单号、运单号、金额、精确日期时间和品牌；不得使用星号等 Markdown；4）需要自我介绍时可以说 “I don't think we've met” 等无姓名表达，不得编造 Sam、Jamie 之类名字；5）英文自然简洁，中文完整自然且不得夹杂未翻译英文；6）整组不得近义重复。不要改 ID 或元数据。必须返回场景内每一个输入 ID，不能省略任何条目。返回 {"status":"pass","issues":["重建摘要"],"corrections":[{"id":"每个输入ID","english":"最终英文","chinese":"最终中文"}]}，不得有额外字段；无法形成可发布内容才返回 fail。${feedback ? `上一轮响应未被接受：${feedback}。请据此修正响应并完成本组。` : ""}输入：${JSON.stringify(input)}` },
+    { role: "user", content: `从头重建场景 ${key} 的 10 个核心句及全部案例，不要默认保留输入原句。${speakerDirection}subcategory 与 assignedGoal 是强制语义约束：每个核心句必须直接完成自己的 assignedGoal，不能用无关的通用担忧、请求或回应代替；每个 example 必须迁移其父句的同一 assignedGoal 到不同人物或真实情境，不能复述父句。风格必须像普通英语使用者每天会说的朴素短句，优先最常用、最容易脱口而出的表达；严禁文学化比喻、俏皮创作、段子、戏剧化细节、企业宣传腔和不必要的故事。核心句通常控制在 4–18 个英文单词。逐条强制保证：1）仅看句子本身就明显属于对应场景和 assignedGoal；2）开箱即用且语境清楚；3）禁止 [Name]、[task]、X 等占位符，禁止虚构人名、街道、机构、订单号、运单号、金额、精确日期时间和品牌；不得使用星号等 Markdown；4）需要自我介绍时可以说 “I don't think we've met” 等无姓名表达，不得编造 Sam、Jamie 之类名字；5）英文自然简洁，中文完整自然且不得夹杂未翻译英文；6）整组不得近义重复。不要改 ID 或元数据。必须返回场景内每一个输入 ID，不能省略任何条目。返回 {"status":"pass","issues":["重建摘要"],"corrections":[{"id":"每个输入ID","english":"最终英文","chinese":"最终中文"}]}，不得有额外字段；无法形成可发布内容才返回 fail。${feedback ? `上一轮响应未被接受：${feedback}。请据此修正响应并完成本组。` : ""}输入：${JSON.stringify(input)}` },
   ];
 }
 

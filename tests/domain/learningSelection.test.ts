@@ -178,6 +178,36 @@ describe("selectLearningGroup", () => {
     expect(first).toEqual(second);
   });
 
+  it("uses a fresh selection seed to randomize each new system learning group", () => {
+    const phrases = Array.from({ length: 30 }, (_, index) => phrase(`system-${index}`, {
+      subcategory: `scenario-${index % 8}`,
+    }));
+    const first = selectLearningGroup(phrases, [], { ...options, selectionSeed: "session-one" }).map(({ id }) => id);
+    const repeated = selectLearningGroup(phrases, [], { ...options, selectionSeed: "session-one" }).map(({ id }) => id);
+    const second = selectLearningGroup(phrases, [], { ...options, selectionSeed: "session-two" }).map(({ id }) => id);
+
+    expect(first).toEqual(repeated);
+    expect(second).not.toEqual(first);
+  });
+
+  it("uses the selection seed to choose a random available system theme", () => {
+    const phrases = [
+      phrase("daily", { categoryId: "daily" }),
+      phrase("travel", { categoryId: "travel" }),
+      phrase("work", { categoryId: "work" }),
+    ];
+    const first = previewLearningGroup(phrases, [], ["daily", "travel", "work"], {
+      date: options.date,
+      selectionSeed: "session-one",
+    });
+    const second = previewLearningGroup(phrases, [], ["daily", "travel", "work"], {
+      date: options.date,
+      selectionSeed: "session-two",
+    });
+
+    expect(first.themeCategoryId).not.toBe(second.themeCategoryId);
+  });
+
   it("spreads a five-phrase system group across different subcategories", () => {
     const generated = generateSystemContent().phrases
       .filter(({ categoryId, kind }) => categoryId === "supply-chain" && kind === "core")
