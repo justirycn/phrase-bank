@@ -8,6 +8,7 @@ import { countNewPhrasesOnShanghaiDay, deriveDailyTask } from "./domain/dailyTas
 import { createNewPhrase } from "./domain/review";
 import { previewLearningGroup } from "./domain/learningSelection";
 import { useHomeData } from "./hooks/useHomeData";
+import { loadHomeData, type HomeData } from "./services/homeData";
 import { installBundledSystemContent } from "./services/systemContentInstaller";
 import { LocalPhraseRepository } from "./storage/indexedDbRepository";
 import type { PhraseRepository } from "./storage/repository";
@@ -15,15 +16,6 @@ import type { PhraseRepository } from "./storage/repository";
 type Screen = "home" | "library" | "add" | "learn" | "daily-learn" | "review" | "practice" | "settings";
 type Repository = PhraseRepository;
 type InitializationStatus = "loading" | "ready" | "error";
-type PendingReviewHandoff = {
-  repository: Repository;
-  generation: number;
-  refreshSettled: boolean;
-  startingData: unknown;
-  promise: Promise<void>;
-  resolve: () => void;
-  reject: (reason: Error) => void;
-};
 const defaultRepository = typeof window === "undefined" ? undefined : new LocalPhraseRepository();
 const repositoryReviewKeys = new WeakMap<PhraseRepository, number>();
 let nextRepositoryReviewKey = 1;
@@ -37,6 +29,31 @@ const repositoryReviewKey = (repository: PhraseRepository | undefined) => {
 };
 const shanghaiDate = () => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const shanghaiTimestampDate = (timestamp: string) => { const value = new Date(timestamp); return Number.isNaN(value.getTime()) ? "" : new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(value); };
+
+function deriveDailyTaskState(data: HomeData | undefined, today: string) {
+  const phrases = data?.phrases ?? [];
+  const learningStates = data?.learningStates ?? [];
+  const learningById = new Map(learningStates.map((state) => [state.phraseId, state]));
+  const eligibleDue = (data?.duePhrases ?? []).filter((phrase) => ["learned", "mastered"].includes(learningById.get(phrase.id)?.stage ?? "unseen"));
+  const activeDailyLearningSession = data?.activeDailyLearningSession;
+  const dailyPreview = previewLearningGroup(phrases, learningStates, (data?.categories ?? []).map((category) => category.id), {
+    date: today,
+    target: 5,
+    reservedPhraseIds: new Set(data?.activeAutonomousLearningSession?.phraseIds ?? []),
+  });
+  const phraseIds = new Set(phrases.map((phrase) => phrase.id));
+  const newCompletedToday = countNewPhrasesOnShanghaiDay(data?.events ?? [], today);
+  const dailyGoal = data?.appPreferences.dailyNewPhraseGoal ?? 10;
+  const dailyTask = deriveDailyTask({
+    dueCount: eligibleDue.length,
+    activeReview: Boolean(data?.activeTrainingSession),
+    newCompletedToday,
+    newGoal: dailyGoal,
+    availableNew: activeDailyLearningSession?.phraseIds.filter((id) => phraseIds.has(id)).length ?? dailyPreview.phrases.length,
+    activeDailyLearning: Boolean(activeDailyLearningSession),
+  });
+  return { eligibleDue, newCompletedToday, dailyGoal, dailyTask };
+}
 
 export type AddSaveResult = { status: "saved" } | { status: "partial"; state: PhraseLearningState };
 
@@ -97,15 +114,8 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const setScreen = useCallback((value: Screen) => setScreenState({ repository: repo, value }), [repo]);
   const repositoryRef = useRef(repo);
   const repositoryGenerationRef = useRef(0);
-  const pendingReviewHandoffRef = useRef<PendingReviewHandoff>();
-  const [handoffRevision, setHandoffRevision] = useState(0);
   useLayoutEffect(() => {
     if (repositoryRef.current === repo) return;
-    const pending = pendingReviewHandoffRef.current;
-    if (pending && pending.repository !== repo) {
-      pendingReviewHandoffRef.current = undefined;
-      pending.reject(new Error("复习仓库已更换"));
-    }
     repositoryRef.current = repo;
     repositoryGenerationRef.current += 1;
   }, [repo]);
@@ -115,7 +125,6 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const home = useHomeData(initializationStatus === "ready" ? repo : undefined);
   const phrases = home.data?.phrases ?? [];
   const categories = home.data?.categories ?? [];
-  const due = home.data?.duePhrases ?? [];
   const trainingEvents = home.data?.events ?? [];
   const learningStates = home.data?.learningStates ?? [];
   const activeDailyLearningSession = home.data?.activeDailyLearningSession;
@@ -175,16 +184,10 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const weeklyFocus = weeklySummary.weakPhraseIds.flatMap((id) => { const phrase = phrases.find((item) => item.id === id); return phrase ? [{ id, english: phrase.english, chinese: phrase.chinese, categoryName: categoryNames.get(phrase.categoryId) ?? "未分类" }] : []; });
   const newIntroducedToday = new Set(trainingEvents.filter((event) => event.source === "new" && shanghaiTimestampDate(event.occurredAt) === today).map((event) => event.phraseId)).size;
   const learnedToday = new Set(learningStates.filter((state) => state.firstTestedAt && shanghaiTimestampDate(state.firstTestedAt) === today).map((state) => state.phraseId)).size;
-  const learningById = new Map(learningStates.map((state) => [state.phraseId, state]));
-  const eligibleDue = due.filter((phrase) => ["learned", "mastered"].includes(learningById.get(phrase.id)?.stage ?? "unseen"));
+  const { eligibleDue, newCompletedToday, dailyGoal, dailyTask } = deriveDailyTaskState(home.data, today);
   const preview = previewLearningGroup(phrases, learningStates, categories.map((category) => category.id), {
     date: today,
     reservedPhraseIds: new Set(activeDailyLearningSession?.phraseIds ?? []),
-  });
-  const dailyPreview = previewLearningGroup(phrases, learningStates, categories.map((category) => category.id), {
-    date: today,
-    target: 5,
-    reservedPhraseIds: new Set(activeAutonomousLearningSession?.phraseIds ?? []),
   });
   const nextThemeId = activeAutonomousLearningSession?.themeCategoryId ?? preview.themeCategoryId;
   const phraseIds = new Set(phrases.map((phrase) => phrase.id));
@@ -197,16 +200,6 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const activeReviewRemaining = activeTrainingSession
     ? activeTrainingSession.phraseIds.slice(activeTrainingSession.currentIndex).filter((id) => phraseIds.has(id)).length
     : 0;
-  const newCompletedToday = countNewPhrasesOnShanghaiDay(trainingEvents, today);
-  const dailyGoal = home.data?.appPreferences.dailyNewPhraseGoal ?? 10;
-  const dailyTask = deriveDailyTask({
-    dueCount: eligibleDue.length,
-    activeReview: Boolean(activeTrainingSession),
-    newCompletedToday,
-    newGoal: dailyGoal,
-    availableNew: activeDailyLearningSession?.phraseIds.filter((id) => phraseIds.has(id)).length ?? dailyPreview.phrases.length,
-    activeDailyLearning: Boolean(activeDailyLearningSession),
-  });
   const continueToday = () => {
     if (dailyTask.stage === "review") return startTraining("standard");
     if (dailyTask.stage === "learning") return go("daily-learn");
@@ -214,64 +207,18 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const afterReviewComplete = async (completedRepository: Repository) => {
     const generation = repositoryGenerationRef.current;
     if (repositoryRef.current !== completedRepository) throw new Error("复习仓库已更换");
-    const existing = pendingReviewHandoffRef.current;
-    if (existing?.repository === completedRepository && existing.generation === generation) return existing.promise;
-    let resolve!: () => void;
-    let reject!: (reason: Error) => void;
-    const promise = new Promise<void>((accept, decline) => { resolve = accept; reject = decline; });
-    const pending: PendingReviewHandoff = { repository: completedRepository, generation, refreshSettled: false, startingData: home.data, promise, resolve, reject };
-    pendingReviewHandoffRef.current = pending;
-    setHandoffRevision((value) => value + 1);
-    void refresh().then(() => {
-      if (pendingReviewHandoffRef.current !== pending) return;
-      if (repositoryRef.current !== completedRepository || repositoryGenerationRef.current !== generation) {
-        pendingReviewHandoffRef.current = undefined;
-        reject(new Error("复习仓库已更换"));
-        return;
-      }
-      pending.refreshSettled = true;
-      setHandoffRevision((value) => value + 1);
-    }, () => {
-      if (pendingReviewHandoffRef.current !== pending) return;
-      pendingReviewHandoffRef.current = undefined;
-      reject(new Error("复习数据刷新失败"));
-      setHandoffRevision((value) => value + 1);
-    });
-    return promise;
+    const latest = await loadHomeData(completedRepository);
+    if (repositoryRef.current !== completedRepository || repositoryGenerationRef.current !== generation) throw new Error("复习仓库已更换");
+    const stage = deriveDailyTaskState(latest, shanghaiDate()).dailyTask.stage;
+    void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。"));
+    if (stage === "review") {
+      setTrainingMode("standard");
+      setTrainingRun((run) => run + 1);
+      go("practice");
+    } else {
+      go(stage === "learning" ? "daily-learn" : "home");
+    }
   };
-
-  useEffect(() => {
-    const pending = pendingReviewHandoffRef.current;
-    if (!pending?.refreshSettled) return;
-    if (pending.repository !== repo || pending.generation !== repositoryGenerationRef.current) {
-      pendingReviewHandoffRef.current = undefined;
-      pending.reject(new Error("复习仓库已更换"));
-      return;
-    }
-    if (home.loading) return;
-    if (home.error || home.readyRepository !== repo || !home.data) {
-      pendingReviewHandoffRef.current = undefined;
-      pending.reject(new Error("复习数据刷新失败"));
-      return;
-    }
-    if (home.data === pending.startingData) return;
-    pendingReviewHandoffRef.current = undefined;
-    const stage = dailyTask.stage;
-    queueMicrotask(() => {
-      if (repositoryRef.current !== pending.repository || repositoryGenerationRef.current !== pending.generation) {
-        pending.reject(new Error("复习仓库已更换"));
-        return;
-      }
-      if (stage === "review") {
-        setTrainingMode("standard");
-        setTrainingRun((run) => run + 1);
-        go("practice");
-      } else {
-        go(stage === "learning" ? "daily-learn" : "home");
-      }
-      pending.resolve();
-    });
-  }, [dailyTask.stage, go, handoffRevision, home.data, home.error, home.loading, home.readyRepository, repo]);
 
   if (screen === "home" && initializationStatus === "loading") return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
   if (screen === "home" && initializationStatus === "error") return <main className="loading"><p role="alert">本地数据暂时无法打开，请刷新后重试。{initialization.message}</p><button onClick={() => { setInitialization({ repository: repo, status: "loading", attempt: initializationAttempt + 1 }); }}>重试</button></main>;

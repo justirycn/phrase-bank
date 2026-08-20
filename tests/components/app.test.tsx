@@ -296,6 +296,35 @@ describe("PhraseBankApp", () => {
     expect(await screen.findByText("今日任务 · 新句学习")).toBeVisible();
   });
 
+  it("continues to new-phrase learning even when the background home refresh is still pending", async () => {
+    const user = userEvent.setup();
+    const repo = new MemoryRepository();
+    repo.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 1 };
+    repo.phrases = [
+      makePhrase({ id: "due-before-handoff", chinese: "交接前旧句" }),
+      makePhrase({ id: "new-after-handoff", english: "Fresh after review", nextReviewAt: "2099-01-01T00:00:00.000Z", origin: "system", kind: "core" }),
+    ];
+    repo.learningStates = [learnedState("due-before-handoff")];
+    render(<PhraseBankApp repository={repo as never} />);
+
+    await user.click(await screen.findByRole("button", { name: /继续今日任务/ }));
+    await screen.findByText("交接前旧句");
+    let resolveBackground!: (phrases: Phrase[]) => void;
+    let readsAfterStart = 0;
+    repo.listPhrases = vi.fn(async () => {
+      readsAfterStart += 1;
+      if (readsAfterStart === 2) return new Promise<Phrase[]>((resolve) => { resolveBackground = resolve; });
+      return [...repo.phrases];
+    });
+
+    await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
+    await user.click(screen.getByRole("button", { name: /掌握/ }));
+
+    expect(await screen.findByText("今日任务 · 新句学习")).toBeVisible();
+    expect(screen.getByText("Fresh after review")).toBeVisible();
+    resolveBackground([...repo.phrases]);
+  });
+
   it("opens a learned phrase scheduled later on the same Shanghai day", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date("2026-08-14T02:00:00.000Z"));
