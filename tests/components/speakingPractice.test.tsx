@@ -175,7 +175,7 @@ describe("PracticeSession completion", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "回到首页" }));
     await vi.waitFor(() => expect(onHome).toHaveBeenCalledOnce());
     expect(onComplete).not.toHaveBeenCalled();
-    expect(finish).toHaveBeenCalledOnce();
+    expect(finish).toHaveBeenCalledTimes(2);
   });
 
   it("retries a failed automatic finish toward the explicit again action", async () => {
@@ -205,9 +205,13 @@ describe("PracticeSession completion", () => {
   });
 
   it("keeps completion actions usable while the automatic handoff is still pending", async () => {
-    let resolveHandoff!: () => void;
     const finish = vi.fn(async () => undefined);
-    const onComplete = vi.fn(() => new Promise<void>((resolve) => { resolveHandoff = resolve; }));
+    let handoffSignal: AbortSignal | undefined;
+    const onComplete = vi.fn((signal: AbortSignal) => new Promise<void>((resolve) => {
+      handoffSignal = signal;
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    }));
+    const onAgain = vi.fn(async () => undefined);
     trainingHook.mockReturnValue(controller({ phase: "complete", current: undefined, finish }));
     const { default: PracticeSession } = await import("../../app/components/screens/PracticeScreen");
     render(<PracticeSession
@@ -217,7 +221,7 @@ describe("PracticeSession completion", () => {
       completionKey="repo-a-review-4"
       onComplete={onComplete}
       onHome={vi.fn()}
-      onAgain={vi.fn()}
+      onAgain={onAgain}
       setError={vi.fn()}
     />);
 
@@ -227,7 +231,9 @@ describe("PracticeSession completion", () => {
     expect(screen.getByRole("button", { name: "回到首页" })).toBeVisible();
     expect(screen.getByRole("button", { name: "再练一组" })).toBeVisible();
     expect(screen.queryByRole("status", { name: "正在保存并继续今日任务" })).not.toBeInTheDocument();
-    resolveHandoff();
+    await userEvent.setup().click(screen.getByRole("button", { name: "再练一组" }));
+    expect(handoffSignal?.aborted).toBe(true);
+    expect(onAgain).toHaveBeenCalledOnce();
   });
 
   it("returns home immediately while automatic completion is stalled", async () => {

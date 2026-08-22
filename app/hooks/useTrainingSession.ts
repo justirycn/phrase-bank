@@ -365,6 +365,15 @@ export function useTrainingSession({
         rotationCursor: completedToday.length,
         practicedTodayBucketCounts: { personal: practicedPersonal.size, due: practicedDue.size, systemNew: practicedSystemNew.size },
       });
+      if (selected.length === 0) {
+        sessionRef.current = undefined;
+        eventActiveBaseRef.current = 0;
+        setActiveSeconds(0);
+        replaceQueue([]);
+        replaceIndex(0);
+        setPhase("complete");
+        return;
+      }
       const session: TrainingSessionRecord = {
         id: createId(),
         mode,
@@ -380,7 +389,6 @@ export function useTrainingSession({
       setActiveSeconds(0);
       replaceQueue(selected);
       replaceIndex(0);
-      if (selected.length === 0) setPhase("complete");
       await persistSession();
     })().catch(() => {
       if (cancelled || !isCurrent(generation)) return;

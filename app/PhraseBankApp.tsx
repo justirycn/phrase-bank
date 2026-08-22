@@ -203,11 +203,11 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
     if (dailyTask.stage === "review") return startTraining("standard");
     if (dailyTask.stage === "learning") return go("daily-learn");
   };
-  const afterReviewComplete = async (completedRepository: Repository) => {
+  const afterReviewComplete = async (completedRepository: Repository, signal: AbortSignal) => {
     const generation = repositoryGenerationRef.current;
-    if (repositoryRef.current !== completedRepository) throw new Error("复习仓库已更换");
+    if (signal.aborted || repositoryRef.current !== completedRepository) return;
     const latest = await loadHomeDataForReviewHandoff(completedRepository);
-    if (repositoryRef.current !== completedRepository || repositoryGenerationRef.current !== generation) throw new Error("复习仓库已更换");
+    if (signal.aborted || repositoryRef.current !== completedRepository || repositoryGenerationRef.current !== generation) return;
     if (!latest) {
       setError("今日任务刷新较慢，已先返回首页。");
       go("home");
@@ -259,7 +259,7 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
           );
         }} />
         : <ScreenLoading screen="review" />)}
-      {screen === "practice" && repo && <PracticeSession key={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} completionKey={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} onComplete={() => afterReviewComplete(repo)} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => { setTrainingRun((run) => run + 1); void refresh().catch(() => setError("本地数据暂时无法刷新，请稍后再试。")); }} setError={setError} />}
+      {screen === "practice" && repo && <PracticeSession key={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} completionKey={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} onComplete={(signal) => afterReviewComplete(repo, signal)} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => startTraining("quick")} setError={setError} />}
       {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} appPreferences={home.data?.appPreferences ?? { dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 }} refresh={refresh} setNotice={setNotice} setError={setError} username={username} onLogout={onLogout} />}</Suspense></ScreenLoadBoundary>
     </main>
     {screen !== "learn" && screen !== "daily-learn" && screen !== "review" && screen !== "practice" && <nav className="bottom-nav" aria-label="主导航">

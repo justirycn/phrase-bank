@@ -8,7 +8,6 @@ import type { PhraseRepository } from "../../storage/repository";
 import { screenSpeech } from "./screenSpeech";
 const defaultRecorder = new TemporaryRecorder();
 const COMPLETION_HANDOFF_TIMEOUT_MS = 10_000;
-type CompletionIntent = { key: "home" | "again"; run: () => void | Promise<void> };
 
 function withCompletionHandoffFallback(operation: Promise<void>, fallback: () => void | Promise<void>) {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -24,7 +23,7 @@ function withCompletionHandoffFallback(operation: Promise<void>, fallback: () =>
 
 export default function PracticeSession({ repository, mode, newIntroducedToday, completionKey, onComplete, onHome, onAgain, setError }: {
   repository: PhraseRepository; mode: TrainingMode;
-  newIntroducedToday: number; completionKey: string; onComplete: () => Promise<void>;
+  newIntroducedToday: number; completionKey: string; onComplete: (signal: AbortSignal) => Promise<void>;
   onHome: () => Promise<void>; onAgain: () => void | Promise<void>; setError: (message: string) => void;
 }) {
   const controller = useTrainingSession({ repository, mode, speech: screenSpeech, recorder: defaultRecorder, newIntroducedToday });
@@ -32,33 +31,31 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
   const generationRef = useRef(0);
   const completedKeysRef = useRef(new Set<string>());
   const pendingRef = useRef<{ key: string; promise: Promise<void> }>();
-  const intentRef = useRef<CompletionIntent>();
+  const handoffControllerRef = useRef<AbortController>();
 
   useEffect(() => {
     generationRef.current += 1;
-    return () => { generationRef.current += 1; };
+    return () => {
+      generationRef.current += 1;
+      handoffControllerRef.current?.abort();
+    };
   }, [completionKey, repository]);
 
-  const complete = useCallback((intent?: CompletionIntent) => {
-    if (intent) intentRef.current = intent;
-    if (completedKeysRef.current.has(completionKey)) {
-      const selected = intentRef.current;
-      intentRef.current = undefined;
-      return Promise.resolve(selected?.run()).then(() => undefined);
-    }
+  const complete = useCallback(() => {
+    if (completedKeysRef.current.has(completionKey)) return Promise.resolve();
     if (pendingRef.current?.key === completionKey) return pendingRef.current.promise;
     const generation = generationRef.current;
+    const controller = new AbortController();
+    handoffControllerRef.current = controller;
     const handoff = (async () => {
       await finish();
-      if (generation !== generationRef.current) return;
-      const selected = intentRef.current;
-      intentRef.current = undefined;
-      if (selected) await selected.run();
-      else await onComplete();
+      if (generation !== generationRef.current || controller.signal.aborted) return;
+      await onComplete(controller.signal);
       if (generation === generationRef.current) completedKeysRef.current.add(completionKey);
     })();
     const promise = withCompletionHandoffFallback(handoff, async () => {
       if (generation !== generationRef.current) return;
+      controller.abort();
       setError("保存仍在后台进行，已先返回首页，你可以继续使用。");
       await onHome();
     });
@@ -69,6 +66,7 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
       }
     }).finally(() => {
       if (pendingRef.current?.promise === promise) pendingRef.current = undefined;
+      if (handoffControllerRef.current === controller) handoffControllerRef.current = undefined;
     });
     return promise;
   }, [completionKey, finish, onComplete, onHome, setError]);
@@ -82,10 +80,16 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
   const finishAnd = (next: () => void | Promise<void>) => {
     void finish().then(next).catch(() => setError("训练进度暂时无法保存，请稍后重试。"));
   };
+  const leaveCompleted = (next: () => void | Promise<void>) => {
+    handoffControllerRef.current?.abort();
+    generationRef.current += 1;
+    void finish().catch(() => undefined);
+    void Promise.resolve(next()).catch(() => setError("暂时无法打开下一步，请重试。"));
+  };
   return <SpeakingPractice
     controller={controller}
     onPause={() => void onHome()}
-    onHome={() => { if (phase === "complete" || controller.initializationError) void onHome(); else finishAnd(onHome); }}
-    onAgain={() => { if (phase === "complete") void complete({ key: "again", run: onAgain }); else if (controller.initializationError) void onAgain(); else finishAnd(onAgain); }}
+    onHome={() => { if (phase === "complete") leaveCompleted(onHome); else if (controller.initializationError) void onHome(); else finishAnd(onHome); }}
+    onAgain={() => { if (phase === "complete") leaveCompleted(onAgain); else if (controller.initializationError) void onAgain(); else finishAnd(onAgain); }}
   />;
 }

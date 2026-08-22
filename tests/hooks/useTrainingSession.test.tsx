@@ -88,6 +88,23 @@ describe("useTrainingSession", () => {
     expect(result.current.phase).toBe("prompt");
   });
 
+  it("does not create a self-sustaining empty session when no phrase is eligible", async () => {
+    const items = [phrase("unseen")];
+    const store = memoryRepository(items, [{
+      phraseId: "unseen", stage: "unseen", consecutiveGood: 0, masteredDates: [],
+      updatedAt: "2026-08-08T00:00:00.000Z",
+    }]);
+    const { result } = renderHook(() => useTrainingSession({
+      repository: store.repository, mode: "standard", ...services(),
+    }));
+
+    await waitFor(() => expect(result.current.phase).toBe("complete"));
+
+    expect(result.current.total).toBe(0);
+    expect(store.repository.saveTrainingSession).not.toHaveBeenCalled();
+    expect(store.sessions).toHaveLength(0);
+  });
+
   it("rotates a second quick group away from phrases already practiced today", async () => {
     const store = memoryRepository();
     const firstApi = services();
@@ -245,10 +262,11 @@ describe("useTrainingSession", () => {
       session("completed-z", "2026-08-09T02:30:00.000Z", "2026-08-09T04:00:00.000Z", items.map(({ id }) => id)),
     ]);
 
-    renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...services(), seed: "recent-session" }));
-    await waitFor(() => expect(store.getSession()?.id).not.toBe("completed-z"));
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...services(), seed: "recent-session" }));
+    await waitFor(() => expect(result.current.phase).toBe("complete"));
 
-    expect(store.getSession()?.phraseIds).toEqual([]);
+    expect(store.repository.saveTrainingSession).not.toHaveBeenCalled();
+    expect(await store.repository.getActiveTrainingSession()).toBeUndefined();
   });
 
   it.each([
