@@ -41,6 +41,7 @@ export interface UseTrainingSessionOptions {
 const IDLE_LIMIT_MS = 60_000;
 const CHECKPOINT_SECONDS = 30;
 const TRAINING_COMPLETION_TIMEOUT_MS = 20_000;
+const SESSION_WRITE_DRAIN_TIMEOUT_MS = 2_000;
 const systemNow = () => new Date();
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const trainingSources = new Set<TrainingSource>(["due", "weak", "mature", "new", "requeue"]);
@@ -84,6 +85,16 @@ function withCompletionTimeout(operation: Promise<void>) {
     );
   });
   return Promise.race([operation, timeout]).finally(() => {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  });
+}
+
+function waitForPendingSessionWrite(operation: Promise<void>) {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timeoutId = setTimeout(resolve, SESSION_WRITE_DRAIN_TIMEOUT_MS);
+  });
+  return Promise.race([operation.catch(() => undefined), timeout]).finally(() => {
     if (timeoutId !== undefined) clearTimeout(timeoutId);
   });
 }
@@ -262,6 +273,7 @@ export function useTrainingSession({
         replaceIndex(normalizedIndex);
         if (normalizedIndex >= restored.length) {
           setPhase("complete");
+          return;
         } else {
           const currentPhraseId = restored[normalizedIndex]?.phrase.id;
           const priorOccurrences = active.phraseIds
@@ -595,7 +607,7 @@ export function useTrainingSession({
     const completion = withCompletionTimeout((async () => {
       if (session && !session.completedAt) {
         const finishedAt = readNow();
-        await sessionWriteRef.current;
+        await waitForPendingSessionWrite(sessionWriteRef.current);
         if (!isCurrent(generation)) return;
         await repository.completeTrainingSession(session.id, finishedAt);
         if (!isCurrent(generation)) return;

@@ -778,6 +778,45 @@ describe("useTrainingSession", () => {
     visibility.mockRestore();
   });
 
+  it("completes after a pending checkpoint stops responding", async () => {
+    const store = memoryRepository();
+    const api = services();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+    const save = store.repository.saveTrainingSession as ReturnType<typeof vi.fn>;
+    save.mockImplementationOnce(() => new Promise<void>(() => undefined));
+    act(() => window.dispatchEvent(new Event("pointerdown")));
+    await act(async () => { await vi.advanceTimersByTimeAsync(31_000); });
+
+    const finishing = result.current.finish();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    await act(() => finishing);
+
+    expect(store.repository.completeTrainingSession).toHaveBeenCalledTimes(1);
+    expect(store.getSession()?.completedAt).toBeDefined();
+    visibility.mockRestore();
+  });
+
+  it("does not resave an exhausted restored session before completing it", async () => {
+    const items = [phrase("a"), phrase("b"), phrase("c")];
+    const store = memoryRepository(items, items.map((item) => learnedState(item.id)), [{
+      id: "exhausted", mode: "quick", startedAt: "2026-08-09T07:00:00.000Z",
+      updatedAt: "2026-08-09T07:30:00.000Z", phraseIds: ["a", "b", "c"],
+      sources: ["due", "due", "due"], currentIndex: 3, activeSeconds: 30,
+    }]);
+    const save = store.repository.saveTrainingSession as ReturnType<typeof vi.fn>;
+    save.mockImplementation(() => new Promise<void>(() => undefined));
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...services() }));
+    await waitFor(() => expect(result.current.phase).toBe("complete"));
+
+    await act(() => result.current.finish());
+
+    expect(save).not.toHaveBeenCalled();
+    expect(store.repository.completeTrainingSession).toHaveBeenCalledWith("exhausted", expect.any(Date));
+    expect(store.getSession()?.completedAt).toBeDefined();
+  });
+
   it("does not upload the same session again immediately before completion", async () => {
     const store = memoryRepository();
     const api = services();
