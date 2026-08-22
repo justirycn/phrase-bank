@@ -45,6 +45,9 @@ describe("HTTPS reverse proxy", () => {
     expect(healthCheck).toContain('[ "$local_status" = 200 ] && [ "$public_status" = 200 ]');
     expect(remoteScript.match(/if deployment_is_healthy; then/g)).toHaveLength(2);
     expect(retryLoop).toMatch(/if deployment_is_healthy; then[\s\S]*?exit 0/);
+    expect(remoteScript).toMatch(
+      /docker compose up -d[\s\S]*docker compose exec -T caddy caddy validate --config \/etc\/caddy\/Caddyfile --adapter caddyfile[\s\S]*docker compose exec -T caddy caddy reload --config \/etc\/caddy\/Caddyfile --adapter caddyfile[\s\S]*for attempt/,
+    );
     expect(remoteScript).toContain("docker compose logs --tail=100 phrase-bank caddy");
     expect(remoteScript).not.toContain("http://127.0.0.1/");
   });

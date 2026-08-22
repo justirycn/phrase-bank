@@ -77,6 +77,8 @@ git checkout --detach "$DEPLOY_SHA"
 test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
 docker compose build
 docker compose up -d
+docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 
 for attempt in $(seq 1 "$health_attempts"); do
   if deployment_is_healthy; then
