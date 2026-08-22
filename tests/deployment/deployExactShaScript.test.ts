@@ -146,7 +146,7 @@ describe("exact SHA remote deployment script", () => {
     expect(result.code, JSON.stringify(result)).toBe(0);
     expect(await readFile(files.marker, "utf8")).toBe(`${sha}\n`);
     expect(await readFile(files.log, "utf8")).toMatch(
-      /docker compose build[\s\S]*docker compose up -d[\s\S]*docker compose exec -T caddy caddy validate --config \/etc\/caddy\/Caddyfile --adapter caddyfile[\s\S]*docker compose exec -T caddy caddy reload --config \/etc\/caddy\/Caddyfile --adapter caddyfile[\s\S]*curl 200[\s\S]*curl 200/u,
+      /docker compose build[\s\S]*docker compose up -d[\s\S]*docker compose up -d --no-deps --force-recreate caddy[\s\S]*docker compose exec -T caddy caddy validate --config \/etc\/caddy\/Caddyfile --adapter caddyfile[\s\S]*docker compose exec -T caddy caddy reload --config \/etc\/caddy\/Caddyfile --adapter caddyfile[\s\S]*curl 200[\s\S]*curl 200/u,
     );
   }, 30_000);
 
@@ -164,6 +164,9 @@ describe("exact SHA remote deployment script", () => {
     const result = await execute(files);
     expect(result).toMatchObject({ code: 0 });
     expect(await readFile(files.log, "utf8")).toContain("docker compose up -d");
+    expect(await readFile(files.log, "utf8")).toContain(
+      "docker compose up -d --no-deps --force-recreate caddy",
+    );
     expect(await readFile(files.log, "utf8")).toContain(
       "docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile",
     );
