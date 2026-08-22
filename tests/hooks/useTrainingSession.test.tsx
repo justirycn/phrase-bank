@@ -792,6 +792,23 @@ describe("useTrainingSession", () => {
     expect(store.repository.completeTrainingSession).toHaveBeenCalledTimes(1);
   });
 
+  it("releases the completion screen when final persistence never settles", async () => {
+    const store = memoryRepository();
+    const api = services();
+    const complete = store.repository.completeTrainingSession as ReturnType<typeof vi.fn>;
+    complete.mockImplementationOnce(() => new Promise<void>(() => undefined));
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...api }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+
+    const finishing = result.current.finish();
+    const timedOut = expect(finishing).rejects.toThrow("训练完成保存超时，请重试");
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    await timedOut;
+    await expect(result.current.finish()).resolves.toBeUndefined();
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
   it("retries a failed review with the same id and active-time snapshot", async () => {
     const store = memoryRepository();
     const api = services();

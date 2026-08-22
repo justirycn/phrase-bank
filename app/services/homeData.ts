@@ -117,4 +117,18 @@ export async function loadHomeData(repository: PhraseRepository, now = new Date(
   };
 }
 
+export async function loadHomeDataForReviewHandoff(
+  repository: PhraseRepository,
+  now = new Date(),
+  timeoutMs = 8_000,
+) {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timeoutId = setTimeout(() => resolve(undefined), timeoutMs);
+  });
+  return Promise.race([loadHomeData(repository, now), timeout]).finally(() => {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  });
+}
+
 export type HomeData = Awaited<ReturnType<typeof loadHomeData>>;

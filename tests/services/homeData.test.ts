@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PhraseRepository } from "../../app/storage/repository";
-import { loadHomeData, shanghaiHeatmapRange } from "../../app/services/homeData";
+import { loadHomeData, loadHomeDataForReviewHandoff, shanghaiHeatmapRange } from "../../app/services/homeData";
 
 function repository(overrides: Partial<PhraseRepository> = {}): PhraseRepository {
   return {
@@ -27,6 +27,12 @@ describe("shanghaiHeatmapRange", () => {
 });
 
 describe("loadHomeData", () => {
+  it("stops waiting for a stalled review handoff read", async () => {
+    const repo = repository({ listPhrases: vi.fn(() => new Promise(() => undefined)) });
+
+    await expect(loadHomeDataForReviewHandoff(repo, new Date("2026-08-11T08:00:00.000Z"), 10)).resolves.toBeUndefined();
+  });
+
   it("loads bounded home data once per repository method without exporting a snapshot", async () => {
     const repo = repository();
     const now = new Date("2026-08-11T08:00:00.000Z");

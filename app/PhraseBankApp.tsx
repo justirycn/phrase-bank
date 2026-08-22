@@ -8,7 +8,7 @@ import { countNewPhrasesOnShanghaiDay, deriveDailyTask } from "./domain/dailyTas
 import { createNewPhrase } from "./domain/review";
 import { previewLearningGroup } from "./domain/learningSelection";
 import { useHomeData } from "./hooks/useHomeData";
-import { loadHomeData, type HomeData } from "./services/homeData";
+import { loadHomeDataForReviewHandoff, type HomeData } from "./services/homeData";
 import { installBundledSystemContent } from "./services/systemContentInstaller";
 import { LocalPhraseRepository } from "./storage/indexedDbRepository";
 import type { PhraseRepository } from "./storage/repository";
@@ -206,8 +206,14 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const afterReviewComplete = async (completedRepository: Repository) => {
     const generation = repositoryGenerationRef.current;
     if (repositoryRef.current !== completedRepository) throw new Error("复习仓库已更换");
-    const latest = await loadHomeData(completedRepository);
+    const latest = await loadHomeDataForReviewHandoff(completedRepository);
     if (repositoryRef.current !== completedRepository || repositoryGenerationRef.current !== generation) throw new Error("复习仓库已更换");
+    if (!latest) {
+      setError("今日任务刷新较慢，已先返回首页。");
+      go("home");
+      void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。"));
+      return;
+    }
     const stage = deriveDailyTaskState(latest, shanghaiDate()).dailyTask.stage;
     void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。"));
     if (stage === "review") {

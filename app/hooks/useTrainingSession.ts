@@ -40,6 +40,7 @@ export interface UseTrainingSessionOptions {
 
 const IDLE_LIMIT_MS = 60_000;
 const CHECKPOINT_SECONDS = 30;
+const TRAINING_COMPLETION_TIMEOUT_MS = 20_000;
 const systemNow = () => new Date();
 const createId = () => globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 const trainingSources = new Set<TrainingSource>(["due", "weak", "mature", "new", "requeue"]);
@@ -73,6 +74,19 @@ const queueAfterReview = (
   nextQueue.splice(insertionIndex, 0, { ...current, source: "requeue" });
   return nextQueue;
 };
+
+function withCompletionTimeout(operation: Promise<void>) {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new Error("训练完成保存超时，请重试")),
+      TRAINING_COMPLETION_TIMEOUT_MS,
+    );
+  });
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  });
+}
 
 export function useTrainingSession({
   repository,
@@ -578,7 +592,7 @@ export function useTrainingSession({
     if (isCurrent(generation)) setPhase("complete");
     speech.cancel();
     recorder.dispose();
-    const completion = (async () => {
+    const completion = withCompletionTimeout((async () => {
       if (session && !session.completedAt) {
         const finishedAt = readNow();
         await sessionWriteRef.current;
@@ -587,7 +601,7 @@ export function useTrainingSession({
         if (!isCurrent(generation)) return;
         session.completedAt = finishedAt.toISOString();
       }
-    })();
+    })());
     finishPromiseRef.current = completion;
     try {
       await completion;
