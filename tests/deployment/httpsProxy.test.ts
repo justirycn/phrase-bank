@@ -7,11 +7,18 @@ const rootFile = (name: string) => readFileSync(resolve(process.cwd(), name), "u
 const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const caddySiteBlock = (caddy: string, site: string) => {
-  const match = caddy.match(
-    new RegExp(`(?:^|\\n)${escapeRegExp(site)}\\s*\\{([\\s\\S]*?)\\n\\}`, "m"),
-  );
+  const match = new RegExp(`(?:^|\\n)${escapeRegExp(site)}\\s*\\{`, "m").exec(caddy);
   expect(match, `missing Caddy site block for ${site}`).not.toBeNull();
-  return match?.[1] ?? "";
+  if (!match) return "";
+
+  const openingBrace = caddy.indexOf("{", match.index);
+  let depth = 1;
+  for (let index = openingBrace + 1; index < caddy.length; index += 1) {
+    if (caddy[index] === "{") depth += 1;
+    if (caddy[index] === "}") depth -= 1;
+    if (depth === 0) return caddy.slice(openingBrace + 1, index);
+  }
+  throw new Error(`unterminated Caddy site block for ${site}`);
 };
 
 const yamlSection = (yaml: string, name: string, indent = 0) => {
@@ -57,24 +64,24 @@ describe("HTTPS reverse proxy", () => {
     const domainSite = caddySiteBlock(caddy, "phrase.archdemy.com");
     const legacyIpSite = caddySiteBlock(caddy, "http://43.153.204.17");
 
-    expect(domainSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(1);
+    expect(domainSite.match(/reverse_proxy (?:@document )?phrase-bank:3000/g)).toHaveLength(2);
     expect(domainSite).toMatch(/^\s*@manifest path \/manifest\.webmanifest\s*$/m);
     expect(domainSite).toMatch(
       /^\s*header @manifest >Content-Type application\/manifest\+json\s*$/m,
     );
     expect(domainSite).toMatch(/^\s*@document path \/\s*$/m);
     expect(domainSite).toMatch(
-      /^\s*header @document >Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*$/m,
+      /^\s*reverse_proxy @document phrase-bank:3000 \{\s*\n\s*header_down Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*\n\s*\}\s*$/m,
     );
     expect(domainSite).not.toMatch(
       /^\s*header @manifest Content-Type application\/manifest\+json\s*$/m,
     );
-    expect(legacyIpSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(1);
+    expect(legacyIpSite.match(/reverse_proxy (?:@document )?phrase-bank:3000/g)).toHaveLength(2);
     expect(legacyIpSite).toMatch(/^\s*@document path \/\s*$/m);
     expect(legacyIpSite).toMatch(
-      /^\s*header @document >Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*$/m,
+      /^\s*reverse_proxy @document phrase-bank:3000 \{\s*\n\s*header_down Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*\n\s*\}\s*$/m,
     );
-    expect(caddy.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(2);
+    expect(caddy.match(/reverse_proxy (?:@document )?phrase-bank:3000/g)).toHaveLength(4);
   });
 
   it("makes Caddy the only public entry point and persists certificates", () => {
