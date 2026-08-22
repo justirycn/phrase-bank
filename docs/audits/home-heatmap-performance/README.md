@@ -14,12 +14,12 @@ The first run did not expose a reliable, reversible way to inject an IndexedDB h
 
 Run `npm run benchmark:home-before-after`. The command resolves true pre-feature baseline SHA `3e2026060494ba8108a6da45ab7bd15e88882758`, exports it without registering a Git worktree into a unique `C:\Temp\phb-*` directory, links the existing dependency installation as a junction, and uses the same vinext CLI for both builds. It starts vinext directly as one Node child, terminates it, waits for `exit`, removes the dependency junction, removes the unique temporary directory, then verifies that directory is gone.
 
-The generated current measurement records stable application source tree `86f18322c4495d1751d842e87242df6ae670c8de`. The `current.sha` value in `metrics.json` is a runner-generated informational field and changes when the command is rerun after an evidence commit; README and tests intentionally do not pin it. Tests compare only the recorded source tree with `git rev-parse HEAD:app`, so evidence-only commits do not create a self-referential identity loop. Before creating any temporary directory or updating metrics, the runner rejects tracked or untracked changes under `app/`.
+The generated current measurement records stable application source tree `303f90a2b4257606bc3f4054c2d4f6421bd91191`. The `current.sha` value in `metrics.json` is a runner-generated informational field and changes when the command is rerun after an evidence commit; README and tests intentionally do not pin it. Tests compare only the recorded source tree with `git rev-parse HEAD:app`, so evidence-only commits do not create a self-referential identity loop. Before creating any temporary directory or updating metrics, the runner rejects tracked or untracked changes under `app/`.
 
 | Production metric | Baseline | Current | Change |
 | --- | ---: | ---: | ---: |
-| Authenticated home chunk | 157,491 B | 63,180 B | -59.9% |
-| Initial JS set from manifests | 524,925 B | 503,489 B | -4.1% |
+| Authenticated home chunk | 157,491 B | 63,513 B | -59.7% |
+| Initial JS set from manifests | 524,925 B | 503,822 B | -4.0% |
 | Local uncompressed HTML/RSC response | 446,625 B | 447,185 B | +0.1% |
 | Startup `exportSnapshot()` call sites | 1 | 0 | removed |
 
@@ -27,7 +27,7 @@ The startup call-site metric follows eager local imports from `PhraseBankApp` an
 
 The enforceable limits are 64,000 B for the home coordinator and 556,500 B for initial JavaScript. The home limit retains a narrow regression margin above the current guarded installer build; the initial JavaScript limit retains the original broader headroom. The test discovers hashed files through `vinext-client-assets.js` and `__vite_rsc_assets_manifest.js`; it does not pin hashes or absolute filenames.
 
-The command was run repeatedly after the lifecycle fix. Every completed verification run ended with zero `C:\Temp\phb-*` residue; the current 2,000-phrase service-ready observation is 313.305 ms, with 7,056 event rows, 948 session rows, zero active review rows, zero active daily-learning rows, zero active autonomous-learning rows, and 84 heatmap days returned. The baseline has no `loadHomeData` boundary, so bounded rows and service-ready duration are explicitly unavailable rather than compared under a false equivalent. Deferred skeleton-to-home behavior is asserted by the React hook/component tests; no wall-clock test-render duration is published because jsdom scheduling is not a stable performance metric.
+The command was run repeatedly after the lifecycle fix. Every completed verification run ended with zero `C:\Temp\phb-*` residue; the current 2,000-phrase service-ready observation is 293.011 ms, with 7,056 event rows, 948 session rows, zero active review rows, zero active daily-learning rows, zero active autonomous-learning rows, and 84 heatmap days returned. The baseline has no `loadHomeData` boundary, so bounded rows and service-ready duration are explicitly unavailable rather than compared under a false equivalent. Deferred skeleton-to-home behavior is asserted by the React hook/component tests; no wall-clock test-render duration is published because jsdom scheduling is not a stable performance metric.
 
 Run the reproducible build-and-budget gate with `npm run test:home-performance`. Ordinary `npm test` still works in a clean checkout without `dist`; only the build-dependent assertions are skipped when no production manifest exists.
 
