@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SpeakingPractice } from "../../app/components/SpeakingPractice";
@@ -224,8 +224,40 @@ describe("PracticeSession completion", () => {
     await vi.waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
     expect(finish).toHaveBeenCalledOnce();
     expect(screen.getByRole("status", { name: "正在保存并继续今日任务" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "先回首页" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "回到首页" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "再练一组" })).not.toBeInTheDocument();
     resolveHandoff();
+  });
+
+  it("returns home when the complete save and handoff exceed the overall deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const finish = vi.fn(() => new Promise<void>(() => undefined));
+      const onComplete = vi.fn(async () => undefined);
+      const onHome = vi.fn(async () => undefined);
+      const setError = vi.fn();
+      trainingHook.mockReturnValue(controller({ phase: "complete", current: undefined, finish }));
+      const { default: PracticeSession } = await import("../../app/components/screens/PracticeScreen");
+      render(<PracticeSession
+        repository={{} as never}
+        mode="standard"
+        newIntroducedToday={0}
+        completionKey="repo-a-review-timeout"
+        onComplete={onComplete}
+        onHome={onHome}
+        onAgain={vi.fn()}
+        setError={setError}
+      />);
+
+      await act(async () => { await Promise.resolve(); });
+      expect(finish).toHaveBeenCalledOnce();
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+      expect(onHome).toHaveBeenCalledOnce();
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(setError).toHaveBeenCalledWith("保存仍在后台进行，已先返回首页，你可以继续使用。");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -7,7 +7,20 @@ import { TemporaryRecorder } from "../../services/recorder";
 import type { PhraseRepository } from "../../storage/repository";
 import { screenSpeech } from "./screenSpeech";
 const defaultRecorder = new TemporaryRecorder();
+const COMPLETION_HANDOFF_TIMEOUT_MS = 10_000;
 type CompletionIntent = { key: "home" | "again"; run: () => void | Promise<void> };
+
+function withCompletionHandoffFallback(operation: Promise<void>, fallback: () => void | Promise<void>) {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timeoutId = setTimeout(() => {
+      void Promise.resolve(fallback()).catch(() => undefined).then(resolve);
+    }, COMPLETION_HANDOFF_TIMEOUT_MS);
+  });
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  });
+}
 
 export default function PracticeSession({ repository, mode, newIntroducedToday, completionKey, onComplete, onHome, onAgain, setError }: {
   repository: PhraseRepository; mode: TrainingMode;
@@ -38,7 +51,7 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
     }
     if (pendingRef.current?.key === completionKey) return pendingRef.current.promise;
     const generation = generationRef.current;
-    const promise = (async () => {
+    const handoff = (async () => {
       await finish();
       if (generation !== generationRef.current) return;
       const selected = intentRef.current;
@@ -47,6 +60,11 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
       else await onComplete();
       if (generation === generationRef.current) completedKeysRef.current.add(completionKey);
     })();
+    const promise = withCompletionHandoffFallback(handoff, async () => {
+      if (generation !== generationRef.current) return;
+      setError("保存仍在后台进行，已先返回首页，你可以继续使用。");
+      await onHome();
+    });
     pendingRef.current = { key: completionKey, promise };
     void promise.catch(() => {
       if (generation === generationRef.current) {
@@ -57,7 +75,7 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
       if (pendingRef.current?.promise === promise) pendingRef.current = undefined;
     });
     return promise;
-  }, [completionKey, finish, onComplete, setError]);
+  }, [completionKey, finish, onComplete, onHome, setError]);
   const completeRef = useRef(complete);
   useEffect(() => { completeRef.current = complete; }, [complete]);
 
@@ -72,6 +90,7 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
     return <section className="practice-completion-pending" role="status" aria-label="正在保存并继续今日任务" aria-live="polite">
       <div className="pulse" />
       <p>正在保存并继续今日任务…</p>
+      <button type="button" onClick={() => void onHome()}>先回首页</button>
     </section>;
   }
   return <SpeakingPractice
