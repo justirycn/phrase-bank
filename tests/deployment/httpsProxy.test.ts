@@ -59,10 +59,18 @@ describe("HTTPS reverse proxy", () => {
     expect(domainSite).toMatch(
       /^\s*header @manifest >Content-Type application\/manifest\+json\s*$/m,
     );
+    expect(domainSite).toMatch(/^\s*@document path \/\s*$/m);
+    expect(domainSite).toMatch(
+      /^\s*header @document >Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*$/m,
+    );
     expect(domainSite).not.toMatch(
       /^\s*header @manifest Content-Type application\/manifest\+json\s*$/m,
     );
     expect(legacyIpSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(1);
+    expect(legacyIpSite).toMatch(/^\s*@document path \/\s*$/m);
+    expect(legacyIpSite).toMatch(
+      /^\s*header @document >Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*$/m,
+    );
     expect(caddy.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(2);
   });
 
