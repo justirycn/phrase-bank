@@ -85,8 +85,8 @@
       }
     },
     "current": {
-      "sha": "813f3858f4de18638e098b52738c0eb7b94723d1",
-      "sourceTree": "cf7faaea730d34249c9ce5b418909370d308ccdc",
+      "sha": "e7cad2f7646a6b2b92d92a33803aba7ac13d5613",
+      "sourceTree": "6ba18c7d6118abbd990a4d50d4634f6538c55275",
       "build": {
         "homeChunkBytes": 63513,
         "initialJavaScriptBytes": 503822,
@@ -154,7 +154,7 @@
           "activeAutonomousLearningSessions": 0,
           "heatmapDays": 84
         },
-        "serviceReadyMilliseconds": 272.0506999999998
+        "serviceReadyMilliseconds": 270.46169999999984
       }
     },
     "cleanup": {
@@ -195,7 +195,7 @@
       "activeAutonomousLearningSessions": 0,
       "heatmapDays": 84
     },
-    "serviceReadyMilliseconds": 272.0506999999998,
+    "serviceReadyMilliseconds": 270.46169999999984,
     "regressionBudgetMilliseconds": 5000,
     "budgetNote": "The ceiling is deliberately generous; this is a regression smoke budget, not a microbenchmark or Web Vital.",
     "requests": {
