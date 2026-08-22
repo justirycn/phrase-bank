@@ -54,6 +54,19 @@ export class CloudPhraseRepository extends LocalPhraseRepository {
     if (response.status === 401) throw new AuthenticationError("登录已过期");
     if (!response.ok) throw new Error("云端数据保存失败");
   }
+  private async syncTrainingCompletion(id: string, completedAt: Date) {
+    const response = await this.request(
+      "/api/repository",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ trainingSessionCompletion: { id, completedAt: completedAt.toISOString() } }),
+      },
+      "训练完成状态同步超时",
+    );
+    if (response.status === 401) throw new AuthenticationError("登录已过期");
+    if (!response.ok) throw new Error("训练完成状态同步失败");
+  }
   override async savePhrase(v: Phrase) { await super.savePhrase(v); await this.sync(); }
   override async deletePhrase(v: string) { await super.deletePhrase(v); await this.sync(); }
   override async submitReview(id: string, result: ReviewResult, now?: Date, operationId?: string) { await super.submitReview(id, result, now, operationId); await this.sync(); }
@@ -62,7 +75,10 @@ export class CloudPhraseRepository extends LocalPhraseRepository {
   override async deleteCategoryAndMigrate(id: string, target: string) { await super.deleteCategoryAndMigrate(id, target); await this.sync(); }
   override async saveTrainingEvent(v: TrainingEvent) { await super.saveTrainingEvent(v); await this.sync(); }
   override async saveTrainingSession(v: TrainingSessionRecord) { await super.saveTrainingSession(v); await this.sync(); }
-  override async completeTrainingSession(id: string, at: Date) { await super.completeTrainingSession(id, at); await this.sync(); }
+  override async completeTrainingSession(id: string, at: Date) {
+    await super.completeTrainingSession(id, at);
+    void this.syncTrainingCompletion(id, at).catch(() => this.sync()).catch(() => undefined);
+  }
   override async saveSpeechPreferences(v: SpeechPreferences) { await super.saveSpeechPreferences(v); await this.sync(); }
   override async saveAppPreferences(v: AppPreferences) { await super.saveAppPreferences(v); await this.sync(); }
   override async savePhraseLearningState(v: PhraseLearningState) { await super.savePhraseLearningState(v); await this.sync(); }

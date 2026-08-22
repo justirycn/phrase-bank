@@ -267,4 +267,31 @@ describe("CloudPhraseRepository", () => {
     await expect(repo.saveAppPreferences({ dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 })).resolves.toBeUndefined();
     expect(uploadAttempts).toBe(2);
   });
+
+  it("finishes a training session locally without waiting for cloud completion sync", async () => {
+    let patchInit: RequestInit | undefined;
+    const fetcher = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        patchInit = init;
+        return new Promise<Response>(() => undefined);
+      }
+      return Promise.resolve(init?.method === "PUT"
+        ? Response.json({ ok: true })
+        : Response.json({ snapshot: null }));
+    }) as unknown as typeof fetch;
+    const repo = new CloudPhraseRepository(fetcher);
+    await repo.initialize();
+    await repo.saveTrainingSession({
+      id: "finish-locally", mode: "quick", startedAt: "2026-08-10T08:00:00.000Z",
+      updatedAt: "2026-08-10T08:00:00.000Z", phraseIds: [], sources: [],
+      currentIndex: 0, activeSeconds: 0,
+    });
+
+    await expect(repo.completeTrainingSession("finish-locally", new Date("2026-08-10T08:01:00.000Z"))).resolves.toBeUndefined();
+
+    expect(await repo.getActiveTrainingSession()).toBeUndefined();
+    expect(JSON.parse(String(patchInit?.body))).toEqual({
+      trainingSessionCompletion: { id: "finish-locally", completedAt: "2026-08-10T08:01:00.000Z" },
+    });
+  });
 });

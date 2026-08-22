@@ -150,7 +150,7 @@ describe("PracticeSession completion", () => {
     expect(finish.mock.invocationCallOrder[0]).toBeLessThan(onComplete.mock.invocationCallOrder[0]);
   });
 
-  it("retries a failed automatic finish toward the explicit home action", async () => {
+  it("keeps the explicit home action usable after automatic finish fails", async () => {
     const finish = vi.fn()
       .mockRejectedValueOnce(new Error("save failed"))
       .mockResolvedValueOnce(undefined);
@@ -175,7 +175,7 @@ describe("PracticeSession completion", () => {
     await userEvent.setup().click(screen.getByRole("button", { name: "回到首页" }));
     await vi.waitFor(() => expect(onHome).toHaveBeenCalledOnce());
     expect(onComplete).not.toHaveBeenCalled();
-    expect(finish).toHaveBeenCalledTimes(2);
+    expect(finish).toHaveBeenCalledOnce();
   });
 
   it("retries a failed automatic finish toward the explicit again action", async () => {
@@ -204,7 +204,7 @@ describe("PracticeSession completion", () => {
     expect(finish).toHaveBeenCalledTimes(2);
   });
 
-  it("hides completion actions while the automatic handoff is still pending", async () => {
+  it("keeps completion actions usable while the automatic handoff is still pending", async () => {
     let resolveHandoff!: () => void;
     const finish = vi.fn(async () => undefined);
     const onComplete = vi.fn(() => new Promise<void>((resolve) => { resolveHandoff = resolve; }));
@@ -223,11 +223,33 @@ describe("PracticeSession completion", () => {
 
     await vi.waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
     expect(finish).toHaveBeenCalledOnce();
-    expect(screen.getByRole("status", { name: "正在保存并继续今日任务" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "先回首页" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "回到首页" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "再练一组" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "这一组完成了" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "回到首页" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "再练一组" })).toBeVisible();
+    expect(screen.queryByRole("status", { name: "正在保存并继续今日任务" })).not.toBeInTheDocument();
     resolveHandoff();
+  });
+
+  it("returns home immediately while automatic completion is stalled", async () => {
+    const finish = vi.fn(() => new Promise<void>(() => undefined));
+    const onHome = vi.fn(async () => undefined);
+    trainingHook.mockReturnValue(controller({ phase: "complete", current: undefined, finish }));
+    const { default: PracticeSession } = await import("../../app/components/screens/PracticeScreen");
+    render(<PracticeSession
+      repository={{} as never}
+      mode="standard"
+      newIntroducedToday={0}
+      completionKey="repo-a-review-immediate-home"
+      onComplete={vi.fn(async () => undefined)}
+      onHome={onHome}
+      onAgain={vi.fn()}
+      setError={vi.fn()}
+    />);
+
+    await vi.waitFor(() => expect(finish).toHaveBeenCalledOnce());
+    await userEvent.setup().click(screen.getByRole("button", { name: "回到首页" }));
+
+    expect(onHome).toHaveBeenCalledOnce();
   });
 
   it("returns home when the complete save and handoff exceed the overall deadline", async () => {
