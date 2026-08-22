@@ -64,22 +64,24 @@ describe("HTTPS reverse proxy", () => {
     const domainSite = caddySiteBlock(caddy, "phrase.archdemy.com");
     const legacyIpSite = caddySiteBlock(caddy, "http://43.153.204.17");
 
-    expect(domainSite.match(/reverse_proxy (?:\/ )?phrase-bank:3000/g)).toHaveLength(2);
+    expect(domainSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(2);
     expect(domainSite).toMatch(/^\s*@manifest path \/manifest\.webmanifest\s*$/m);
     expect(domainSite).toMatch(
       /^\s*header @manifest >Content-Type application\/manifest\+json\s*$/m,
     );
     expect(domainSite).toMatch(
-      /^\s*reverse_proxy \/ phrase-bank:3000 \{\s*\n\s*header_down Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*\n\s*\}\s*$/m,
+      /^\s*handle \/ \{\s*\n\s*reverse_proxy phrase-bank:3000 \{\s*\n\s*header_down Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*\n\s*\}\s*\n\s*\}\s*$/m,
     );
     expect(domainSite).not.toMatch(
       /^\s*header @manifest Content-Type application\/manifest\+json\s*$/m,
     );
-    expect(legacyIpSite.match(/reverse_proxy (?:\/ )?phrase-bank:3000/g)).toHaveLength(2);
+    expect(legacyIpSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(2);
     expect(legacyIpSite).toMatch(
-      /^\s*reverse_proxy \/ phrase-bank:3000 \{\s*\n\s*header_down Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*\n\s*\}\s*$/m,
+      /^\s*handle \/ \{\s*\n\s*reverse_proxy phrase-bank:3000 \{\s*\n\s*header_down Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*\n\s*\}\s*\n\s*\}\s*$/m,
     );
-    expect(caddy.match(/reverse_proxy (?:\/ )?phrase-bank:3000/g)).toHaveLength(4);
+    expect(caddy.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(4);
+    expect(domainSite).toMatch(/^\s*handle \{\s*\n\s*reverse_proxy phrase-bank:3000\s*\n\s*\}\s*$/m);
+    expect(legacyIpSite).toMatch(/^\s*handle \{\s*\n\s*reverse_proxy phrase-bank:3000\s*\n\s*\}\s*$/m);
   });
 
   it("makes Caddy the only public entry point and persists certificates", () => {
