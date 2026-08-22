@@ -70,14 +70,14 @@ describe("HTTPS reverse proxy", () => {
       /^\s*header @manifest >Content-Type application\/manifest\+json\s*$/m,
     );
     expect(domainSite).toMatch(
-      /^\s*handle \/ \{\s*\n\s*reverse_proxy phrase-bank:3000 \{\s*\n\s*header_down Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*\n\s*\}\s*\n\s*\}\s*$/m,
+      /^\s*handle \/ \{\s*\n\s*header Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*\n\s*reverse_proxy phrase-bank:3000\s*\n\s*\}\s*$/m,
     );
     expect(domainSite).not.toMatch(
       /^\s*header @manifest Content-Type application\/manifest\+json\s*$/m,
     );
     expect(legacyIpSite.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(2);
     expect(legacyIpSite).toMatch(
-      /^\s*handle \/ \{\s*\n\s*reverse_proxy phrase-bank:3000 \{\s*\n\s*header_down Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*\n\s*\}\s*\n\s*\}\s*$/m,
+      /^\s*handle \/ \{\s*\n\s*header Cache-Control "no-store, no-cache, must-revalidate, max-age=0"\s*\n\s*reverse_proxy phrase-bank:3000\s*\n\s*\}\s*$/m,
     );
     expect(caddy.match(/reverse_proxy phrase-bank:3000/g)).toHaveLength(4);
     expect(domainSite).toMatch(/^\s*handle \{\s*\n\s*reverse_proxy phrase-bank:3000\s*\n\s*\}\s*$/m);
