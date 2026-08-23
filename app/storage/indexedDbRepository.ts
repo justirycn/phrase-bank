@@ -487,13 +487,19 @@ export class LocalPhraseRepository implements PhraseRepository {
     const db = await this.db();
     const tx = db.transaction(["trainingSessions", "metadata"], "readwrite");
     const store = tx.objectStore("trainingSessions");
+    const metadata = tx.objectStore("metadata");
     const session = await store.get(id);
     if (!session) throw new Error("找不到训练会话");
     const timestamp = completedAt.toISOString();
     await store.put({ ...session, completedAt: timestamp, updatedAt: timestamp });
+    const pointer = await metadata.get(ACTIVE_TRAINING_SESSION_KEY);
+    if (pointer?.value === id) {
+      const obsoleteSessions = (await store.getAll()).filter(({ id: sessionId, completedAt: completed }) => sessionId !== id && !completed);
+      await Promise.all(obsoleteSessions.map(({ id: obsoleteId }) => store.delete(obsoleteId)));
+    }
     const activeId = await newestActiveSessionId(() => store.index("by-updated").openCursor(null, "prev"));
-    if (activeId) await tx.objectStore("metadata").put({ key: ACTIVE_TRAINING_SESSION_KEY, value: activeId });
-    else await tx.objectStore("metadata").delete(ACTIVE_TRAINING_SESSION_KEY);
+    if (activeId) await metadata.put({ key: ACTIVE_TRAINING_SESSION_KEY, value: activeId });
+    else await metadata.delete(ACTIVE_TRAINING_SESSION_KEY);
     await tx.done;
   }
   async submitTrainingReview(event: TrainingEvent) {

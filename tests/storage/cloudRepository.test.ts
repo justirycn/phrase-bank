@@ -290,6 +290,7 @@ describe("CloudPhraseRepository", () => {
     await expect(repo.completeTrainingSession("finish-locally", new Date("2026-08-10T08:01:00.000Z"))).resolves.toBeUndefined();
 
     expect(await repo.getActiveTrainingSession()).toBeUndefined();
+    await vi.waitFor(() => expect(patchInit).toBeDefined());
     expect(JSON.parse(String(patchInit?.body))).toEqual({
       trainingSessionCompletion: { id: "finish-locally", completedAt: "2026-08-10T08:01:00.000Z" },
     });

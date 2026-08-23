@@ -30,10 +30,15 @@ describe("repository route", () => {
     expect(await (await GET(new Request("https://x/api/repository", { headers: { cookie } }))).json()).toEqual({ snapshot });
   });
 
-  it("updates one completed training session without replacing the cloud snapshot", async () => {
+  it("completes the current and all legacy active training sessions without replacing other cloud data", async () => {
     const snapshot = {
       format: "personal-phrase-bank", version: 5, phrases: [{ id: "kept" }],
-      trainingSessions: [{ id: "session", currentIndex: 3 }],
+      trainingSessions: [
+        { id: "legacy-empty", currentIndex: 0, startedAt: "2026-08-09T08:00:00.000Z" },
+        { id: "session", currentIndex: 3, startedAt: "2026-08-10T08:00:00.000Z" },
+        { id: "newer-session", currentIndex: 0, startedAt: "2026-08-10T08:02:00.000Z" },
+        { id: "already-complete", currentIndex: 1, startedAt: "2026-08-08T08:00:00.000Z", completedAt: "2026-08-09T08:00:00.000Z" },
+      ],
     };
     await PUT(new Request("https://x/api/repository", {
       method: "PUT", headers: { cookie, "content-type": "application/json" },
@@ -51,10 +56,11 @@ describe("repository route", () => {
     expect(await (await GET(new Request("https://x/api/repository", { headers: { cookie } }))).json()).toEqual({
       snapshot: {
         ...snapshot,
-        trainingSessions: [{
-          id: "session", currentIndex: 3,
-          completedAt: "2026-08-10T08:01:00.000Z", updatedAt: "2026-08-10T08:01:00.000Z",
-        }],
+        trainingSessions: [
+          { id: "session", currentIndex: 3, startedAt: "2026-08-10T08:00:00.000Z", completedAt: "2026-08-10T08:01:00.000Z", updatedAt: "2026-08-10T08:01:00.000Z" },
+          { id: "newer-session", currentIndex: 0, startedAt: "2026-08-10T08:02:00.000Z" },
+          { id: "already-complete", currentIndex: 1, startedAt: "2026-08-08T08:00:00.000Z", completedAt: "2026-08-09T08:00:00.000Z" },
+        ],
       },
     });
   });

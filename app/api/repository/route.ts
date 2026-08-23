@@ -42,11 +42,12 @@ export async function PATCH(request: Request) {
   if (!Array.isArray(document.trainingSessions)) return Response.json({ error: "找不到训练记录" }, { status: 404 });
   const index = document.trainingSessions.findIndex((session) => session.id === completion.id);
   if (index < 0) return Response.json({ error: "找不到训练记录" }, { status: 404 });
-  document.trainingSessions[index] = {
-    ...document.trainingSessions[index],
-    completedAt: completion.completedAt,
-    updatedAt: completion.completedAt,
-  };
+  const completedAt = new Date(completion.completedAt).getTime();
+  document.trainingSessions = document.trainingSessions.flatMap((session) => {
+    if (session.id === completion.id) return [{ ...session, completedAt: completion.completedAt, updatedAt: completion.completedAt }];
+    const startedAt = typeof session.startedAt === "string" ? new Date(session.startedAt).getTime() : Number.NaN;
+    return !session.completedAt && startedAt < completedAt ? [] : [session];
+  });
   await store.writeDocument(user.id, snapshot);
   return Response.json({ ok: true });
 }

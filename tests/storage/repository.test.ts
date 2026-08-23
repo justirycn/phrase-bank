@@ -229,7 +229,7 @@ describe("LocalPhraseRepository", () => {
     expect(after.phrases).toEqual(before.phrases);
   });
 
-  it("returns the newest incomplete session and completes sessions", async () => {
+  it("keeps one active training session and retires legacy active sessions together", async () => {
     const session = (id: string, updatedAt: string, completedAt?: string): TrainingSessionRecord => ({ id, mode: "quick", startedAt: updatedAt, updatedAt, completedAt, phraseIds: [], currentIndex: 0, activeSeconds: 0 });
     await repo.saveTrainingSession(session("older", "2026-08-07T08:00:00.000Z"));
     await repo.saveTrainingSession(session("completed-newest", "2026-08-07T10:00:00.000Z", "2026-08-07T10:00:00.000Z"));
@@ -239,12 +239,13 @@ describe("LocalPhraseRepository", () => {
     const completedAt = new Date("2026-08-07T11:00:00.000Z");
     await repo.completeTrainingSession("newest-active", completedAt);
     expect((await repo.exportSnapshot()).trainingSessions.find(({ id }) => id === "newest-active")).toMatchObject({ completedAt: completedAt.toISOString(), updatedAt: completedAt.toISOString(), currentIndex: 2, activeSeconds: 17, phraseIds: ["p1", "p2", "p3"] });
+    expect(await repo.getActiveTrainingSession()).toBeUndefined();
     await expect(repo.completeTrainingSession("missing", completedAt)).rejects.toThrow();
   });
 
   it("lists training sessions in inclusive updated-at ranges using index order", async () => {
     const session = (id: string, updatedAt: string): TrainingSessionRecord => ({
-      id, mode: "quick", startedAt: updatedAt, updatedAt, phraseIds: [], currentIndex: 0, activeSeconds: 0,
+      id, mode: "quick", startedAt: updatedAt, updatedAt, completedAt: updatedAt, phraseIds: [], currentIndex: 0, activeSeconds: 0,
     });
     await repo.saveTrainingSession(session("after", "2026-08-07T11:00:00.000Z"));
     await repo.saveTrainingSession(session("from", "2026-08-07T09:00:00.000Z"));
@@ -298,6 +299,11 @@ describe("LocalPhraseRepository", () => {
     expect(await repo.getActiveLearningSession("autonomous")).toEqual(activeLearning);
     expect(indexGetAll).not.toHaveBeenCalled();
     indexGetAll.mockRestore();
+
+    const completedAt = new Date("2026-08-11T09:00:00.000Z");
+    await repo.completeTrainingSession(activeTraining.id, completedAt);
+    expect(await repo.getActiveTrainingSession()).toBeUndefined();
+    expect((await repo.exportSnapshot()).trainingSessions.find(({ id }) => id === olderActiveTraining.id)).toBeUndefined();
   });
 
   it("backfills active session pointers when upgrading an existing v4 database", async () => {
