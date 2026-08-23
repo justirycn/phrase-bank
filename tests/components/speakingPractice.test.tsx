@@ -150,6 +150,29 @@ describe("PracticeSession completion", () => {
     expect(finish.mock.invocationCallOrder[0]).toBeLessThan(onComplete.mock.invocationCallOrder[0]);
   });
 
+  it("returns home instead of handing an empty group back into review", async () => {
+    const finish = vi.fn(async () => undefined);
+    const onComplete = vi.fn(async () => undefined);
+    const onHome = vi.fn(async () => undefined);
+    trainingHook.mockReturnValue(controller({ phase: "complete", current: undefined, total: 0, finish }));
+    const { default: PracticeSession } = await import("../../app/components/screens/PracticeScreen");
+
+    render(<PracticeSession
+      repository={{} as never}
+      mode="standard"
+      newIntroducedToday={0}
+      completionKey="repo-a-empty-review"
+      onComplete={onComplete}
+      onHome={onHome}
+      onAgain={vi.fn()}
+      setError={vi.fn()}
+    />);
+
+    await vi.waitFor(() => expect(onHome).toHaveBeenCalledOnce());
+    expect(finish).toHaveBeenCalledOnce();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
   it("keeps the explicit home action usable after automatic finish fails", async () => {
     const finish = vi.fn()
       .mockRejectedValueOnce(new Error("save failed"))

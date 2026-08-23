@@ -1,4 +1,5 @@
 import type { Phrase, PhraseLearningState, TrainingMode, TrainingSource } from "./types";
+import { isTrainingEligiblePhrase } from "./dailyTask";
 import { isReviewDueOnShanghaiDay } from "./review";
 
 export interface TrainingCandidate {
@@ -59,10 +60,6 @@ function sourceFor(phrase: Phrase, now: Date): Exclude<TrainingSource, "new" | "
   return "mature";
 }
 
-function isEligibleStage(state: PhraseLearningState | undefined): boolean {
-  return state?.stage === "learned" || state?.stage === "mastered";
-}
-
 export function selectTrainingGroup(
   phrases: Phrase[],
   options: TrainingSelectionOptions,
@@ -74,9 +71,7 @@ export function selectTrainingGroup(
   const goodTodayIds = options.goodTodayIds ?? new Set<string>();
   const previousGroupIds = options.previousGroupIds ?? new Set<string>();
   const eligible = [...new Map(phrases.map((phrase) => [phrase.id, phrase])).values()]
-    .filter((phrase) => !phrase.retiredAt)
-    .filter((phrase) => isEligibleStage(states.get(phrase.id)))
-    .filter((phrase) => phrase.origin !== "system" || phrase.kind !== "example" || Boolean(states.get(phrase.id)?.unlockedAt));
+    .filter((phrase) => isTrainingEligiblePhrase(phrase, states.get(phrase.id)));
   const unique = eligible
     .filter((phrase) => options.mode !== "quick" || !goodTodayIds.has(phrase.id))
     .filter((phrase) => options.mode !== "quick" || !previousGroupIds.has(phrase.id));

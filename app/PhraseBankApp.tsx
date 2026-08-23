@@ -4,7 +4,7 @@ import { Component, lazy, Suspense, useCallback, useEffect, useLayoutEffect, use
 import { AppIcon } from "./components/AppIcon";
 import { TrainingHome } from "./components/TrainingHome";
 import type { PhraseInput, PhraseLearningState, ReviewResult, TrainingMode } from "./domain/types";
-import { countNewPhrasesOnShanghaiDay, deriveDailyTask } from "./domain/dailyTask";
+import { countNewPhrasesOnShanghaiDay, deriveDailyTask, isTrainingEligiblePhrase } from "./domain/dailyTask";
 import { createNewPhrase } from "./domain/review";
 import { previewLearningGroup } from "./domain/learningSelection";
 import { useHomeData } from "./hooks/useHomeData";
@@ -34,7 +34,7 @@ function deriveDailyTaskState(data: HomeData | undefined, today: string) {
   const phrases = data?.phrases ?? [];
   const learningStates = data?.learningStates ?? [];
   const learningById = new Map(learningStates.map((state) => [state.phraseId, state]));
-  const eligibleDue = (data?.duePhrases ?? []).filter((phrase) => ["learned", "mastered"].includes(learningById.get(phrase.id)?.stage ?? "unseen"));
+  const eligibleDue = (data?.duePhrases ?? []).filter((phrase) => isTrainingEligiblePhrase(phrase, learningById.get(phrase.id)));
   const activeDailyLearningSession = data?.activeDailyLearningSession;
   const dailyPreview = previewLearningGroup(phrases, learningStates, (data?.categories ?? []).map((category) => category.id), {
     date: today,
@@ -209,7 +209,7 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
     const latest = await loadHomeDataForReviewHandoff(completedRepository);
     if (signal.aborted || repositoryRef.current !== completedRepository || repositoryGenerationRef.current !== generation) return;
     if (!latest) {
-      setError("今日任务刷新较慢，已先返回首页。");
+      setError("刷新较慢，已返回首页。");
       go("home");
       void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。"));
       return;

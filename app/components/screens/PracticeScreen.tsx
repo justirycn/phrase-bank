@@ -45,17 +45,18 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
     if (completedKeysRef.current.has(completionKey)) return Promise.resolve();
     if (pendingRef.current?.key === completionKey) return pendingRef.current.promise;
     const generation = generationRef.current;
-    const controller = new AbortController();
-    handoffControllerRef.current = controller;
+    const handoffController = new AbortController();
+    handoffControllerRef.current = handoffController;
     const handoff = (async () => {
       await finish();
-      if (generation !== generationRef.current || controller.signal.aborted) return;
-      await onComplete(controller.signal);
+      if (generation !== generationRef.current || handoffController.signal.aborted) return;
+      if (controller.total === 0) await onHome();
+      else await onComplete(handoffController.signal);
       if (generation === generationRef.current) completedKeysRef.current.add(completionKey);
     })();
     const promise = withCompletionHandoffFallback(handoff, async () => {
       if (generation !== generationRef.current) return;
-      controller.abort();
+      handoffController.abort();
       setError("保存仍在后台进行，已先返回首页，你可以继续使用。");
       await onHome();
     });
@@ -66,10 +67,10 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
       }
     }).finally(() => {
       if (pendingRef.current?.promise === promise) pendingRef.current = undefined;
-      if (handoffControllerRef.current === controller) handoffControllerRef.current = undefined;
+      if (handoffControllerRef.current === handoffController) handoffControllerRef.current = undefined;
     });
     return promise;
-  }, [completionKey, finish, onComplete, onHome, setError]);
+  }, [completionKey, controller.total, finish, onComplete, onHome, setError]);
   const completeRef = useRef(complete);
   useEffect(() => { completeRef.current = complete; }, [complete]);
 

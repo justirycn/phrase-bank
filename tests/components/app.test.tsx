@@ -296,6 +296,27 @@ describe("PhraseBankApp", () => {
     expect(await screen.findByText("今日任务 · 新句学习")).toBeVisible();
   });
 
+  it("does not reopen an empty review group for retired or locked due phrases", async () => {
+    const user = userEvent.setup(); const repo = new MemoryRepository();
+    repo.appPreferences = { dailyMasteryGoal: 10, dailyNewPhraseGoal: 1 };
+    repo.phrases = [
+      makePhrase({ id: "retired-due", retiredAt: new Date().toISOString() }),
+      makePhrase({ id: "locked-example", origin: "system", kind: "example" }),
+      makePhrase({ id: "daily-new-after-empty-review", english: "Daily learning must open", origin: "system", kind: "core", nextReviewAt: "2099-01-01T00:00:00.000Z" }),
+    ];
+    repo.learningStates = [learnedState("retired-due"), learnedState("locked-example")];
+
+    render(<PhraseBankApp repository={repo as never} />);
+    const continueButton = await screen.findByRole("button", { name: /继续今日任务/ });
+    expect(continueButton).toHaveTextContent("到期复习已完成 · 今日新句 0 / 1");
+    await user.click(continueButton);
+
+    expect(await screen.findByText("今日任务 · 新句学习")).toBeVisible();
+    expect(screen.getByText("Daily learning must open")).toBeVisible();
+    expect(screen.queryByText("正在准备今天的语言块…")).not.toBeInTheDocument();
+    expect(repo.sessions).toHaveLength(0);
+  });
+
   it("continues to new-phrase learning even when the background home refresh is still pending", async () => {
     const user = userEvent.setup();
     const repo = new MemoryRepository();

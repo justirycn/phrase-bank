@@ -1,4 +1,11 @@
-import type { TrainingEvent } from "./types";
+import type { Phrase, PhraseLearningState, TrainingEvent } from "./types";
+
+export function isTrainingEligiblePhrase(phrase: Phrase, state?: PhraseLearningState): boolean {
+  const stage = state?.stage;
+  return !phrase.retiredAt
+    && (stage === "learned" || stage === "mastered")
+    && (phrase.origin !== "system" || phrase.kind !== "example" || !!state.unlockedAt);
+}
 
 export interface DailyTaskInput {
   dueCount: number;
