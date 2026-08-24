@@ -169,7 +169,7 @@ describe("CloudPhraseRepository", () => {
     expect(snapshot.phrases.find(({ id }) => id === phrase.id)).toMatchObject({ reviewStep: 1, masteryLevel: 1 });
   });
 
-  it("preserves both learning purposes and preferences when retrying a failed upload", async () => {
+  it("rolls back an unconfirmed local change and preserves confirmed cloud state", async () => {
     let failNextUpload = false;
     const uploads: Array<{ snapshot: { learningSessions: LearningSessionRecord[]; appPreferences: unknown } }> = [];
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -190,12 +190,44 @@ describe("CloudPhraseRepository", () => {
     failNextUpload = true;
     await expect(repo.saveLearningSession(daily)).rejects.toThrow("云端数据保存失败");
     expect(await repo.getActiveLearningSession("autonomous")).toEqual(autonomous);
-    expect(await repo.getActiveLearningSession("daily")).toEqual(daily);
+    expect(await repo.getActiveLearningSession("daily")).toBeUndefined();
 
     await repo.saveAppPreferences({ dailyMasteryGoal: 12, dailyNewPhraseGoal: 15 });
 
-    expect(uploads.at(-1)?.snapshot.learningSessions).toEqual(expect.arrayContaining([autonomous, daily]));
+    expect(uploads.at(-1)?.snapshot.learningSessions).toEqual([autonomous]);
     expect(uploads.at(-1)?.snapshot.appPreferences).toEqual({ dailyMasteryGoal: 12, dailyNewPhraseGoal: 15 });
+  });
+
+  it("rebases a stale device operation instead of overwriting another device", async () => {
+    let revision = 0;
+    let remoteSnapshot: unknown;
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method !== "PUT") return Response.json({ snapshot: remoteSnapshot, revision });
+      const expected = Number(new Headers(init.headers).get("x-document-revision"));
+      if (expected !== revision) return Response.json({ revision }, { status: 409 });
+      remoteSnapshot = (await decodeUpload(init)).json.snapshot;
+      revision += 1;
+      return Response.json({ ok: true, revision });
+    });
+    const phone = new CloudPhraseRepository(fetcher);
+    const computer = new CloudPhraseRepository(fetcher);
+    await Promise.all([phone.initialize(), computer.initialize()]);
+    const categoryId = (await phone.listCategories())[0].id;
+    const timestamp = "2026-08-24T01:00:00.000Z";
+    const phrase = (id: string): ReturnType<typeof createNewPhrase> => ({
+      ...createNewPhrase({ english: id === "phone" ? "Saved on my phone" : "Saved on my computer", chinese: id, categoryId }, new Date(timestamp)),
+      id,
+    });
+
+    await phone.savePhrase(phrase("phone"));
+    await computer.savePhrase(phrase("computer"));
+
+    const stored = remoteSnapshot as { phrases: Array<{ id: string }> };
+    expect(stored.phrases).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "phone" }),
+      expect.objectContaining({ id: "computer" }),
+    ]));
+    expect(revision).toBe(2);
   });
 
   it("retries an identical cloud first test without duplicating its event, pointer, state, or daily count", async () => {

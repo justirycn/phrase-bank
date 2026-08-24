@@ -6,7 +6,7 @@ import { applyLearningResult, nextExampleToUnlock } from "../domain/learningProg
 import { defaultCategories } from "./seed";
 import { STARTER_PHRASES } from "./starterPhrases";
 import { assertValidLearningSession, normalizeCurrentLearningState, normalizeLegacyBackup, normalizeLegacyLearningState } from "./backup";
-import type { PhraseRepository } from "./repository";
+import type { PhraseRepository, SnapshotImportPolicy } from "./repository";
 
 interface PhraseBankDb extends DBSchema {
   phrases: { key: string; value: Phrase; indexes: { "by-due": string; "by-created": string; "by-category": string; "by-origin": string; "by-parent": string } };
@@ -230,6 +230,12 @@ export class LocalPhraseRepository implements PhraseRepository {
       });
     }
     return this.dbPromise;
+  }
+
+  async close() {
+    const db = await this.dbPromise;
+    db?.close();
+    this.dbPromise = undefined;
   }
 
   async initialize() {
@@ -757,7 +763,7 @@ export class LocalPhraseRepository implements PhraseRepository {
   async exportSnapshot(): Promise<BackupEnvelopeV5> {
     const db = await this.db();
     const tx = db.transaction(["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions", "phraseLearningState", "learningSessions", "metadata"]);
-    const [categories, phrases, reviewLogs, trainingEvents, trainingSessions, phraseLearningStates, learningSessions, activeVersion, appPreferences] = await Promise.all([
+    const [categories, phrases, reviewLogs, trainingEvents, trainingSessions, phraseLearningStates, learningSessions, activeVersion, appPreferences, speechPreferences] = await Promise.all([
       tx.objectStore("categories").getAll(),
       tx.objectStore("phrases").getAll(),
       tx.objectStore("reviewLogs").getAll(),
@@ -767,21 +773,36 @@ export class LocalPhraseRepository implements PhraseRepository {
       tx.objectStore("learningSessions").getAll(),
       tx.objectStore("metadata").get("activeSystemContentVersion"),
       this.getAppPreferences(),
+      this.getSpeechPreferences(),
     ]);
     await tx.done;
-    return { format: "personal-phrase-bank", version: 5, exportedAt: new Date().toISOString(), categories, phrases, reviewLogs, trainingEvents, trainingSessions, phraseLearningStates, activeSystemContentVersion: activeVersion?.value, learningSessions, appPreferences };
+    return { format: "personal-phrase-bank", version: 5, exportedAt: new Date().toISOString(), categories, phrases, reviewLogs, trainingEvents, trainingSessions, phraseLearningStates, activeSystemContentVersion: activeVersion?.value, learningSessions, appPreferences, speechPreferences };
   }
 
-  async importSnapshot(snapshot: BackupEnvelope, policy: "skip" | "overwrite") {
+  async importSnapshot(snapshot: BackupEnvelope, policy: SnapshotImportPolicy) {
     const db = await this.db();
     const normalized = normalizeLegacyBackup(snapshot);
     const stores = ["categories", "phrases", "reviewLogs", "trainingEvents", "trainingSessions", "phraseLearningState", "learningSessions", "metadata"] as const;
     const tx = db.transaction(stores, "readwrite");
     try {
+      if (policy === "replace") {
+        await Promise.all([
+          tx.objectStore("categories").clear(),
+          tx.objectStore("phrases").clear(),
+          tx.objectStore("reviewLogs").clear(),
+          tx.objectStore("trainingEvents").clear(),
+          tx.objectStore("trainingSessions").clear(),
+          tx.objectStore("phraseLearningState").clear(),
+          tx.objectStore("learningSessions").clear(),
+        ]);
+        for (const key of [ACTIVE_TRAINING_SESSION_KEY, ...Object.values(ACTIVE_LEARNING_SESSION_KEYS), LEGACY_ACTIVE_LEARNING_SESSION_KEY, "activeSystemContentVersion", "appPreferences", "speechPreferences"]) {
+          await tx.objectStore("metadata").delete(key);
+        }
+      }
       const [existingCategories, existingPhrases, existingLearningSessions] = await Promise.all([
-        tx.objectStore("categories").getAllKeys(),
-        tx.objectStore("phrases").getAllKeys(),
-        tx.objectStore("learningSessions").getAll(),
+        policy === "replace" ? Promise.resolve([]) : tx.objectStore("categories").getAllKeys(),
+        policy === "replace" ? Promise.resolve([]) : tx.objectStore("phrases").getAllKeys(),
+        policy === "replace" ? Promise.resolve([]) : tx.objectStore("learningSessions").getAll(),
       ]);
       const references = {
         categoryIds: new Set([...existingCategories.map(String), ...normalized.categories.map(({ id }) => id)]),
@@ -826,6 +847,7 @@ export class LocalPhraseRepository implements PhraseRepository {
       await tx.objectStore("metadata").delete(LEGACY_ACTIVE_LEARNING_SESSION_KEY);
       if (normalized.activeSystemContentVersion) await tx.objectStore("metadata").put({ key: "activeSystemContentVersion", value: normalized.activeSystemContentVersion });
       await tx.objectStore("metadata").put({ key: "appPreferences", value: JSON.stringify(normalized.appPreferences) });
+      await tx.objectStore("metadata").put({ key: "speechPreferences", value: JSON.stringify(normalized.speechPreferences) });
       await tx.done;
     } catch (error) {
       try { tx.abort(); } catch { /* The transaction may already be inactive after a request failure. */ }

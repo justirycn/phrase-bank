@@ -216,11 +216,13 @@ export interface BackupEnvelopeV5 {
   activeSystemContentVersion?: string;
   learningSessions: PersistedLearningSessionRecord[];
   appPreferences: PersistedAppPreferences;
+  speechPreferences?: SpeechPreferences;
 }
 
-export type NormalizedBackupEnvelopeV5 = Omit<BackupEnvelopeV5, "learningSessions" | "appPreferences"> & {
+export type NormalizedBackupEnvelopeV5 = Omit<BackupEnvelopeV5, "learningSessions" | "appPreferences" | "speechPreferences"> & {
   learningSessions: LearningSessionRecord[];
   appPreferences: AppPreferences;
+  speechPreferences: SpeechPreferences;
 };
 
 export type BackupEnvelope = BackupEnvelopeV1 | BackupEnvelopeV2 | BackupEnvelopeV3 | BackupEnvelopeV4 | BackupEnvelopeV5;

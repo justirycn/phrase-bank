@@ -6,6 +6,11 @@ import { hashPassword, verifyPassword } from "./passwords";
 type UserRow = { id: string; username: string; password_hash: string; salt: string; enabled: number };
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
 
+export class DocumentRevisionConflict extends Error {
+  name = "DocumentRevisionConflict";
+  constructor(readonly currentRevision: number) { super("云端数据已被其他设备更新"); }
+}
+
 export class AuthStore {
   private db: DatabaseSync;
   constructor(path: string, private now = () => new Date()) { this.db = openDatabase(path); }
@@ -17,7 +22,7 @@ export class AuthStore {
     if (existing) throw new Error("账号已存在");
     const id = randomUUID(); const material = await hashPassword(password); const at = this.now().toISOString();
     this.db.prepare("INSERT INTO users VALUES (?, ?, ?, ?, 1, ?, ?)").run(id, normalized, material.hash, material.salt, at, at);
-    this.db.prepare("INSERT INTO user_documents VALUES (?, '{}', ?)").run(id, at);
+    this.db.prepare("INSERT INTO user_documents (user_id, document, revision, updated_at) VALUES (?, '{}', 0, ?)").run(id, at);
     return { id, username: normalized };
   }
 
@@ -61,10 +66,48 @@ export class AuthStore {
   }
   listUsers() { return this.db.prepare("SELECT username, enabled FROM users ORDER BY username").all(); }
   async readDocument(userId: string) {
-    const row = this.db.prepare("SELECT document FROM user_documents WHERE user_id=?").get(userId) as { document: string } | undefined;
-    return JSON.parse(row?.document ?? "{}");
+    return (await this.readDocumentRecord(userId)).document;
   }
-  async writeDocument(userId: string, document: unknown) {
-    this.db.prepare("INSERT INTO user_documents VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET document=excluded.document, updated_at=excluded.updated_at").run(userId, JSON.stringify(document), this.now().toISOString());
+  async readDocumentRecord(userId: string) {
+    const row = this.db.prepare("SELECT document, revision FROM user_documents WHERE user_id=?").get(userId) as { document: string; revision: number } | undefined;
+    return { document: JSON.parse(row?.document ?? "{}"), revision: row?.revision ?? 0 };
   }
+  async writeDocument(userId: string, document: unknown, expectedRevision?: number) {
+    const at = this.now().toISOString();
+    if (expectedRevision === undefined) {
+      this.db.prepare("INSERT INTO user_documents (user_id, document, revision, updated_at) VALUES (?, ?, 1, ?) ON CONFLICT(user_id) DO UPDATE SET document=excluded.document, revision=user_documents.revision+1, updated_at=excluded.updated_at").run(userId, JSON.stringify(document), at);
+    } else {
+      const result = this.db.prepare("UPDATE user_documents SET document=?, revision=revision+1, updated_at=? WHERE user_id=? AND revision=?").run(JSON.stringify(document), at, userId, expectedRevision);
+      if (!result.changes) throw new DocumentRevisionConflict((await this.readDocumentRecord(userId)).revision);
+    }
+    return (await this.readDocumentRecord(userId)).revision;
+  }
+  async mutateDocument(userId: string, mutate: (document: unknown) => unknown) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db.prepare("SELECT document, revision FROM user_documents WHERE user_id=?").get(userId) as { document: string; revision: number } | undefined;
+      const revision = row?.revision ?? 0;
+      const document = mutate(JSON.parse(row?.document ?? "{}"));
+      const nextRevision = revision + 1;
+      this.db.prepare("INSERT INTO user_documents (user_id, document, revision, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET document=excluded.document, revision=excluded.revision, updated_at=excluded.updated_at")
+        .run(userId, JSON.stringify(document), nextRevision, this.now().toISOString());
+      this.db.exec("COMMIT");
+      return { document, revision: nextRevision };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  recordDiagnostic(userId: string, event: { code: string; screen: string; online?: boolean; attempt?: number; appVersion: string }) {
+    const createdAt = this.now().toISOString();
+    this.db.prepare("INSERT INTO client_diagnostics (id, user_id, code, screen, online, attempt, app_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(randomUUID(), userId, event.code, event.screen, event.online === undefined ? null : event.online ? 1 : 0, event.attempt ?? null, event.appVersion, createdAt);
+    this.db.prepare("DELETE FROM client_diagnostics WHERE user_id=? AND id NOT IN (SELECT id FROM client_diagnostics WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 500)").run(userId, userId);
+  }
+  listDiagnostics(userId: string, limit = 50) {
+    const bounded = Math.max(1, Math.min(500, Math.trunc(limit)));
+    return this.db.prepare("SELECT code, screen, online, attempt, app_version AS appVersion, created_at AS createdAt FROM client_diagnostics WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ?").all(userId, bounded);
+  }
+  health() { return this.db.prepare("SELECT 1 AS ok").get() as { ok: number }; }
+  close() { this.db.close(); }
 }

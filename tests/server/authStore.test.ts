@@ -45,5 +45,16 @@ describe("AuthStore", () => {
     expect(await auth.readDocument(a.id)).toMatchObject({ phrases: [{ english: "A" }] });
     expect(await auth.readDocument(b.id)).toMatchObject({ phrases: [{ english: "B" }] });
   });
+
+  it("rejects stale document revisions without changing the latest data", async () => {
+    const auth = store();
+    const user = await auth.createUser("alice", "1");
+    await expect(auth.writeDocument(user.id, { source: "phone" }, 0)).resolves.toBe(1);
+    await expect(auth.writeDocument(user.id, { source: "computer" }, 0)).rejects.toMatchObject({
+      name: "DocumentRevisionConflict",
+      currentRevision: 1,
+    });
+    await expect(auth.readDocumentRecord(user.id)).resolves.toEqual({ document: { source: "phone" }, revision: 1 });
+  });
 });
 // @vitest-environment node

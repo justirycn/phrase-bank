@@ -1,4 +1,4 @@
-import { DEFAULT_DAILY_MASTERY_GOAL, DEFAULT_DAILY_NEW_PHRASE_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV1, type LearningSessionRecord, type NormalizedBackupEnvelopeV5, type PersistedLearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
+import { DEFAULT_DAILY_MASTERY_GOAL, DEFAULT_DAILY_NEW_PHRASE_GOAL, type AppPreferences, type BackupEnvelope, type BackupEnvelopeV1, type LearningSessionRecord, type NormalizedBackupEnvelopeV5, type PersistedLearningSessionRecord, type Phrase, type PhraseLearningState, type ReviewLog, type ReviewResult, type SpeechPreferences, type TrainingEvent, type TrainingSessionRecord } from "../domain/types";
 import { effectiveMasteryDates, normalizeMasteryDates } from "../domain/learningProgress";
 
 type LegacyLearningState = Partial<PhraseLearningState> & Pick<PhraseLearningState, "phraseId">;
@@ -10,12 +10,22 @@ type BackupCandidate = Omit<Partial<BackupEnvelopeV1>, "version"> & {
   activeSystemContentVersion?: string;
   learningSessions?: PersistedLearningSessionRecord[];
   appPreferences?: Partial<AppPreferences>;
+  speechPreferences?: Partial<SpeechPreferences>;
 };
 
 const defaultAppPreferences = (): AppPreferences => ({
   dailyMasteryGoal: DEFAULT_DAILY_MASTERY_GOAL,
   dailyNewPhraseGoal: DEFAULT_DAILY_NEW_PHRASE_GOAL,
 });
+const defaultSpeechPreferences = (): SpeechPreferences => ({ accent: "en-US", autoSpeak: true });
+
+function normalizeSpeechPreferences(value: unknown): SpeechPreferences {
+  if (value === undefined) return defaultSpeechPreferences();
+  if (!value || typeof value !== "object") throw new Error("发音设置无效");
+  const candidate = value as Partial<SpeechPreferences>;
+  if ((candidate.accent !== "en-US" && candidate.accent !== "en-GB") || typeof candidate.autoSpeak !== "boolean") throw new Error("发音设置无效");
+  return { accent: candidate.accent, autoSpeak: candidate.autoSpeak };
+}
 
 function normalizeAppPreferences(value: unknown): AppPreferences {
   if (!value || typeof value !== "object"
@@ -131,6 +141,7 @@ export function normalizeLegacyBackup(backup: BackupEnvelope): NormalizedBackupE
     phraseLearningStates: backup.phraseLearningStates.map(normalizeCurrentLearningState),
     learningSessions,
     appPreferences: normalizeAppPreferences(backup.appPreferences),
+    speechPreferences: normalizeSpeechPreferences(backup.speechPreferences),
   };
   if (backup.version === 4) return {
     ...backup,
@@ -138,6 +149,7 @@ export function normalizeLegacyBackup(backup: BackupEnvelope): NormalizedBackupE
     phraseLearningStates: backup.phraseLearningStates.map(normalizeCurrentLearningState),
     learningSessions,
     appPreferences: defaultAppPreferences(),
+    speechPreferences: defaultSpeechPreferences(),
   };
   const phrases = backup.phrases.map((phrase) => ({ origin: "personal", kind: "standalone", ...phrase })) as Phrase[];
   const trainingEvents = backup.version === 1 ? [] : backup.trainingEvents;
@@ -156,6 +168,7 @@ export function normalizeLegacyBackup(backup: BackupEnvelope): NormalizedBackupE
     phraseLearningStates: phrases.map((phrase) => normalizeLegacyLearningState(phrase, statesByPhrase.get(phrase.id), backup.reviewLogs, trainingEvents)),
     learningSessions,
     appPreferences: defaultAppPreferences(),
+    speechPreferences: defaultSpeechPreferences(),
     ...(backup.version === 3 && backup.activeSystemContentVersion ? { activeSystemContentVersion: backup.activeSystemContentVersion } : {}),
   };
 }
@@ -282,11 +295,12 @@ export function parseBackup(raw: string): NormalizedBackupEnvelopeV5 {
   }
 
   const appPreferences = normalizeAppPreferences(backup.appPreferences);
+  const speechPreferences = normalizeSpeechPreferences(backup.speechPreferences);
 
   return {
     format: "personal-phrase-bank", version: 5, exportedAt: backup.exportedAt,
     categories: backup.categories, phrases, reviewLogs: backup.reviewLogs,
-    trainingEvents, trainingSessions, phraseLearningStates: phraseLearningStates.map(normalizeCurrentLearningState), learningSessions, appPreferences,
+    trainingEvents, trainingSessions, phraseLearningStates: phraseLearningStates.map(normalizeCurrentLearningState), learningSessions, appPreferences, speechPreferences,
     ...(backup.version >= 3 && backup.activeSystemContentVersion ? { activeSystemContentVersion: backup.activeSystemContentVersion } : {}),
   };
 }

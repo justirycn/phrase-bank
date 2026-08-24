@@ -181,6 +181,7 @@ describe("backup parsing", () => {
       version: 5,
       learningSessions: [{ ...session, purpose: "autonomous" }],
       appPreferences: { dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 },
+      speechPreferences: { accent: "en-US", autoSpeak: true },
     };
     expect(parseBackup(JSON.stringify(v4))).toEqual(migrated);
     expect(parseBackup(JSON.stringify(migrated))).toEqual(migrated);

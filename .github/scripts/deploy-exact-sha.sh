@@ -25,8 +25,8 @@ deployment_marker="$HOME/.phrase-bank-deployed-sha"
 
 deployment_is_healthy() {
   local local_status public_status
-  local_status=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --resolve phrase.archdemy.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://phrase.archdemy.com/ || true)
-  public_status=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --location -o /dev/null -w '%{http_code}' https://phrase.archdemy.com/ || true)
+  local_status=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --resolve phrase.archdemy.com:443:127.0.0.1 -o /dev/null -w '%{http_code}' https://phrase.archdemy.com/api/health || true)
+  public_status=$(curl --fail --silent --show-error --connect-timeout 2 --max-time 5 --location -o /dev/null -w '%{http_code}' https://phrase.archdemy.com/api/health || true)
   [ "$local_status" = 200 ] && [ "$public_status" = 200 ]
 }
 

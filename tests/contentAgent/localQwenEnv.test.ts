@@ -90,7 +90,7 @@ describe("local Qwen environment loader", () => {
         await link(inside, alias);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP") {
+        if (code === "EPERM" || code === "EACCES" || code === "ENOTSUP" || code === "EXDEV") {
           context.skip();
           return;
         }

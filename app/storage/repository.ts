@@ -1,5 +1,7 @@
 import type { AppPreferences, BackupEnvelope, BackupEnvelopeV5, Category, LearningSessionPurpose, LearningSessionRecord, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
 
+export type SnapshotImportPolicy = "skip" | "overwrite" | "replace";
+
 export interface PhraseRepository {
   initialize(): Promise<void>;
   listPhrases(): Promise<Phrase[]>;
@@ -33,5 +35,5 @@ export interface PhraseRepository {
   installSystemContentPackage(content: SystemContentPackage): Promise<void>;
   rollbackSystemContentPackage(version: string): Promise<void>;
   exportSnapshot(): Promise<BackupEnvelopeV5>;
-  importSnapshot(snapshot: BackupEnvelope, policy: "skip" | "overwrite"): Promise<void>;
+  importSnapshot(snapshot: BackupEnvelope, policy: SnapshotImportPolicy): Promise<void>;
 }

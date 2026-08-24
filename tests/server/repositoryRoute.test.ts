@@ -9,8 +9,8 @@ describe("repository route", () => {
   it("requires login and stores only the current user's snapshot", async () => {
     expect((await GET(new Request("https://x/api/repository"))).status).toBe(401);
     const snapshot = { format: "personal-phrase-bank", version: 4, phrases: [] };
-    expect((await PUT(new Request("https://x/api/repository", { method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ snapshot }) }))).status).toBe(200);
-    expect(await (await GET(new Request("https://x/api/repository", { headers: { cookie } }))).json()).toEqual({ snapshot });
+    expect((await PUT(new Request("https://x/api/repository", { method: "PUT", headers: { cookie, "content-type": "application/json", "x-document-revision": "0" }, body: JSON.stringify({ snapshot }) }))).status).toBe(200);
+    expect(await (await GET(new Request("https://x/api/repository", { headers: { cookie } }))).json()).toEqual({ snapshot, revision: 1 });
   });
 
   it("accepts a gzip-compressed cloud snapshot", async () => {
@@ -22,12 +22,29 @@ describe("repository route", () => {
 
     const response = await PUT(new Request("https://x/api/repository", {
       method: "PUT",
-      headers: { cookie, "content-type": "application/json", "content-encoding": "gzip" },
+      headers: { cookie, "content-type": "application/json", "content-encoding": "gzip", "x-document-revision": "0" },
       body: compressed,
     }));
 
     expect(response.status).toBe(200);
-    expect(await (await GET(new Request("https://x/api/repository", { headers: { cookie } }))).json()).toEqual({ snapshot });
+    expect(await (await GET(new Request("https://x/api/repository", { headers: { cookie } }))).json()).toEqual({ snapshot, revision: 1 });
+  });
+
+  it("requires a revision and rejects a stale whole-document overwrite", async () => {
+    const first = { format: "personal-phrase-bank", version: 5, phrases: [{ id: "phone" }] };
+    const stale = { format: "personal-phrase-bank", version: 5, phrases: [{ id: "computer" }] };
+    expect((await PUT(new Request("https://x/api/repository", {
+      method: "PUT", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ snapshot: first }),
+    }))).status).toBe(428);
+    expect((await PUT(new Request("https://x/api/repository", {
+      method: "PUT", headers: { cookie, "content-type": "application/json", "x-document-revision": "0" }, body: JSON.stringify({ snapshot: first }),
+    }))).status).toBe(200);
+    const conflict = await PUT(new Request("https://x/api/repository", {
+      method: "PUT", headers: { cookie, "content-type": "application/json", "x-document-revision": "0" }, body: JSON.stringify({ snapshot: stale }),
+    }));
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ revision: 1 });
+    expect(await (await GET(new Request("https://x/api/repository", { headers: { cookie } }))).json()).toEqual({ snapshot: first, revision: 1 });
   });
 
   it("completes the current and all legacy active training sessions without replacing other cloud data", async () => {
@@ -41,7 +58,7 @@ describe("repository route", () => {
       ],
     };
     await PUT(new Request("https://x/api/repository", {
-      method: "PUT", headers: { cookie, "content-type": "application/json" },
+      method: "PUT", headers: { cookie, "content-type": "application/json", "x-document-revision": "0" },
       body: JSON.stringify({ snapshot }),
     }));
 
@@ -54,6 +71,7 @@ describe("repository route", () => {
 
     expect(response.status).toBe(200);
     expect(await (await GET(new Request("https://x/api/repository", { headers: { cookie } }))).json()).toEqual({
+      revision: 2,
       snapshot: {
         ...snapshot,
         trainingSessions: [

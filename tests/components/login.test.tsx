@@ -36,6 +36,33 @@ describe("AuthPhraseBankApp", () => {
     expect(created).toHaveLength(1);
   });
 
+  it("creates a new account-scoped repository after logout and another login", async () => {
+    const user = userEvent.setup();
+    let currentUser = "alice";
+    const createdFor: string[] = [];
+    const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(url);
+      if (path.endsWith("/session")) return Response.json({ user: { username: currentUser } });
+      if (path.endsWith("/logout")) return Response.json({ ok: true });
+      if (path.endsWith("/login") && init?.method === "POST") {
+        currentUser = "bob";
+        return Response.json({ user: { username: currentUser } });
+      }
+      return Response.json({ ok: true });
+    });
+    render(<AuthPhraseBankApp fetcher={fetcher} createRepository={(_request, username) => {
+      createdFor.push(username);
+      return new CloudPhraseRepository(fetcher);
+    }} renderApp={({ username }) => <p>ready {username}</p>} />);
+    expect(await screen.findByText("ready alice")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "退出登录" }));
+    await user.type(screen.getByLabelText("账号"), "bob");
+    await user.type(screen.getByLabelText("密码"), "2");
+    await user.click(screen.getByRole("button", { name: "登录" }));
+    expect(await screen.findByText("ready bob")).toBeVisible();
+    expect(createdFor).toEqual(["alice", "bob"]);
+  });
+
   it("passes cloud content installation to the application", async () => {
     const fetcher = vi.fn(async () => Response.json({ user: { username: "alice" } }));
     const renderApplication = vi.fn(() => <p>cloud app</p>);

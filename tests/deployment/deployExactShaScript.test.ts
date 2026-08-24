@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 const sha = "a".repeat(40);
 const script = resolve(".github/scripts/deploy-exact-sha.sh");
 const bashExecutable = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "bash.exe") : "bash";
+const bashAvailable = spawnSync(bashExecutable, ["-c", "true"], { encoding: "utf8" }).status === 0;
 const fixturePrefix = "deploy-exact-sha-";
 const ownedRoots = new Set<string>();
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
@@ -135,7 +136,7 @@ afterEach(async () => {
   cleanedRootCount = 0;
 });
 
-describe("exact SHA remote deployment script", () => {
+describe.skipIf(!bashAvailable)("exact SHA remote deployment script", () => {
   it("keeps the executable shell script on LF line endings", async () => {
     expect(await readFile(script, "utf8")).not.toContain("\r");
   });

@@ -6,6 +6,7 @@ import { useTrainingSession } from "../../hooks/useTrainingSession";
 import { TemporaryRecorder } from "../../services/recorder";
 import type { PhraseRepository } from "../../storage/repository";
 import { screenSpeech } from "./screenSpeech";
+import { reportClientDiagnostic } from "../../services/diagnostics";
 const defaultRecorder = new TemporaryRecorder();
 const COMPLETION_HANDOFF_TIMEOUT_MS = 10_000;
 
@@ -50,12 +51,16 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
     const handoff = (async () => {
       await finish();
       if (generation !== generationRef.current || handoffController.signal.aborted) return;
-      if (controller.total === 0) await onHome();
+      if (controller.total === 0) {
+        reportClientDiagnostic("training_empty_group", { screen: "practice", ...(typeof navigator === "undefined" ? {} : { online: navigator.onLine }) });
+        await onHome();
+      }
       else await onComplete(handoffController.signal);
       if (generation === generationRef.current) completedKeysRef.current.add(completionKey);
     })();
     const promise = withCompletionHandoffFallback(handoff, async () => {
       if (generation !== generationRef.current) return;
+      reportClientDiagnostic("training_handoff_timeout", { screen: "practice", ...(typeof navigator === "undefined" ? {} : { online: navigator.onLine }) });
       handoffController.abort();
       setError("保存仍在后台进行，已先返回首页，你可以继续使用。");
       await onHome();
