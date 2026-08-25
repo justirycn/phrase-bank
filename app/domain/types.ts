@@ -1,5 +1,5 @@
 export type ReviewResult = "again" | "hard" | "good";
-export type TrainingMode = "quick" | "standard";
+export type TrainingMode = "quick" | "proactive" | "standard";
 export type TrainingSource = "due" | "weak" | "mature" | "new" | "requeue";
 export type PhraseOrigin = "personal" | "system";
 export type PhraseKind = "standalone" | "core" | "example";

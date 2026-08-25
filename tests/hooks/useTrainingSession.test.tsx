@@ -80,7 +80,7 @@ describe("useTrainingSession", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it.each([["standard", 10], ["quick", 3]] as const)("starts a %s group with %i candidates", async (mode, total) => {
+  it.each([["standard", 10], ["quick", 3], ["proactive", 3]] as const)("starts a %s group with %i candidates", async (mode, total) => {
     const store = memoryRepository();
     const api = services();
     const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode, ...api, seed: "day" }));

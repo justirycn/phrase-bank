@@ -94,6 +94,7 @@ export default function PracticeSession({ repository, mode, newIntroducedToday, 
   };
   return <SpeakingPractice
     controller={controller}
+    reviewKind={mode === "standard" ? "daily" : "proactive"}
     onPause={() => void onHome()}
     onHome={() => { if (phase === "complete") leaveCompleted(onHome); else if (controller.initializationError) void onHome(); else finishAnd(onHome); }}
     onAgain={() => { if (phase === "complete") leaveCompleted(onAgain); else if (controller.initializationError) void onAgain(); else finishAnd(onAgain); }}

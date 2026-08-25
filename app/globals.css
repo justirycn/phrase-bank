@@ -1258,6 +1258,7 @@ label.settings-action:focus-within {
   overflow-wrap: anywhere;
 }
 .continue-start,
+.review-start,
 .learning-start {
   min-height: 88px;
   border: 1px solid rgba(11, 74, 58, 0.14);
@@ -1273,6 +1274,7 @@ label.settings-action:focus-within {
   box-shadow: 0 10px 28px rgba(33, 53, 41, 0.06);
 }
 .continue-start > span,
+.review-start > span,
 .learning-start > span {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1280,14 +1282,17 @@ label.settings-action:focus-within {
   align-items: center;
 }
 .continue-start > span > svg,
+.review-start > span > svg,
 .learning-start > span > svg {
   grid-row: 1 / 3;
 }
 .continue-start b,
+.review-start b,
 .learning-start b {
   font-size: 17px;
 }
 .continue-start small,
+.review-start small,
 .learning-start small {
   font-size: 12px;
   line-height: 1.45;
@@ -1297,8 +1302,10 @@ label.settings-action:focus-within {
   overflow-wrap: anywhere;
 }
 .continue-start { background:#267453; color:#fff; border-color:transparent; }
+.review-start { background:#fff8ee; border-color:rgba(216,107,75,.24); }
 .training-entry button:disabled { opacity:.5; cursor:not-allowed; }
 .training-entry .learning-start:disabled { background:#ebe7dc; color:#59635d; opacity:1; }
+.training-entry .review-start:disabled { background:#ebe7dc; color:#59635d; opacity:1; }
 
 /* Guided new-phrase learning. The 196px reserve covers the tallest grade tray. */
 .new-phrase-learning {

@@ -64,7 +64,7 @@ export function selectTrainingGroup(
   phrases: Phrase[],
   options: TrainingSelectionOptions,
 ): TrainingCandidate[] {
-  const target = options.mode === "quick" ? 3 : 10;
+  const target = options.mode === "standard" ? 10 : 3;
   const orderSeed = `${options.seed}:${options.rotationCursor ?? 0}`;
   const states = new Map((options.learningStates ?? []).map((state) => [state.phraseId, state]));
   const practicedTodayIds = options.practicedTodayIds ?? new Set<string>();
@@ -99,7 +99,7 @@ export function selectTrainingGroup(
     };
   };
 
-  if (options.mode === "quick") {
+  if (options.mode !== "standard") {
     const practicedMatureCount = eligible.filter((phrase) => practicedTodayIds.has(phrase.id)
       && sourceFor(phrase, options.now) === "mature").length;
     const matureRotation = (options.rotationCursor ?? 0) * target - practicedMatureCount;
@@ -118,6 +118,7 @@ export function selectTrainingGroup(
     add(practiced.due);
     add(practiced.weak);
     add(practiced.mature);
+
     return selected;
   }
 

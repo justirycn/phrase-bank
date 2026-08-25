@@ -26,8 +26,11 @@ function regressionSnapshot(): BackupEnvelopeV5 {
     kind: "example", parentPhraseId: lockedParent.id, unlockOrder: 1,
   });
   const retired = systemPhrase("retired-due", "This retired sentence must not be reviewed.", { retiredAt: now });
+  const reviewReady = systemPhrase("review-ready", "I could use a quick review.", {
+    masteryLevel: 3, nextReviewAt: "2099-01-01T00:00:00.000Z", lastReviewedAt: now,
+  });
   const fresh = Array.from({ length: 5 }, (_, index) => systemPhrase(`fresh-${index + 1}`, `This is fresh sentence number ${index + 1}.`));
-  const phrases = [lockedParent, lockedExample, retired, ...fresh];
+  const phrases = [lockedParent, lockedExample, retired, reviewReady, ...fresh];
   return {
     format: "personal-phrase-bank", version: 5, exportedAt: now,
     categories: [{ id: "daily", name: "日常", isDefault: true, createdAt: now, updatedAt: now }],
@@ -36,6 +39,7 @@ function regressionSnapshot(): BackupEnvelopeV5 {
       state(lockedParent.id, { unlockedAt: now }),
       state(lockedExample.id, { stage: "learned", firstSeenAt: now, firstTestedAt: now, firstResult: "good" }),
       state(retired.id, { stage: "learned", firstSeenAt: now, firstTestedAt: now, firstResult: "good", unlockedAt: now }),
+      state(reviewReady.id, { stage: "learned", firstSeenAt: now, firstTestedAt: now, firstResult: "good", unlockedAt: now }),
       ...fresh.map((phrase) => state(phrase.id, { unlockedAt: now })),
     ],
     activeSystemContentVersion: BUNDLED_SYSTEM_CONTENT_VERSION,
@@ -89,6 +93,21 @@ test("real account flow does not loop between preparing and an empty group", asy
   await expect(page.getByText("今日任务 · 新句学习")).toBeVisible();
   await expect(page.getByText("正在准备今天的语言块…")).toHaveCount(0);
   await expect(page.getByText("这一组完成了")).toHaveCount(0);
+});
+
+test("proactive review stays available before the daily new-phrase task", async ({ page }) => {
+  await login(page);
+  const entry = page.getByRole("button", { name: /^主动复习/ });
+  await expect(entry).toBeEnabled();
+  await expect(entry).toContainText("随机复习 1 句 · 随时可练");
+  await expect(page.getByRole("button", { name: /^自主学习/ })).toBeDisabled();
+
+  await entry.click();
+  await expect(page.getByText("主动复习 · 中文回忆")).toBeVisible();
+  await expect(page.getByText("测试：I could use a quick review.")).toBeVisible();
+  await page.waitForTimeout(3_000);
+  await expect(page.getByText("主动复习 · 中文回忆")).toBeVisible();
+  await expect(page.getByText("正在准备主动复习内容…")).toHaveCount(0);
 });
 
 test("stale phone and computer sessions preserve both users' changes", async ({ browser }) => {

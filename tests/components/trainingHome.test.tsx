@@ -12,9 +12,9 @@ const base = {
   dailyProgress: { correct: 3, mastered: 2, reviewed: 4 },
   streak: { current: 0, longest: 0 },
   weeklySummary: { weekStart: "2026-08-03", activeSeconds: 0, completedGroups: 0, spokenCount: 0, masteredCount: 0, promotedCount: 0, retentionRate: undefined, forgettableCount: 0, weakPhraseIds: [] },
-  learnedToday: 2, nextLearningCount: 0, dueCount: 0,
+  learnedToday: 2, nextLearningCount: 0, proactiveReviewCount: 4, dueCount: 0,
   dailyNewPhraseGoal: 10, newCompletedToday: 6, dailyTask: learningTask,
-  onContinue: vi.fn(), onStartLearning: vi.fn(), onRetryHeatmap: vi.fn(),
+  onContinue: vi.fn(), onStartReview: vi.fn(), onStartLearning: vi.fn(), onRetryHeatmap: vi.fn(),
 };
 
 describe("TrainingHome heatmap", () => {
@@ -24,15 +24,16 @@ describe("TrainingHome heatmap", () => {
     expect(screen.queryByRole("heading", { name: "学习足迹" })).not.toBeInTheDocument();
   });
 
-  it("renders it after the weekly summary and preserves the two independent entries", () => {
-    const { container } = render(<TrainingHome {...base} dueCount={1} nextLearningCount={1} heatmapDays={[{ date: "2026-08-10", count: 0, level: 0, future: false }]} />);
+  it("renders it after the weekly summary and preserves the three independent entries", () => {
+    const { container } = render(<TrainingHome {...base} dueCount={0} nextLearningCount={1} heatmapDays={[{ date: "2026-08-10", count: 0, level: 0, future: false }]} />);
     const weekly = container.querySelector(".weekly-summary");
     const heatmap = container.querySelector(".learning-heatmap");
     expect(weekly?.compareDocumentPosition(heatmap as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /继续今日任务/ }));
+    fireEvent.click(screen.getByRole("button", { name: /主动复习/ }));
     fireEvent.click(screen.getByRole("button", { name: /自主学习/ }));
-    expect(screen.getAllByRole("button")).toHaveLength(2);
-    expect(screen.getByText("先完成今天到期的复习；想多学时，再开启自主学习。")).toBeVisible();
+    expect(screen.getAllByRole("button")).toHaveLength(3);
+    expect(screen.getByText("先完成今天到期的复习；闲暇时可主动复习，想学新句再开启自主学习。")).toBeVisible();
     expect(screen.getByText("今日答对")).toBeVisible();
     expect(screen.getByText("三日掌握")).toBeVisible();
     expect(screen.getByText("2 句")).toBeVisible();
@@ -40,6 +41,7 @@ describe("TrainingHome heatmap", () => {
     expect(screen.getByText("新学 2 句 · 复习 4 句")).toBeVisible();
     expect(screen.queryByText(/30 分钟|三分钟速练/)).not.toBeInTheDocument();
     expect(base.onContinue).toHaveBeenCalled();
+    expect(base.onStartReview).toHaveBeenCalled();
     expect(base.onStartLearning).not.toHaveBeenCalled();
   });
 
@@ -73,10 +75,35 @@ describe("TrainingHome heatmap", () => {
     const autonomous = screen.getByRole("button", { name: /^自主学习/ });
     expect(autonomous).toBeDisabled();
     expect(autonomous).toHaveTextContent("完成今日任务后开放");
+    expect(screen.getByRole("button", { name: /^主动复习/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^主动复习/ })).toHaveTextContent("先完成当前到期复习");
 
     rerender(<TrainingHome {...base} dailyTask={reviewTask} dueCount={3} activeReview reviewRemaining={2} />);
     expect(screen.getByRole("button", { name: /^继续今日任务/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: /^继续今日任务/ })).toHaveTextContent("继续复习 · 剩余 2 句");
+  });
+
+  it("keeps proactive review available before the daily new-phrase task is complete", () => {
+    const onStartReview = vi.fn();
+    const { rerender } = render(<TrainingHome {...base} dueCount={0} proactiveReviewCount={8} onStartReview={onStartReview} />);
+
+    const entry = screen.getByRole("button", { name: /^主动复习/ });
+    expect(entry).toBeEnabled();
+    expect(entry).toHaveTextContent("随机复习 3 句 · 随时可练");
+    fireEvent.click(entry);
+    expect(onStartReview).toHaveBeenCalledOnce();
+
+    rerender(<TrainingHome {...base} dueCount={0} proactiveReviewCount={0} onStartReview={onStartReview} />);
+    expect(screen.getByRole("button", { name: /^主动复习/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^主动复习/ })).toHaveTextContent("暂无已学句子");
+  });
+
+  it("restores an in-progress proactive review", () => {
+    render(<TrainingHome {...base} dailyTask={{ ...learningTask, stage: "review", reviewPending: true }} activeReview activeReviewMode="proactive" reviewRemaining={2} />);
+
+    expect(screen.getByRole("button", { name: /^继续今日任务/ })).toHaveTextContent("主动复习进行中 · 剩余 2 句");
+    expect(screen.getByRole("button", { name: /^主动复习/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^主动复习/ })).toHaveTextContent("继续上次 · 剩余 2 句");
   });
 
   it("shows daily learning, shortage, and completion states truthfully", () => {

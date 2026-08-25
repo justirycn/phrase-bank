@@ -370,7 +370,7 @@ describe("PhraseBankApp", () => {
     }
   });
 
-  it("shows exactly separate daily review and autonomous learning entries without quick practice", async () => {
+  it("shows separate daily task, proactive review, and autonomous learning entries", async () => {
     const repo = new MemoryRepository();
     repo.phrases = [
       makePhrase({ id: "new", origin: "system", kind: "core" }),
@@ -381,7 +381,34 @@ describe("PhraseBankApp", () => {
     expect(await screen.findByRole("button", { name: /自主学习/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: /自主学习/ })).toHaveTextContent("完成今日任务后开放");
     expect(screen.getByRole("button", { name: /继续今日任务/ })).toHaveTextContent("到期复习 1 句 · 今日新句 0 / 10");
-    expect(screen.queryByRole("button", { name: /三分钟速练/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^主动复习/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^主动复习/ })).toHaveTextContent("先完成当前到期复习");
+  });
+
+  it("starts proactive review before today's new-phrase task is complete", async () => {
+    const user = userEvent.setup();
+    const repo = new MemoryRepository();
+    repo.phrases = [makePhrase({ id: "proactive", chinese: "主动复习入口", nextReviewAt: "2099-01-01T00:00:00.000Z" })];
+    repo.learningStates = [learnedState("proactive")];
+
+    render(<PhraseBankApp repository={repo as never} />);
+    const entry = await screen.findByRole("button", { name: /^主动复习/ });
+    expect(entry).toBeEnabled();
+    expect(entry).toHaveTextContent("随机复习 1 句 · 随时可练");
+    expect(screen.getByRole("button", { name: /^自主学习/ })).toBeDisabled();
+
+    await user.click(entry);
+    expect(await screen.findByText("主动复习入口")).toBeVisible();
+    expect(screen.getByText("主动复习 · 中文回忆")).toBeVisible();
+    expect(screen.getByRole("progressbar", { name: "主动复习进度" })).toBeVisible();
+    expect(repo.sessions[0]).toMatchObject({ mode: "proactive", phraseIds: ["proactive"] });
+
+    await user.click(screen.getByRole("button", { name: "查看英文答案并自评" }));
+    await user.click(screen.getByRole("button", { name: "掌握" }));
+    expect(await screen.findByRole("heading", { name: "这一组完成了" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "再练一组" }));
+    expect(await screen.findByText("主动复习入口")).toBeVisible();
+    expect(repo.sessions.at(-1)).toMatchObject({ mode: "proactive", phraseIds: ["proactive"] });
   });
 
   it("labels a fresh group as random and starts the advertised number of phrases", async () => {

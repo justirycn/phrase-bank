@@ -247,7 +247,7 @@ export function parseBackup(raw: string): NormalizedBackupEnvelopeV5 {
   if (!Array.isArray(trainingEvents) || !Array.isArray(trainingSessions)) throw new Error("备份文件缺少必要训练数据");
   const sources = new Set(["due", "weak", "mature", "new", "requeue"]);
   const invalidSession = (session: TrainingSessionRecord) => !session.id?.trim()
-    || (session.mode !== "quick" && session.mode !== "standard")
+    || (session.mode !== "quick" && session.mode !== "proactive" && session.mode !== "standard")
     || !validDate(session.startedAt) || !validDate(session.updatedAt)
     || (session.completedAt !== undefined && !validDate(session.completedAt))
     || !Array.isArray(session.phraseIds) || session.phraseIds.some((id) => !phraseIds.has(id))

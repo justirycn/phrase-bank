@@ -39,7 +39,7 @@ const eligibleStates = (phrases: Phrase[], stage: "learned" | "mastered" = "lear
   phrases.map((item) => state(item.id, stage));
 
 describe("selectTrainingGroup", () => {
-  it.each(["standard", "quick"] as const)("only selects learned or mastered phrases in %s practice", (mode) => {
+  it.each(["standard", "quick", "proactive"] as const)("only selects learned or mastered phrases in %s practice", (mode) => {
     const phrases = [
       phrase("missing-state", 1, "2026-08-09T10:00:00.000Z", "2026-08-07T00:00:00.000Z"),
       phrase("unseen-with-review", 1, "2026-08-09T10:00:00.000Z", "2026-08-07T00:00:00.000Z"),

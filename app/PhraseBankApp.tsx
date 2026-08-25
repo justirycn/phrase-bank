@@ -199,9 +199,16 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const activeReviewRemaining = activeTrainingSession
     ? activeTrainingSession.phraseIds.slice(activeTrainingSession.currentIndex).filter((id) => phraseIds.has(id)).length
     : 0;
+  const learningByPhraseId = new Map(learningStates.map((state) => [state.phraseId, state]));
+  const proactiveReviewCount = phrases.filter((phrase) => isTrainingEligiblePhrase(phrase, learningByPhraseId.get(phrase.id))).length;
   const continueToday = () => {
+    if (activeTrainingSession) return startTraining(activeTrainingSession.mode);
     if (dailyTask.stage === "review") return startTraining("standard");
     if (dailyTask.stage === "learning") return go("daily-learn");
+  };
+  const startProactiveReview = () => {
+    if (activeTrainingSession?.mode === "standard") return;
+    startTraining(activeTrainingSession?.mode ?? "proactive");
   };
   const afterReviewComplete = async (completedRepository: Repository, signal: AbortSignal) => {
     const generation = repositoryGenerationRef.current;
@@ -234,7 +241,7 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
     <main className="app-main">
       {(error || home.error) && <div className="toast error" role="alert">{error || home.error}</div>}
       {notice && <div className="toast" role="status">{notice}</div>}
-      {screen === "home" && <TrainingHome dailyProgress={dailyProgress} dailyMasteryGoal={home.data?.appPreferences.dailyMasteryGoal ?? 10} dailyNewPhraseGoal={dailyGoal} newCompletedToday={newCompletedToday} dailyTask={dailyTask} streak={home.data?.outcomes.streak ?? { current: 0, lightDaysUsedThisWeek: 0 }} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} activeLearning={Boolean(activeAutonomousLearningSession)} activeRemaining={activeRemaining} activeDailyLearning={Boolean(activeDailyLearningSession)} dailyLearningRemaining={activeDailyRemaining} activeReview={Boolean(activeTrainingSession)} reviewRemaining={activeReviewRemaining} dueCount={eligibleDue.length} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onContinue={continueToday} onStartLearning={() => go("learn")} />}
+      {screen === "home" && <TrainingHome dailyProgress={dailyProgress} dailyMasteryGoal={home.data?.appPreferences.dailyMasteryGoal ?? 10} dailyNewPhraseGoal={dailyGoal} newCompletedToday={newCompletedToday} dailyTask={dailyTask} streak={home.data?.outcomes.streak ?? { current: 0, lightDaysUsedThisWeek: 0 }} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} proactiveReviewCount={proactiveReviewCount} activeLearning={Boolean(activeAutonomousLearningSession)} activeRemaining={activeRemaining} activeDailyLearning={Boolean(activeDailyLearningSession)} dailyLearningRemaining={activeDailyRemaining} activeReview={Boolean(activeTrainingSession)} activeReviewMode={activeTrainingSession?.mode} reviewRemaining={activeReviewRemaining} dueCount={eligibleDue.length} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onContinue={continueToday} onStartReview={startProactiveReview} onStartLearning={() => go("learn")} />}
       <ScreenLoadBoundary key={screen} onRetry={() => setLazyScreens(createLazyScreens())}><Suspense fallback={<ScreenLoading screen={screen} />}>{screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={saveAddedPhrase} onRetryState={retryAddedPhraseState} onComplete={completeAddedPhrase} />}
       {screen === "learn" && repo && <LearningSession key={`${repositoryReviewKey(repo)}-autonomous`} repository={repo} purpose="autonomous" onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}
@@ -259,7 +266,10 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
           );
         }} />
         : <ScreenLoading screen="review" />)}
-      {screen === "practice" && repo && <PracticeSession key={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} completionKey={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} onComplete={(signal) => afterReviewComplete(repo, signal)} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => startTraining("quick")} setError={setError} />}
+      {screen === "practice" && repo && <PracticeSession key={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} repository={repo} mode={trainingMode} newIntroducedToday={newIntroducedToday} completionKey={`${repositoryReviewKey(repo)}-${trainingMode}-${trainingRun}`} onComplete={trainingMode !== "standard" ? async (signal) => {
+        if (signal.aborted || repositoryRef.current !== repo) return;
+        void refresh().catch(() => setError("练习已保存，但首页数据暂时无法刷新。"));
+      } : (signal) => afterReviewComplete(repo, signal)} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => startTraining(trainingMode === "standard" ? "quick" : "proactive")} setError={setError} />}
       {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} appPreferences={home.data?.appPreferences ?? { dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 }} refresh={refresh} setNotice={setNotice} setError={setError} username={username} onLogout={onLogout} />}</Suspense></ScreenLoadBoundary>
     </main>
     {screen !== "learn" && screen !== "daily-learn" && screen !== "review" && screen !== "practice" && <nav className="bottom-nav" aria-label="主导航">
