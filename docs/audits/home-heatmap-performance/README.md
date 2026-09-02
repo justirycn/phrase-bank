@@ -14,7 +14,7 @@ The first run did not expose a reliable, reversible way to inject an IndexedDB h
 
 Run `npm run benchmark:home-before-after`. The command resolves true pre-feature baseline SHA `3e2026060494ba8108a6da45ab7bd15e88882758`, exports it without registering a Git worktree into a unique `C:\Temp\phb-*` directory, links the existing dependency installation as a junction, and uses the same vinext CLI for both builds. It starts vinext directly as one Node child, terminates it, waits for `exit`, removes the dependency junction, removes the unique temporary directory, then verifies that directory is gone.
 
-The generated current measurement records stable application source tree `7eb52aba17272f1aaaf3a12a255cb4d7d9cf20d9`. The `current.sha` value in `metrics.json` is a runner-generated informational field and changes when the command is rerun after an evidence commit; README and tests intentionally do not pin it. Tests compare only the recorded source tree with `git rev-parse HEAD:app`, so evidence-only commits do not create a self-referential identity loop. Before creating any temporary directory or updating metrics, the runner rejects tracked or untracked changes under `app/`.
+The generated current measurement records stable application source tree `8ec06ccfa20fc218263f604d873d2a714376ed38`. The `current.sha` value in `metrics.json` is a runner-generated informational field and changes when the command is rerun after an evidence commit; README and tests intentionally do not pin it. Tests compare only the recorded source tree with `git rev-parse HEAD:app`, so evidence-only commits do not create a self-referential identity loop. Before creating any temporary directory or updating metrics, the runner rejects tracked or untracked changes under `app/`.
 
 | Production metric | Baseline | Current | Change |
 | --- | ---: | ---: | ---: |
@@ -27,7 +27,7 @@ The startup call-site metric follows eager local imports from `PhraseBankApp` an
 
 The enforceable limits are 72,000 B for the home coordinator and 556,500 B for initial JavaScript. The home limit includes explicit headroom for conflict-safe multi-device synchronization and privacy-bounded diagnostics; the initial JavaScript limit retains the original broader headroom. The test discovers hashed files through `vinext-client-assets.js` and `__vite_rsc_assets_manifest.js`; it does not pin hashes or absolute filenames.
 
-The command was run repeatedly after the lifecycle fix. Every completed verification run ended with zero `C:\Temp\phb-*` residue; the current 2,000-phrase service-ready observation is 337.619 ms, with 7,056 event rows, 948 session rows, zero active review rows, zero active daily-learning rows, zero active autonomous-learning rows, and 84 heatmap days returned. The baseline has no `loadHomeData` boundary, so bounded rows and service-ready duration are explicitly unavailable rather than compared under a false equivalent. Deferred skeleton-to-home behavior is asserted by the React hook/component tests; no wall-clock test-render duration is published because jsdom scheduling is not a stable performance metric.
+The command was run repeatedly after the lifecycle fix. Every completed verification run ended with zero `C:\Temp\phb-*` residue; the current 2,000-phrase service-ready observation is 271.408 ms, with 7,056 event rows, 948 session rows, zero active review rows, zero active daily-learning rows, zero active autonomous-learning rows, and 84 heatmap days returned. The baseline has no `loadHomeData` boundary, so bounded rows and service-ready duration are explicitly unavailable rather than compared under a false equivalent. Deferred skeleton-to-home behavior is asserted by the React hook/component tests; no wall-clock test-render duration is published because jsdom scheduling is not a stable performance metric.
 
 Run the reproducible build-and-budget gate with `npm run test:home-performance`. Ordinary `npm test` still works in a clean checkout without `dist`; only the build-dependent assertions are skipped when no production manifest exists.
 
@@ -49,7 +49,7 @@ Run `npm run benchmark:home-data`. It creates a uniquely named fake IndexedDB da
 - Startup calls: each bounded/core home read once, with the active-learning lookup called once for daily purpose and once for autonomous purpose; `exportSnapshot` zero times
 - Bounded active requests: one review-session request, one daily-learning request, and one autonomous-learning request
 - Returned bounded history: 7,056 events and 948 sessions; zero active rows for all three session purposes; heatmap 84 days
-- Current service-ready observation: 337.619 ms
+- Current service-ready observation: 271.408 ms
 - Regression ceiling: 5,000 ms
 
 The ceiling is intentionally generous so slower CI machines do not turn this into a flaky microbenchmark. It detects catastrophic unbounded/loading regressions; it is not a Web Vital. The exact deterministic counts and call contract are asserted in the full test suite.
