@@ -16,6 +16,7 @@ export interface TrainingSessionController {
   total: number;
   activeSeconds: number;
   usedHint: boolean;
+  canGradeGood: boolean;
   recordingUrl?: string;
   initializationError?: string;
   startRecording(): Promise<void>;
@@ -113,6 +114,7 @@ export function useTrainingSession({
   const [index, setIndex] = useState(0);
   const [activeSeconds, setActiveSeconds] = useState(0);
   const [usedHint, setUsedHint] = useState(false);
+  const [evaluated, setEvaluated] = useState(false);
   const [recordingUrl, setRecordingUrl] = useState<string>();
   const [initializationError, setInitializationError] = useState<string>();
   const sessionRef = useRef<TrainingSessionRecord>();
@@ -229,6 +231,7 @@ export function useTrainingSession({
       setIndex(0);
       setActiveSeconds(0);
       setUsedHint(false);
+      setEvaluated(false);
       setRecordingUrl(undefined);
       setInitializationError(undefined);
       setPhase("prompt");
@@ -301,6 +304,7 @@ export function useTrainingSession({
             pendingQueueRef.current = recovered;
             if (recovered !== restored) replaceQueue(recovered);
             evaluatedRef.current = true;
+            setEvaluated(true);
             usedHintRef.current = evaluation.usedPronunciationHint;
             recordedRef.current = evaluation.recorded;
             setUsedHint(evaluation.usedPronunciationHint);
@@ -499,6 +503,7 @@ export function useTrainingSession({
     usedHintRef.current = false;
     recordedRef.current = false;
     evaluatedRef.current = false;
+    setEvaluated(false);
     pendingEventRef.current = undefined;
     pendingQueueRef.current = undefined;
     setRecordingUrl(undefined);
@@ -563,6 +568,7 @@ export function useTrainingSession({
       if (!await persistProposedState(nextQueue, indexRef.current, generation) || !isCurrent(generation) || finishingRef.current) return;
       if (nextQueue !== queueRef.current) replaceQueue(nextQueue);
       evaluatedRef.current = true;
+      setEvaluated(true);
       setPhase("answer");
       void autoSpeakCurrent();
     } finally {
@@ -588,13 +594,14 @@ export function useTrainingSession({
   const grade = useCallback(async (result: ReviewResult) => {
     const generation = generationRef.current;
     if (operationRef.current || phase === "complete") return { accepted: false };
-    if (result === "good" && usedHintRef.current) return { accepted: false };
+    if (result === "good" && (usedHintRef.current || evaluatedRef.current)) return { accepted: false };
     operationRef.current = true;
     try {
       if (!evaluatedRef.current) {
         const evaluation = await recordEvent(result);
         if (!isCurrent(generation) || !evaluation) return { accepted: false };
         evaluatedRef.current = true;
+        setEvaluated(true);
         pendingQueueRef.current = queueAfterReview(queueRef.current, indexRef.current, evaluation.result);
       }
       const accepted = await advance();
@@ -641,6 +648,7 @@ export function useTrainingSession({
     total: queue.length,
     activeSeconds,
     usedHint,
+    canGradeGood: !usedHint && !evaluated,
     recordingUrl,
     initializationError,
     startRecording,

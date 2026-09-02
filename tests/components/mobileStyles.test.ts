@@ -77,6 +77,12 @@ describe("mobile phrase typography", () => {
     expect(css).toMatch(/overflow-wrap:anywhere/);
   });
 
+  it("keeps desktop task trays inside the framed app", async () => {
+    const css = await readFile("app/globals.css", "utf8");
+
+    expect(css).toMatch(/@media\s*\(min-width:\s*700px\)\s*\{[\s\S]*?\.practice-actions,\s*\.new-learning-actions\s*\{[^}]*bottom:\s*24px[^}]*width:\s*min\(100%,\s*540px\)[^}]*border-radius:\s*0 0 28px 28px/s);
+  });
+
   it("centers answer toolbar icons with their labels", async () => {
     const css = await readFile("app/globals.css", "utf8");
     const rules = [...css.matchAll(/\.answer-tools button\s*\{([^}]*)\}/g)];

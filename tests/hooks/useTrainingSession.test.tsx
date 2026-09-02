@@ -491,6 +491,22 @@ describe("useTrainingSession", () => {
     expect(store.events).toHaveLength(0);
   });
 
+  it("caps a good grade after directly revealing an unknown answer", async () => {
+    const store = memoryRepository();
+    const { result } = renderHook(() => useTrainingSession({ repository: store.repository, mode: "quick", ...services(), seed: "unknown" }));
+    await waitFor(() => expect(result.current.current).toBeDefined());
+
+    await act(() => result.current.revealAsUnknown());
+    expect(result.current.canGradeGood).toBe(false);
+    await expect(act(() => result.current.grade("good"))).resolves.toEqual({ accepted: false });
+    expect(result.current.index).toBe(0);
+    expect(store.events).toHaveLength(1);
+    expect(store.events[0].result).toBe("again");
+
+    await expect(act(() => result.current.grade("hard"))).resolves.toEqual({ accepted: true });
+    expect(result.current.index).toBe(1);
+  });
+
   it("reveals for self assessment without saving a result until grading", async () => {
     const store = memoryRepository(Array.from({ length: 3 }, (_, index) => phrase(`self-${index}`)));
     const api = services();

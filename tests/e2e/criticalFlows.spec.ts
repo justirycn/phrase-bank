@@ -105,6 +105,18 @@ test("proactive review stays available before the daily new-phrase task", async 
   await entry.click();
   await expect(page.getByText("主动复习 · 中文回忆")).toBeVisible();
   await expect(page.getByText("测试：I could use a quick review.")).toBeVisible();
+  const shellRect = await page.locator(".app-shell").boundingBox();
+  const actionRect = await page.locator(".practice-actions").boundingBox();
+  expect(shellRect).not.toBeNull();
+  expect(actionRect).not.toBeNull();
+  expect(Math.abs(actionRect!.x - shellRect!.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(actionRect!.width - shellRect!.width)).toBeLessThanOrEqual(1);
+  const viewport = page.viewportSize();
+  if (viewport && viewport.width >= 700) {
+    expect(Math.abs(actionRect!.y + actionRect!.height - (viewport.height - 24))).toBeLessThanOrEqual(1);
+  }
+  await page.getByRole("button", { name: "不会，直接看答案" }).click();
+  await expect(page.getByRole("button", { name: "掌握" })).toBeDisabled();
   await page.waitForTimeout(3_000);
   await expect(page.getByText("主动复习 · 中文回忆")).toBeVisible();
   await expect(page.getByText("正在准备主动复习内容…")).toHaveCount(0);

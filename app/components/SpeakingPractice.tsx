@@ -52,7 +52,7 @@ export function SpeakingPractice({ controller, reviewKind = "daily", onPause, on
         {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
         {controller.recordingUrl && <audio aria-label="播放我的录音" controls src={controller.recordingUrl} />}
         <div className="answer-tools"><button onClick={() => run(controller.repeatPronunciation)}><AppIcon name="speaker" size={20} />再听标准发音</button><button onClick={() => run(controller.repeatPronunciation)}><AppIcon name="repeat" size={20} />跟读一次</button></div>
-        <div className="practice-grades"><button onClick={() => grade("again")}>不会</button><button onClick={() => grade("hard")}>模糊</button><button disabled={controller.usedHint} title={controller.usedHint ? "听过提示后，本次最高记为模糊" : undefined} onClick={() => grade("good")}>掌握</button></div>
+        <div className="practice-grades"><button onClick={() => grade("again")}>不会</button><button onClick={() => grade("hard")}>模糊</button><button disabled={!controller.canGradeGood} title={!controller.canGradeGood ? (controller.usedHint ? "听过提示后，本次最高记为模糊" : "已经选择不会，本次不能记为掌握") : undefined} onClick={() => grade("good")}>掌握</button></div>
       </>}
     </div>
   </section>;

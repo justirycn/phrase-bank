@@ -1584,6 +1584,16 @@ select {
   }
 }
 
+/* Keep fixed task controls inside the framed desktop app instead of the viewport. */
+@media (min-width: 700px) {
+  .practice-actions,
+  .new-learning-actions {
+    bottom: 24px;
+    width: min(100%, 540px);
+    border-radius: 0 0 28px 28px;
+  }
+}
+
 @container (max-width: 240px) {
   .daily-task-breakdown {
     white-space: normal;

@@ -21,7 +21,7 @@ function controller(overrides: Partial<TrainingSessionController> = {}): Trainin
         createdAt: "2026-08-01T00:00:00.000Z", updatedAt: "2026-08-01T00:00:00.000Z",
       },
     },
-    index: 0, total: 3, activeSeconds: 0, usedHint: false,
+    index: 0, total: 3, activeSeconds: 0, usedHint: false, canGradeGood: true,
     startRecording: vi.fn(), stopRecording: vi.fn(), revealAsUnknown: vi.fn(),
     revealForSelfAssessment: vi.fn(),
     usePronunciationHint: vi.fn(), repeatPronunciation: vi.fn(), grade: vi.fn(async () => ({ accepted: true })),
@@ -87,7 +87,7 @@ describe("SpeakingPractice", () => {
 
   it("shows the answer, recording playback and caps mastery after a hint", async () => {
     const user = userEvent.setup();
-    const value = controller({ phase: "answer", usedHint: true, recordingUrl: "blob:voice" });
+    const value = controller({ phase: "answer", usedHint: true, canGradeGood: false, recordingUrl: "blob:voice" });
     const { container } = render(<SpeakingPractice controller={value} onPause={vi.fn()} onHome={vi.fn()} onAgain={vi.fn()} />);
     const header = container.querySelector(".practice-head");
     expect(header).not.toBeNull();
@@ -103,6 +103,13 @@ describe("SpeakingPractice", () => {
     await user.click(screen.getByRole("button", { name: "再听标准发音" }));
     await user.click(screen.getByRole("button", { name: "跟读一次" }));
     expect(value.repeatPronunciation).toHaveBeenCalledTimes(2);
+  });
+
+  it("disables mastery after the learner directly revealed an unknown answer", () => {
+    render(<SpeakingPractice controller={controller({ phase: "answer", canGradeGood: false })} onPause={vi.fn()} onHome={vi.fn()} onAgain={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "掌握" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "掌握" })).toHaveAttribute("title", "已经选择不会，本次不能记为掌握");
   });
 
   it("offers completion actions", async () => {
