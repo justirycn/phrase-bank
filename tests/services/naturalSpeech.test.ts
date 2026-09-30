@@ -2,10 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NaturalSpeechService, setPreferredVoiceSource } from "../../app/services/naturalSpeech";
 import { BrowserSpeechService, selectVoice } from "../../app/services/speech";
 
+// Node's fetch Response and jsdom's Blob belong to different implementations.
+// A byte body exercises the real response.blob() path on both Node 22 and 24.
+const audioResponse = () => new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "audio/wav" } });
+
 describe("natural audio playback", () => {
   beforeEach(() => { localStorage.clear(); vi.stubGlobal("URL", { createObjectURL: vi.fn(() => "blob:voice"), revokeObjectURL: vi.fn() }); });
   afterEach(() => vi.unstubAllGlobals());
-  const setup = (fetcher = vi.fn(async () => new Response(new Blob(["audio"])))) => {
+  const setup = (fetcher = vi.fn(async () => audioResponse())) => {
     const device = new BrowserSpeechService(); vi.spyOn(device, "speak").mockResolvedValue();
     const audio = { pause: vi.fn(), play: vi.fn(async () => undefined), src: "", preload: "", onended: null, onerror: null } as unknown as HTMLAudioElement;
     return { service: new NaturalSpeechService(device, fetcher, () => audio), audio, device, fetcher };
@@ -27,7 +31,7 @@ describe("natural audio playback", () => {
     let finish!: (response: Response) => void;
     const fetcher = vi.fn(() => new Promise<Response>((resolve) => { finish = resolve; }));
     const { service, audio, device } = setup(fetcher);
-    const pending = service.speak("Hello", "en-US"); service.cancel(); finish(new Response(new Blob(["audio"])));
+    const pending = service.speak("Hello", "en-US"); service.cancel(); finish(audioResponse());
     await expect(pending).rejects.toThrow("已取消"); expect(audio.play).not.toHaveBeenCalled(); expect(device.speak).not.toHaveBeenCalled();
   });
   it("falls back without freezing on unavailable cloud voice, and respects device preference", async () => {
@@ -38,7 +42,7 @@ describe("natural audio playback", () => {
   it("binds fetch to the browser and releases clips when an account closes", async () => {
     const fetcher = vi.fn(function(this: unknown) {
       expect(this).toBe(globalThis);
-      return Promise.resolve(new Response(new Blob(["audio"])));
+      return Promise.resolve(audioResponse());
     });
     const { service, audio } = setup(fetcher);
     const playing = service.speak("Hello", "en-US");

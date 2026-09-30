@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { synthesizeEnglish } from "../../app/server/naturalSpeech";
 import { AuthStore } from "../../app/server/authStore";

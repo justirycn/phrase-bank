@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStore } from "../../app/server/authStore";
 import { setAuthStoreForTests } from "../../app/server/httpAuth";
