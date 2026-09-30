@@ -21,10 +21,10 @@
       "htmlBytes": 446625
     },
     "current": {
-      "homeChunkBytes": 69313,
-      "initialJavaScriptBytes": 511619,
+      "homeChunkBytes": 71698,
+      "initialJavaScriptBytes": 519411,
       "nonHomeScreenChunks": 6,
-      "htmlBytes": 447282
+      "htmlBytes": 447381
     },
     "budgets": {
       "homeChunkBytes": 72000,
@@ -85,12 +85,12 @@
       }
     },
     "current": {
-      "sha": "6103393563767029d2d91584c45fdb614b30938e",
-      "sourceTree": "8ec06ccfa20fc218263f604d873d2a714376ed38",
+      "sha": "a737b328bc132d9400498e80f8c409bb0f6a3d3c",
+      "sourceTree": "a4c91b8bb6011485ad7baf7bd18bb5ac22da9bdf",
       "build": {
-        "homeChunkBytes": 69313,
-        "initialJavaScriptBytes": 511619,
-        "htmlBytes": 447282
+        "homeChunkBytes": 71698,
+        "initialJavaScriptBytes": 519411,
+        "htmlBytes": 447381
       },
       "startupSource": {
         "files": [
@@ -105,6 +105,8 @@
           "app/domain/learningProgress.ts",
           "app/domain/learningSelection.ts",
           "app/domain/review.ts",
+          "app/domain/scenarioCoaching.ts",
+          "app/domain/scenarios.ts",
           "app/domain/systemContent.ts",
           "app/domain/trainingStats.ts",
           "app/domain/types.ts",
@@ -154,7 +156,7 @@
           "activeAutonomousLearningSessions": 0,
           "heatmapDays": 84
         },
-        "serviceReadyMilliseconds": 271.4083000000028
+        "serviceReadyMilliseconds": 405.67209999999614
       }
     },
     "cleanup": {
@@ -195,7 +197,7 @@
       "activeAutonomousLearningSessions": 0,
       "heatmapDays": 84
     },
-    "serviceReadyMilliseconds": 271.4083000000028,
+    "serviceReadyMilliseconds": 405.67209999999614,
     "regressionBudgetMilliseconds": 5000,
     "budgetNote": "The ceiling is deliberately generous; this is a regression smoke budget, not a microbenchmark or Web Vital.",
     "requests": {
