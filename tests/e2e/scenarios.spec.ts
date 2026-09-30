@@ -1,10 +1,42 @@
-import { expect, test, type Page } from "@playwright/test";
+import { createServer } from "node:http";
+import { expect, test as base, type Page } from "@playwright/test";
 import { feedbackFixture } from "../fixtures/scenarioFeedback";
+
+// WebKit's interception protocol can omit a Blob request's postData. Receive the
+// actual browser upload over HTTP so both engines must send valid WAV bytes.
+const test = base.extend<{ transcriptionServer: { url: string; bodies: Buffer[] } }>({
+  transcriptionServer: async ({ baseURL }, provide) => {
+    if (!baseURL) throw new Error("Missing test application URL");
+    const bodies: Buffer[] = [];
+    const server = createServer(async (request, response) => {
+      response.setHeader("access-control-allow-origin", new URL(baseURL).origin);
+      response.setHeader("access-control-allow-methods", "POST, OPTIONS");
+      response.setHeader("access-control-allow-headers", "content-type");
+      if (request.method === "OPTIONS") { response.writeHead(204).end(); return; }
+      if (request.method !== "POST" || request.url !== "/transcribe") { response.writeHead(404).end(); return; }
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      bodies.push(Buffer.concat(chunks));
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ transcript: "Sure, which models you need?" }));
+    });
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing transcription fixture address");
+    try { await provide({ url: `http://127.0.0.1:${address.port}/transcribe`, bodies }); }
+    finally { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+  },
+});
 
 async function openScenarios(page: Page) {
   await page.goto("/");
   await page.getByLabel("账号").fill("scenario-e2e"); await page.getByLabel("密码").fill("browser-test-password");
   await page.getByRole("button", { name: "登录" }).click();
+  await expect(page.getByRole("button", { name: /场景口语/ })).toBeVisible();
+  // Each test/retry starts with only the isolated fixture account's scenario state reset.
+  const saved = await (await page.request.get("/api/scenarios")).json();
+  const reset = await page.request.put("/api/scenarios", { data: { progress: { sessions: [] }, revision: saved.revision, operationId: crypto.randomUUID() }, headers: { origin: new URL(page.url()).origin } });
+  expect(reset.ok()).toBe(true);
   await page.getByRole("button", { name: /场景口语/ }).click();
   await expect(page.getByText("正在读取练习进度…")).toHaveCount(0);
   await page.getByRole("button", { name: /外贸沟通/ }).click();
@@ -42,11 +74,15 @@ test("scenario conversation completes, keeps hint rules after reload, and never 
   expect(errors).toEqual([]);
 });
 
-test("recording upload, transcript confirmation, feedback, retry and explicit review form a complete loop", async ({ page }) => {
+test("recording upload, transcript confirmation, feedback, retry and explicit review form a complete loop", async ({ page, transcriptionServer }) => {
   const errors: string[] = []; page.on("pageerror", (e) => errors.push(e.message));
   // Deterministic recorder output, not a real microphone test. Windows WebKit lacks Web Audio;
   // it must expose the manual fallback, while Chromium exercises actual WAV decoding.
-  await page.addInitScript(() => {
+  await page.addInitScript(({ transcriptionUrl }) => {
+    const nativeFetch = window.fetch.bind(window);
+    // Only the paid ASR endpoint is replaced. Decoding, WAV conversion and binary
+    // upload still run in the browser and reach the HTTP fixture unchanged.
+    window.fetch = (input, init) => nativeFetch(input === "/api/scenarios/transcribe" ? transcriptionUrl : input, init);
     Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } });
     class FixtureRecorder {
       state = "inactive"; mimeType = "audio/wav"; ondataavailable?: (e: { data: Blob }) => void; onstop?: () => void;
@@ -60,12 +96,8 @@ test("recording upload, transcript confirmation, feedback, retry and explicit re
       }
     }
     Object.defineProperty(window, "MediaRecorder", { configurable: true, value: FixtureRecorder });
-  });
-  let uploads = 0; const feedbackInputs: Array<{ transcript: string; previousTranscript?: string }> = [];
-  await page.route("**/api/scenarios/transcribe", async (route) => {
-    uploads += 1; expect(route.request().postDataBuffer()?.subarray(0, 4).toString()).toBe("RIFF");
-    await route.fulfill({ json: { transcript: "Sure, which models you need?" } });
-  });
+  }, { transcriptionUrl: transcriptionServer.url });
+  const feedbackInputs: Array<{ transcript: string; previousTranscript?: string }> = [];
   const response = { ...feedbackFixture, improvedAnswer: "Of course. Which model would you like, and how many samples do you need?", translation: "当然。你想要哪个型号，需要几个样品？" };
   await page.route("**/api/scenarios/feedback", async (route) => {
     feedbackInputs.push(route.request().postDataJSON());
@@ -74,11 +106,17 @@ test("recording upload, transcript confirmation, feedback, retry and explicit re
   await openScenarios(page);
   const before = (await (await page.request.get("/api/repository")).json()).snapshot;
   await page.getByRole("button", { name: "录下我的回答" }).click(); await page.getByRole("button", { name: "停止录音" }).click();
-  await expect(page.getByRole("button", { name: "上传录音并转写" })).toBeVisible(); expect(uploads).toBe(0); expect(feedbackInputs).toHaveLength(0);
+  await expect(page.getByRole("button", { name: "上传录音并转写" })).toBeVisible(); expect(transcriptionServer.bodies).toHaveLength(0); expect(feedbackInputs).toHaveLength(0);
   const canDecodeAudio = await page.evaluate(() => typeof OfflineAudioContext !== "undefined");
   await page.getByRole("button", { name: "上传录音并转写" }).click();
-  if (canDecodeAudio) { await expect(page.getByRole("textbox", { name: "我刚才的回答" })).toHaveValue("Sure, which models you need?"); expect(uploads).toBe(1); }
-  else { await expect(page.getByRole("alert")).toContainText("当前浏览器无法转换录音，请手动填写回答"); expect(uploads).toBe(0); }
+  if (canDecodeAudio) {
+    await expect(page.getByRole("textbox", { name: "我刚才的回答" })).toHaveValue("Sure, which models you need?");
+    expect(transcriptionServer.bodies).toHaveLength(1);
+    const wav = transcriptionServer.bodies[0];
+    expect(wav.length).toBe(32044); expect(wav.subarray(0, 4).toString()).toBe("RIFF"); expect(wav.subarray(8, 12).toString()).toBe("WAVE");
+    expect(wav.readUInt16LE(22)).toBe(1); expect(wav.readUInt32LE(24)).toBe(16000); expect(wav.readUInt16LE(34)).toBe(16);
+  }
+  else { await expect(page.getByRole("alert")).toContainText("当前浏览器无法转换录音，请手动填写回答"); expect(transcriptionServer.bodies).toHaveLength(0); }
   expect(feedbackInputs).toHaveLength(0);
   await page.getByRole("textbox", { name: "我刚才的回答" }).fill("Sure. Which model do you need?"); await page.getByRole("button", { name: "确认文字，获取建议" }).click();
   await expect(page.getByText(response.summary)).toBeVisible(); expect(feedbackInputs[0].transcript).toBe("Sure. Which model do you need?"); await expect(page.getByRole("button", { name: "能独立说清楚" })).toBeDisabled();
