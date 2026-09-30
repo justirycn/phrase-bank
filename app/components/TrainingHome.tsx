@@ -6,7 +6,7 @@ import { AppIcon } from "./AppIcon";
 import { LearningHeatmap } from "./LearningHeatmap";
 import { WeeklySummary, type WeeklyFocusPhrase } from "./WeeklySummary";
 
-export function TrainingHome({ dailyProgress, dailyMasteryGoal = 10, dailyNewPhraseGoal, newCompletedToday, dailyTask, weeklySummary, focusPhrases, learnedToday, nextLearningCount, proactiveReviewCount, activeLearning, activeRemaining, activeDailyLearning, dailyLearningRemaining, activeReview, activeReviewMode, reviewRemaining, dueCount, heatmapDays, heatmapError, onRetryHeatmap, onContinue, onStartReview, onStartLearning }: {
+export function TrainingHome({ dailyProgress, dailyMasteryGoal = 10, dailyNewPhraseGoal, newCompletedToday, dailyTask, weeklySummary, focusPhrases, learnedToday, nextLearningCount, proactiveReviewCount, activeLearning, activeRemaining, activeDailyLearning, dailyLearningRemaining, activeReview, activeReviewMode, reviewRemaining, dueCount, heatmapDays, heatmapError, onRetryHeatmap, onContinue, onStartReview, onStartLearning, onStartScenario }: {
   streak: TrainingStreak; weeklySummary: WeeklySummaryType;
   dailyProgress: { correct: number; mastered: number; reviewed: number };
   dailyMasteryGoal?: number;
@@ -19,6 +19,7 @@ export function TrainingHome({ dailyProgress, dailyMasteryGoal = 10, dailyNewPhr
   onContinue: () => void;
   onStartReview: () => void;
   onStartLearning: () => void;
+  onStartScenario?: () => void;
 }) {
   const activeProactiveReview = activeReviewMode === "quick" || activeReviewMode === "proactive";
   const correctRemaining = dailyMasteryGoal - dailyProgress.correct;
@@ -65,6 +66,7 @@ export function TrainingHome({ dailyProgress, dailyMasteryGoal = 10, dailyNewPhr
       <button className="review-start" onClick={onStartReview} disabled={proactiveBlockedByDueReview || (!activeReview && proactiveReviewCount === 0)}><span><AppIcon name="review" size={24} /><b>主动复习</b><small>{proactiveLabel}</small></span><AppIcon name="forward" size={22} /></button>
       <button className="learning-start" onClick={onStartLearning} disabled={!dailyTask.autonomousUnlocked || (!activeLearning && nextLearningCount === 0)}><span><AppIcon name="library" size={24} /><b>自主学习</b><small>{autonomousLabel}</small></span><AppIcon name="forward" size={22} /></button>
     </div>
+    {onStartScenario && <button className="scenario-home-entry" onClick={onStartScenario}><AppIcon name="microphone" size={25} /><span><b>场景口语</b><small>一句接一句，练真实对话 · 约 5–8 分钟</small></span><AppIcon name="forward" size={22} /></button>}
     <WeeklySummary summary={weeklySummary} focusPhrases={focusPhrases} />
     {heatmapDays !== undefined || heatmapError ? <LearningHeatmap days={heatmapDays ?? []} error={heatmapError} onRetry={onRetryHeatmap} /> : null}
   </div>;

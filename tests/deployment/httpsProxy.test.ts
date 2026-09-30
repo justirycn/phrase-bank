@@ -99,6 +99,7 @@ describe("HTTPS reverse proxy", () => {
     expect(caddyService).toMatch(/^ {6}- caddy_data:\/data\s*$/m);
     expect(caddyService).toMatch(/^ {6}- caddy_config:\/config\s*$/m);
     expect(phraseBankService).not.toMatch(/^ {4}ports:\s*$/m);
+    expect(phraseBankService).toContain("VINEXT_TRUSTED_HOSTS=phrase.archdemy.com,43.153.204.17");
     expect(compose).not.toContain('"80:3000"');
     expect(volumes).toMatch(/^ {2}caddy_data:\s*$/m);
     expect(volumes).toMatch(/^ {2}caddy_config:\s*$/m);

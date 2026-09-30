@@ -11,8 +11,10 @@ export function selectVoice(
   voices: SpeechSynthesisVoice[],
   accent: EnglishAccent,
 ): SpeechSynthesisVoice | undefined {
-  return voices.find((voice) => voice.lang.toLowerCase() === accent.toLowerCase())
-    ?? voices.find((voice) => voice.lang.toLowerCase().startsWith("en"));
+  const matching = voices.filter((voice) => voice.lang.toLowerCase().replace("_", "-") === accent.toLowerCase());
+  const candidates = matching.length ? matching : voices.filter((voice) => voice.lang.toLowerCase().startsWith("en"));
+  const score = (voice: SpeechSynthesisVoice) => /premium/i.test(voice.name) ? 5 : /enhanced|natural|neural/i.test(voice.name) ? 4 : /siri/i.test(voice.name) ? 3 : /compact|novelty|whisper|trinoids|bad news|bells/i.test(voice.name) ? -1 : 0;
+  return [...candidates].sort((a, b) => score(b) - score(a))[0];
 }
 
 const unavailableMessage = "当前浏览器暂不支持发音，请继续练习";

@@ -13,7 +13,7 @@ import { installBundledSystemContent } from "./services/systemContentInstaller";
 import { LocalPhraseRepository } from "./storage/indexedDbRepository";
 import type { PhraseRepository } from "./storage/repository";
 
-type Screen = "home" | "library" | "add" | "learn" | "daily-learn" | "review" | "practice" | "settings";
+type Screen = "home" | "library" | "add" | "learn" | "daily-learn" | "review" | "practice" | "settings" | "scenario";
 type Repository = PhraseRepository;
 type InitializationStatus = "loading" | "ready" | "error";
 const defaultRepository = typeof window === "undefined" ? undefined : new LocalPhraseRepository();
@@ -80,6 +80,7 @@ const loadSettingsScreen = () => import("./components/screens/SettingsScreen");
 const loadReviewScreen = () => import("./components/screens/ReviewScreen");
 const loadPracticeScreen = () => import("./components/screens/PracticeScreen");
 const loadLearningScreen = () => import("./components/screens/LearningScreen");
+const loadScenarioScreen = () => import("./components/screens/ScenarioScreen");
 
 function createLazyScreens() {
   return {
@@ -89,6 +90,7 @@ function createLazyScreens() {
     Review: lazy(loadReviewScreen),
     PracticeSession: lazy(loadPracticeScreen),
     LearningSession: lazy(loadLearningScreen),
+    Scenario: lazy(loadScenarioScreen),
   };
 }
 
@@ -109,7 +111,7 @@ class ScreenLoadBoundary extends Component<{ children: ReactNode; onRetry: () =>
 export function PhraseBankApp({ repository, contentInstaller, initialScreen = "home", username, onLogout }: { repository?: Repository; contentInstaller?: (repository: Repository) => Promise<unknown>; initialScreen?: Screen; username?: string; onLogout?: () => Promise<void> }) {
   const repo = repository ?? defaultRepository;
   const [screenState, setScreenState] = useState<{ repository?: Repository; value: Screen }>(() => ({ repository: repo, value: initialScreen }));
-  const isRepositoryTaskScreen = (value: Screen) => value === "practice" || value === "daily-learn" || value === "learn";
+  const isRepositoryTaskScreen = (value: Screen) => value === "scenario" || value === "practice" || value === "daily-learn" || value === "learn";
   const screen = screenState.repository === repo || !isRepositoryTaskScreen(screenState.value) ? screenState.value : "home";
   const setScreen = useCallback((value: Screen) => setScreenState({ repository: repo, value }), [repo]);
   const repositoryRef = useRef(repo);
@@ -133,9 +135,14 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   const [trainingMode, setTrainingMode] = useState<TrainingMode>("standard");
   const [trainingRun, setTrainingRun] = useState(0);
   const [notice, setNotice] = useState("");
+  useEffect(() => {
+    const fallback = () => setNotice("自然发音暂不可用，本次已切换为设备语音。");
+    window.addEventListener("phrase-speech-fallback", fallback);
+    return () => window.removeEventListener("phrase-speech-fallback", fallback);
+  }, []);
   const [error, setError] = useState("");
   const [lazyScreens, setLazyScreens] = useState(createLazyScreens);
-  const { Library, AddPhrase, LearningSession, Review, PracticeSession, Settings } = lazyScreens;
+  const { Library, AddPhrase, LearningSession, Review, PracticeSession, Settings, Scenario } = lazyScreens;
   const refresh = home.refresh;
 
   useEffect(() => {
@@ -237,11 +244,11 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
   if (screen === "home" && !home.data && !home.error) return <main className="loading"><div className="pulse" /><p>正在打开你的语言块…</p></main>;
   if (screen === "home" && home.error && !home.data) return <main className="loading"><p role="alert">{home.error}</p><button onClick={() => { void home.retry(); }}>重试</button></main>;
 
-  return <div className="app-shell">
+  return <div className={`app-shell${screen === "scenario" ? " scenario-shell" : ""}`}>
     <main className="app-main">
       {(error || home.error) && <div className="toast error" role="alert">{error || home.error}</div>}
       {notice && <div className="toast" role="status">{notice}</div>}
-      {screen === "home" && <TrainingHome dailyProgress={dailyProgress} dailyMasteryGoal={home.data?.appPreferences.dailyMasteryGoal ?? 10} dailyNewPhraseGoal={dailyGoal} newCompletedToday={newCompletedToday} dailyTask={dailyTask} streak={home.data?.outcomes.streak ?? { current: 0, lightDaysUsedThisWeek: 0 }} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} proactiveReviewCount={proactiveReviewCount} activeLearning={Boolean(activeAutonomousLearningSession)} activeRemaining={activeRemaining} activeDailyLearning={Boolean(activeDailyLearningSession)} dailyLearningRemaining={activeDailyRemaining} activeReview={Boolean(activeTrainingSession)} activeReviewMode={activeTrainingSession?.mode} reviewRemaining={activeReviewRemaining} dueCount={eligibleDue.length} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onContinue={continueToday} onStartReview={startProactiveReview} onStartLearning={() => go("learn")} />}
+      {screen === "home" && <TrainingHome dailyProgress={dailyProgress} dailyMasteryGoal={home.data?.appPreferences.dailyMasteryGoal ?? 10} dailyNewPhraseGoal={dailyGoal} newCompletedToday={newCompletedToday} dailyTask={dailyTask} streak={home.data?.outcomes.streak ?? { current: 0, lightDaysUsedThisWeek: 0 }} weeklySummary={weeklySummary} focusPhrases={weeklyFocus} learnedToday={learnedToday} nextLearningCount={nextLearningCount} proactiveReviewCount={proactiveReviewCount} activeLearning={Boolean(activeAutonomousLearningSession)} activeRemaining={activeRemaining} activeDailyLearning={Boolean(activeDailyLearningSession)} dailyLearningRemaining={activeDailyRemaining} activeReview={Boolean(activeTrainingSession)} activeReviewMode={activeTrainingSession?.mode} reviewRemaining={activeReviewRemaining} dueCount={eligibleDue.length} heatmapDays={home.data?.heatmap ?? []} heatmapError={home.data?.heatmapError} onRetryHeatmap={() => { void home.retryHeatmap(); }} onContinue={continueToday} onStartReview={startProactiveReview} onStartLearning={() => go("learn")} onStartScenario={() => go("scenario")} />}
       <ScreenLoadBoundary key={screen} onRetry={() => setLazyScreens(createLazyScreens())}><Suspense fallback={<ScreenLoading screen={screen} />}>{screen === "library" && <Library phrases={phrases} categories={categories} learningStates={learningStates} onDelete={async (id) => { if (!repo) return; await repo.deletePhrase(id); await refresh(); setNotice("已删除这条语言块"); }} onCopy={async (phrase) => { if (!repo) return; await repo.savePhrase(createNewPhrase({ english: phrase.english, chinese: phrase.chinese, categoryId: phrase.categoryId, sourceNote: "复制自系统句库" })); await refresh(); setNotice("已复制到我的句子"); }} onAdd={() => go("add")} />}
       {screen === "add" && <AddPhrase categories={categories} onCancel={() => go("library")} onSave={saveAddedPhrase} onRetryState={retryAddedPhraseState} onComplete={completeAddedPhrase} />}
       {screen === "learn" && repo && <LearningSession key={`${repositoryReviewKey(repo)}-autonomous`} repository={repo} purpose="autonomous" onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} />}
@@ -270,9 +277,10 @@ export function PhraseBankApp({ repository, contentInstaller, initialScreen = "h
         if (signal.aborted || repositoryRef.current !== repo) return;
         void refresh().catch(() => setError("练习已保存，但首页数据暂时无法刷新。"));
       } : (signal) => afterReviewComplete(repo, signal)} onHome={() => { go("home"); void refresh().catch(() => setError("本地数据暂时无法刷新，你仍然可以继续使用。")); }} onAgain={() => startTraining(trainingMode === "standard" ? "quick" : "proactive")} setError={setError} />}
+      {screen === "scenario" && repo && <Scenario key={username ?? "local"} repository={repo} username={username} onHome={() => { go("home"); void refresh().catch(() => setError("练习已保存，但首页数据暂时无法刷新。")); }} />}
       {screen === "settings" && repo && <Settings repository={repo} categories={categories} phrases={phrases} appPreferences={home.data?.appPreferences ?? { dailyMasteryGoal: 10, dailyNewPhraseGoal: 10 }} refresh={refresh} setNotice={setNotice} setError={setError} username={username} onLogout={onLogout} />}</Suspense></ScreenLoadBoundary>
     </main>
-    {screen !== "learn" && screen !== "daily-learn" && screen !== "review" && screen !== "practice" && <nav className="bottom-nav" aria-label="主导航">
+    {screen !== "scenario" && screen !== "learn" && screen !== "daily-learn" && screen !== "review" && screen !== "practice" && <nav className="bottom-nav" aria-label="主导航">
       <button className={screen === "home" ? "active" : ""} aria-current={screen === "home" ? "page" : undefined} onClick={() => go("home")}><span><AppIcon name="home" size={21} /></span>复习</button>
       <button className={screen === "library" ? "active" : ""} aria-current={screen === "library" ? "page" : undefined} onClick={() => go("library")}><span><AppIcon name="library" size={21} /></span>句库</button>
       <button className={screen === "add" ? "add-nav active" : "add-nav"} aria-label="添加" aria-current={screen === "add" ? "page" : undefined} onClick={() => go("add")}><span><AppIcon name="add" size={25} /></span>添加</button>

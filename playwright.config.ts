@@ -25,7 +25,7 @@ export default defineConfig({
     url: "http://127.0.0.1:4175/api/health",
     timeout: 120_000,
     reuseExistingServer: false,
-    env: { ...process.env, PHRASE_DB_PATH: databasePath, APP_GIT_SHA: "e2e", PHRASE_COOKIE_SECURE: "false" },
+    env: { ...process.env, PHRASE_DB_PATH: databasePath, APP_GIT_SHA: "e2e", PHRASE_COOKIE_SECURE: "false", PHRASE_TTS_ENABLED: "false", PHRASE_SCENARIO_AI_ENABLED: "false" },
   },
   projects: [
     { name: "desktop-chromium", use: { ...devices["Desktop Chrome"] } },

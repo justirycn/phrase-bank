@@ -15,6 +15,15 @@ function sourceFiles(directory = root): string[] {
 }
 
 describe("Qwen secret boundary", () => {
+  it("reuses private server configuration before runtime overrides and checks without dumping secrets", () => {
+    const compose = readFileSync(resolve(root, "compose.yaml"), "utf8");
+    expect(compose.indexOf("/etc/phrase-bank/qwen-content.env")).toBeLessThan(compose.indexOf("/etc/phrase-bank/speech.env"));
+    expect(compose).not.toContain("DASHSCOPE_API_KEY=");
+    const verify = readFileSync(resolve(root, "scripts/verify-runtime-ai.ts"), "utf8");
+    expect(verify).toContain("/compatible-mode/v1/models");
+    expect(verify).toContain("paidGeneration: false");
+    expect(verify).not.toMatch(/console\.(log|error)\(config/);
+  });
   it("contains no tracked API-key-shaped credential", () => {
     const leaked = sourceFiles().filter((file) => /s[k]-[a-z0-9]{20,}/i.test(readFileSync(resolve(root, file), "utf8")));
     expect(leaked).toEqual([]);
@@ -25,7 +34,8 @@ describe("Qwen secret boundary", () => {
     expect(example).toContain("DASHSCOPE_API_KEY=");
     expect(example).toContain("DASHSCOPE_BASE_URL=");
     expect(example).not.toMatch(/DASHSCOPE_API_KEY=.+/);
-    const clientFiles = sourceFiles().filter((file) => file.startsWith("app/"));
+    // Runtime TTS now uses a server-only secret. Browser-reachable modules must not.
+    const clientFiles = sourceFiles().filter((file) => file.startsWith("app/") && !file.startsWith("app/server/") && !file.startsWith("app/api/"));
     expect(clientFiles.some((file) => readFileSync(resolve(root, file), "utf8").includes("DASHSCOPE_API_KEY"))).toBe(false);
     const dockerIgnore = readFileSync(resolve(root, ".dockerignore"), "utf8");
     expect(dockerIgnore).toContain(".env*");

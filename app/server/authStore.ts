@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { openDatabase } from "./database";
 import { hashPassword, verifyPassword } from "./passwords";
+import { isScenarioProgress, preservesScenarioHistory, type ScenarioProgress } from "../domain/scenarios";
 
 type UserRow = { id: string; username: string; password_hash: string; salt: string; enabled: number };
 const tokenHash = (token: string) => createHash("sha256").update(token).digest("hex");
@@ -107,6 +108,53 @@ export class AuthStore {
   listDiagnostics(userId: string, limit = 50) {
     const bounded = Math.max(1, Math.min(500, Math.trunc(limit)));
     return this.db.prepare("SELECT code, screen, online, attempt, app_version AS appVersion, created_at AS createdAt FROM client_diagnostics WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ?").all(userId, bounded);
+  }
+  readScenarioProgress(userId: string) {
+    const row = this.db.prepare("SELECT document, revision, operation_id FROM scenario_documents WHERE user_id=?").get(userId) as { document: string; revision: number; operation_id: string } | undefined;
+    const progress: unknown = JSON.parse(row?.document ?? '{"sessions":[]}');
+    if (!isScenarioProgress(progress)) throw new Error("场景记录格式错误");
+    return { progress, revision: row?.revision ?? 0, operationId: row?.operation_id ?? "" };
+  }
+  writeScenarioProgress(userId: string, progress: ScenarioProgress, expectedRevision: number, operationId: string) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.readScenarioProgress(userId);
+      if (current.operationId === operationId) { this.db.exec("COMMIT"); return current.revision; }
+      if (current.revision !== expectedRevision) throw new DocumentRevisionConflict(current.revision);
+      if (!isScenarioProgress(progress) || !preservesScenarioHistory(current.progress, progress)) throw new Error("场景记录不能回退或清除提示历史");
+      const revision = current.revision + 1;
+      this.db.prepare("INSERT INTO scenario_documents VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET document=excluded.document, revision=excluded.revision, operation_id=excluded.operation_id").run(userId, JSON.stringify(progress), revision, operationId);
+      this.db.exec("COMMIT"); return revision;
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+  consumeScenarioAllowance(userId: string, kind: "transcribe" | "feedback", limit = kind === "transcribe" ? 40 : 60) {
+    const day = this.now().toISOString().slice(0, 10);
+    this.db.prepare("DELETE FROM scenario_ai_usage WHERE day < ?").run(day);
+    const result = this.db.prepare("INSERT INTO scenario_ai_usage VALUES (?, ?, ?, 1) ON CONFLICT(user_id, day, kind) DO UPDATE SET requests=requests+1 WHERE requests < ?").run(userId, day, kind, limit);
+    return Boolean(result.changes);
+  }
+  readScenarioAIResult(userId: string, key: string): unknown {
+    const cutoff = new Date(this.now().getTime() - 7 * 86400000).toISOString();
+    this.db.prepare("DELETE FROM scenario_ai_cache WHERE created_at < ?").run(cutoff);
+    const row = this.db.prepare("SELECT result FROM scenario_ai_cache WHERE user_id=? AND cache_key=?").get(userId, key) as { result: string } | undefined;
+    return row ? JSON.parse(row.result) : undefined;
+  }
+  saveScenarioAIResult(userId: string, key: string, result: unknown) {
+    this.db.prepare("INSERT OR REPLACE INTO scenario_ai_cache VALUES (?, ?, ?, ?)").run(userId, key, JSON.stringify(result), this.now().toISOString());
+    this.db.prepare("DELETE FROM scenario_ai_cache WHERE user_id=? AND cache_key NOT IN (SELECT cache_key FROM scenario_ai_cache WHERE user_id=? ORDER BY created_at DESC, rowid DESC LIMIT 100)").run(userId, userId);
+  }
+  readSpeechAudio(userId: string, key: string) {
+    return (this.db.prepare("SELECT audio FROM speech_audio WHERE user_id=? AND cache_key=?").get(userId, key) as { audio: Uint8Array } | undefined)?.audio;
+  }
+  saveSpeechAudio(userId: string, key: string, audio: Uint8Array) {
+    this.db.prepare("INSERT OR REPLACE INTO speech_audio VALUES (?, ?, ?, ?)").run(userId, key, audio, this.now().toISOString());
+    this.db.prepare("DELETE FROM speech_audio WHERE user_id=? AND cache_key NOT IN (SELECT cache_key FROM speech_audio WHERE user_id=? ORDER BY created_at DESC LIMIT 1500)").run(userId, userId);
+    this.db.prepare("DELETE FROM speech_audio WHERE user_id=? AND cache_key IN (SELECT cache_key FROM (SELECT cache_key, SUM(length(audio)) OVER (ORDER BY created_at DESC, cache_key DESC) AS total FROM speech_audio WHERE user_id=?) WHERE total > 134217728)").run(userId, userId);
+  }
+  consumeSpeechAllowance(userId: string, limit = 100) {
+    const day = this.now().toISOString().slice(0, 10);
+    const result = this.db.prepare("INSERT INTO speech_usage VALUES (?, ?, 1) ON CONFLICT(user_id, day) DO UPDATE SET requests=requests+1 WHERE requests < ?").run(userId, day, limit);
+    return result.changes > 0;
   }
   health() { return this.db.prepare("SELECT 1 AS ok").get() as { ok: number }; }
   close() { this.db.close(); }

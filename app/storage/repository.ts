@@ -1,4 +1,5 @@
 import type { AppPreferences, BackupEnvelope, BackupEnvelopeV5, Category, LearningSessionPurpose, LearningSessionRecord, Phrase, PhraseLearningState, ReviewResult, SpeechPreferences, SystemContentPackage, TrainingEvent, TrainingSessionRecord } from "../domain/types";
+import type { ScenarioReviewInput } from "../domain/scenarioCoaching";
 
 export type SnapshotImportPolicy = "skip" | "overwrite" | "replace";
 
@@ -7,6 +8,7 @@ export interface PhraseRepository {
   listPhrases(): Promise<Phrase[]>;
   getPhrase(id: string): Promise<Phrase | undefined>;
   savePhrase(phrase: Phrase): Promise<void>;
+  addScenarioReview(input: ScenarioReviewInput, now?: Date): Promise<void>;
   deletePhrase(id: string): Promise<void>;
   listDuePhrases(now?: Date): Promise<Phrase[]>;
   submitReview(id: string, result: ReviewResult, now?: Date, operationId?: string): Promise<void>;

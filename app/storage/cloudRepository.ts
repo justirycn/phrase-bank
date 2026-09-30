@@ -2,6 +2,7 @@ import type { AppPreferences, BackupEnvelope, BackupEnvelopeV5, Category, Learni
 import { LocalPhraseRepository } from "./indexedDbRepository";
 import type { SnapshotImportPolicy } from "./repository";
 import type { DiagnosticReporter } from "../services/diagnostics";
+import type { ScenarioReviewInput } from "../domain/scenarioCoaching";
 
 export class AuthenticationError extends Error { name = "AuthenticationError"; }
 
@@ -155,6 +156,7 @@ export class CloudPhraseRepository extends LocalPhraseRepository {
   }
 
   override async savePhrase(value: Phrase) { await this.mutateAndSync(() => super.savePhrase(value)); }
+  override async addScenarioReview(value: ScenarioReviewInput, now = new Date()) { await this.mutateAndSync(() => super.addScenarioReview(value, now)); }
   override async deletePhrase(id: string) { await this.mutateAndSync(() => super.deletePhrase(id)); }
   override async submitReview(id: string, result: ReviewResult, now = new Date(), operationId = crypto.randomUUID()) {
     await this.mutateAndSync(() => super.submitReview(id, result, now, operationId));

@@ -141,7 +141,7 @@ test("stale phone and computer sessions preserve both users' changes", async ({ 
     await expect(sessions.phonePage.getByRole("button", { name: /继续今日任务/ })).toBeVisible();
     await sessions.phonePage.getByRole("button", { name: "设置" }).click();
     await expect(sessions.phonePage.getByLabel("每日答对目标")).toHaveValue("12");
-    await sessions.phonePage.getByRole("button", { name: "句库" }).click();
+    await sessions.phonePage.getByRole("button", { name: "句库", exact: true }).click();
     await expect(sessions.phonePage.getByText("I saved this on my computer.")).toBeVisible();
   } finally {
     await Promise.all([sessions.phone.close(), sessions.computer.close()]);

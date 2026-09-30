@@ -6,11 +6,19 @@ services:
     image: phrase-bank:latest
     container_name: phrase-bank
     restart: unless-stopped
+    env_file:
+      # Reuse the project's existing private Qwen configuration; runtime overrides win.
+      - path: /etc/phrase-bank/qwen-content.env
+        required: false
+      - path: /etc/phrase-bank/speech.env
+        required: false
     expose:
       - "3000"
     environment:
       - PHRASE_DB_PATH=/app/data/phrase-bank.sqlite
       - APP_GIT_SHA=${DEPLOY_SHA:-development}
+      # The app is reachable only behind Caddy; preserve HTTPS for Origin checks.
+      - VINEXT_TRUSTED_HOSTS=phrase.archdemy.com,43.153.204.17
     volumes:
       - phrase_data:/app/data
     healthcheck:

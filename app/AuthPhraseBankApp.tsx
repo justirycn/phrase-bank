@@ -27,7 +27,7 @@ function AuthenticatedApplication({ fetcher, user, logout, renderApp, createRepo
 }) {
   const reporter = useMemo(() => createDiagnosticReporter(fetcher), [fetcher]);
   const [repository] = useState(() => createRepository(fetcher, user.username, reporter));
-  useEffect(() => () => { void repository.close(); }, [repository]);
+  useEffect(() => () => { void repository.close(); window.dispatchEvent(new Event("phrase-account-closed")); }, [repository]);
   useEffect(() => {
     const context = () => ({ screen: "app" as const, ...(typeof navigator === "undefined" ? {} : { online: navigator.onLine }) });
     const onError = () => reporter("unhandled_error", context());

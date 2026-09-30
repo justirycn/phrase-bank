@@ -7,6 +7,8 @@ import { defaultCategories } from "./seed";
 import { STARTER_PHRASES } from "./starterPhrases";
 import { assertValidLearningSession, normalizeCurrentLearningState, normalizeLegacyBackup, normalizeLegacyLearningState } from "./backup";
 import type { PhraseRepository, SnapshotImportPolicy } from "./repository";
+import { normalizedExpression, type ScenarioReviewInput } from "../domain/scenarioCoaching";
+import { createNewPhrase } from "../domain/review";
 
 interface PhraseBankDb extends DBSchema {
   phrases: { key: string; value: Phrase; indexes: { "by-due": string; "by-created": string; "by-category": string; "by-origin": string; "by-parent": string } };
@@ -302,6 +304,27 @@ export class LocalPhraseRepository implements PhraseRepository {
   }
   async getPhrase(id: string) { return (await this.db()).get("phrases", id); }
   async savePhrase(phrase: Phrase) { await (await this.db()).put("phrases", phrase); }
+  async addScenarioReview(input: ScenarioReviewInput, now = new Date()) {
+    if (!input.english.trim() || input.english.length > 600 || !input.chinese.trim() || input.chinese.length > 400 || input.sourceNote.length > 300) throw new Error("表达格式无效");
+    const db = await this.db();
+    const tx = db.transaction(["phrases", "phraseLearningState", "categories"], "readwrite");
+    const phrases = tx.objectStore("phrases"); const states = tx.objectStore("phraseLearningState");
+    const all = await phrases.getAll();
+    const byId = new Map((await states.getAll()).map((s) => [s.phraseId, s]));
+    const existing = all.find((p) => !p.retiredAt && !(p.origin === "system" && p.kind === "example" && !byId.get(p.id)?.unlockedAt) && normalizedExpression(p.english) === normalizedExpression(input.english));
+    const timestamp = now.toISOString();
+    let phrase = existing;
+    if (!phrase) {
+      const categoryId = "scenario-practice";
+      if (!await tx.objectStore("categories").get(categoryId)) await tx.objectStore("categories").put({ id: categoryId, name: "场景练习", isDefault: false, createdAt: timestamp, updatedAt: timestamp });
+      phrase = createNewPhrase({ ...input, categoryId }, now);
+    }
+    // An explicit "I have practised this" action schedules review; it is not a grade.
+    await phrases.put({ ...phrase, nextReviewAt: phrase.nextReviewAt < timestamp ? phrase.nextReviewAt : timestamp, updatedAt: timestamp });
+    const state = await states.get(phrase.id);
+    if (!state || (state.stage !== "learned" && state.stage !== "mastered")) await states.put({ ...(state ?? unseenState(phrase.id, timestamp)), stage: "learned", firstSeenAt: state?.firstSeenAt ?? timestamp, updatedAt: timestamp });
+    await tx.done;
+  }
   async deletePhrase(id: string) {
     const db = await this.db();
     const tx = db.transaction(["phrases", "phraseLearningState", "reviewLogs", "trainingEvents", "trainingSessions", "learningSessions", "metadata"], "readwrite");
